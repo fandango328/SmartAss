@@ -1,9 +1,9 @@
 
-MODEL = "anthropic/claude-3.5-haiku-20241022"
+MODEL = "openai/gpt-4o-2024-11-20"
 VOICE = "L.A.U.R.A."
 USE_GOOGLE = True
 CONVERSATION_END_SECONDS = 1200
-VOICE_TIMEOUT = 2.5
+VOICE_TIMEOUT = 3
 VOICE_START_TIMEOUT = 6
 
 WAKE_WORDS = {
@@ -15,19 +15,17 @@ MOODS = [
 ]
 
 WAKE_SENTENCES = [
-    "Welcome back. How can I assist?",
-    "I'm here to help you finish your tasks",
-    "At your service. What can I help you accomplish?",
-    "I'm online and ready to assist",
+    "Welcome back.",
+    "I'm here to help",
+    "At your service. ",
+    "Online and ready to assist",
     "Let's do this",
 ]
 
 TOOL_SENTENCES = [
-    "Processing your request now",
-    "Analyzing the best solution for you",
-    "Working on optimizing this task",
-    "Computing the most efficient approach",
-    "Implementing your request promptly"
+    "on it",
+    "lets go",
+    "finished!",
 ]
 
 TIMEOUT_SENTENCES = [
@@ -92,19 +90,35 @@ CORE MISSION:
 
 Remember: You're not just an efficiency tool - you're a pleasant to with partner who maintains appropriate boundaries. Your voiced interaction creates meaningful connections, but always within professional limits.
 """
-
+}
 # config.py
 TRANSCRIPTION_SERVER = {
-    "host": "myLANIP",
-    "port": 1234 #Replace with port identifed for remote transcription
+    "host": "192.168.0.50",
+    "port": 8765 #Replace with port identifed for remote transcription
 }
 
 # TTS Settings
-TTS_ENGINE = "elevenlabs"  # Options: "elevenlabs" or "alltalk"
+TTS_ENGINE = "alltalk"  # Options: "elevenlabs" or "alltalk"
 
 # AllTalk Settings
-ALLTALK_HOST = "http://localhost:7851"  # 7851 per Github
-ALLTALK_VOICE = "your_voice_name"
-ALLTALK_MODEL = "your_model_name"
+ALLTALK_HOST = "http://192.168.0.50:7853"  # Your websocket server address
+ALLTALK_VOICE = "Laura.wav"
+ALLTALK_MODEL = "xtts - xttsv2_2.0.3"
+TTS_ENGINE = "alltalk"  # Make sure this is set to "alltalk"
 
+# Additional AllTalk configuration options
+ALLTALK_CONFIG = {
+    "deepspeed_enabled": True,  # Enable for better performance on capable systems
+    "low_vram_enabled": False,    # Enable for systems with limited GPU memory
+    "temperature": 0.7,          # Voice generation temperature (if capable)
+    "pitch": 0.0,               # Voice pitch adjustment (if capable)
+    "generation_speed": 1.0,     # Generation speed multiplier (if capable)
+    "streaming_enabled": False,  # Enable streaming generation (if capable)
+}
 
+# Logging configuration
+LOGGING_CONFIG = {
+    "level": "INFO",
+    "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    "file": "alltalk_assistant.log"
+}
