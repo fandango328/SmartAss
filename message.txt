@@ -1,0 +1,93 @@
+
+Rotation check at: 14:45:59
+Current state: sleep
+Time since last change: 0.00 seconds
+Not time to rotate yet. Waiting 15.00 more seconds
+
+Listening for wake word
+DEBUG: Attempting to build calendar service
+DEBUG: Calendar service built successfully
+
+DEBUG: Calendar Check at 2025-02-24 22:46:00.584667+00:00
+DEBUG: Found 0 upcoming events
+........DEBUG: Attempting to build calendar service
+DEBUG: Calendar service built successfully
+
+DEBUG: Calendar Check at 2025-02-24 22:46:11.464419+00:00
+DEBUG: Found 0 upcoming events
+.......
+Rotation check at: 14:46:19
+Current state: sleep
+Time since last change: 20.02 seconds
+Rotated image at 14:46:19
+.DEBUG: Attempting to build calendar service
+DEBUG: Calendar service built successfully
+
+DEBUG: Calendar Check at 2025-02-24 22:46:22.345482+00:00
+DEBUG: Found 0 upcoming events
+........DEBUG: Attempting to build calendar service
+DEBUG: Calendar service built successfully
+
+DEBUG: Calendar Check at 2025-02-24 22:46:33.233329+00:00
+DEBUG: Found 0 upcoming events
+....c..
+Rotation check at: 14:46:40
+Current state: sleep
+Time since last change: 20.48 seconds
+Rotated image at 14:46:40
+..DEBUG: Attempting to build calendar service
+DEBUG: Calendar service built successfully
+
+DEBUG: Calendar Check at 2025-02-24 22:46:44.107876+00:00
+DEBUG: Found 0 upcoming events
+........DEBUG: Attempting to build calendar service
+DEBUG: Calendar service built successfully
+
+DEBUG: Calendar Check at 2025-02-24 22:46:54.994643+00:00
+DEBUG: Found 0 upcoming events
+.....
+Rotation check at: 14:47:00
+Current state: sleep
+Time since last change: 20.48 seconds
+Rotated image at 14:47:00
+...DEBUG: Attempting to build calendar service
+DEBUG: Calendar service built successfully
+
+DEBUG: Calendar Check at 2025-02-24 22:47:05.875403+00:00
+DEBUG: Found 0 upcoming events
+........DEBUG: Attempting to build calendar service
+DEBUG: Calendar service built successfully
+
+DEBUG: Calendar Check at 2025-02-24 22:47:16.758117+00:00
+DEBUG: Found 0 upcoming events
+....
+Rotation check at: 14:47:21
+Current state: sleep
+Time since last change: 20.48 seconds
+Rotated image at 14:47:21
+....DEBUG: Attempting to build calendar service
+DEBUG: Calendar service built successfully
+
+DEBUG: Calendar Check at 2025-02-24 22:47:27.633400+00:00
+DEBUG: Found 0 upcoming events
+........DEBUG: Attempting to build calendar service
+DEBUG: Calendar service built successfully
+
+DEBUG: Calendar Check at 2025-02-24 22:47:38.522448+00:00
+DEBUG: Found 0 upcoming events
+.^C^C^C
+Exiting Virtual Assistant
+Exception ignored in: <coroutine object main at 0x7f6b9eca60>
+Traceback (most recent call last):
+  File "/home/carson/LAURA/LAURA_mood2.py", line 1218, in main
+    task.cancel()
+  File "/usr/lib/python3.11/asyncio/base_events.py", line 761, in call_soon
+    self._check_closed()
+  File "/usr/lib/python3.11/asyncio/base_events.py", line 519, in _check_closed
+    raise RuntimeError('Event loop is closed')
+RuntimeError: Event loop is closed
+Task was destroyed but it is pending!
+task: <Task cancelling name='Task-1' coro=<main() done, defined at /home/carson/LAURA/LAURA_mood2.py:1183> wait_for=<_GatheringFuture pending cb=[Task.task_wakeup()]> cb=[gather.<locals>._done_callback() at /usr/lib/python3.11/asyncio/tasks.py:754]>
+Task was destroyed but it is pending!
+task: <Task cancelling name='Task-4' coro=<heartbeat() running at /home/carson/LAURA/LAURA_mood2.py:1179> wait_for=<Future cancelled> cb=[gather.<locals>._done_callback() at /usr/lib/python3.11/asyncio/tasks.py:754, gather.<locals>._done_callback() at /usr/lib/python3.11/asyncio/tasks.py:754]>
+
