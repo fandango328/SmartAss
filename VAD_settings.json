@@ -1,0 +1,32 @@
+{
+  "profiles": {
+    "home_quiet": {
+      "energy_threshold": 0.060851,
+      "continued_threshold_ratio": 0.4,
+      "silence_duration": 3.0,
+      "speech_buffer_time": 1.0,
+      "min_speech_duration": 1.5,
+      "max_recording_time": 60,
+      "chunk_size": 2048
+    },
+    "blue_yeti": {
+      "energy_threshold": 0.183594,
+      "continued_threshold_ratio": 0.4,
+      "silence_duration": 3.0,
+      "speech_buffer_time": 1.0,
+      "min_speech_duration": 1.5,
+      "max_recording_time": 60,
+      "chunk_size": 2048
+    },
+    "home_noisy": {
+      "energy_threshold": 0.064310,
+      "continued_threshold_ratio": 0.4,
+      "silence_duration": 3.0,
+      "speech_buffer_time": 1.0,
+      "min_speech_duration": 1.5,
+      "max_recording_time": 60,
+      "chunk_size": 2048
+    }
+  },
+  "active_profile": "home_quiet"
+}
