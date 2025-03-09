@@ -1,0 +1,122 @@
+{
+  "tool_use": {
+    "overview": {
+      "description": "Claude can interact with external client-side tools to extend its capabilities",
+      "implementation_flow": [
+        "Provide Claude with tools and user prompt",
+        "Claude decides to use a tool and constructs a request",
+        "Client extracts tool input, runs tool code, returns results",
+        "Claude uses tool result to formulate final response"
+      ],
+      "important_notes": [
+        "Tools are user-provided (no built-in server-side tools)",
+        "All tools must be explicitly defined in each API request"
+      ]
+    },
+    "model_selection": {
+      "complex_tools": ["Claude 3.7 Sonnet", "Claude 3.5 Sonnet", "Claude 3 Opus"],
+      "straightforward_tools": ["Claude 3.5 Haiku", "Claude 3 Haiku"]
+    },
+    "tool_specification": {
+      "parameter_location": "tools top-level parameter of API request",
+      "tool_definition": {
+        "name": "String matching regex ^[a-zA-Z0-9_-]{1,64}$",
+        "description": "Detailed plaintext description of tool purpose and behavior",
+        "input_schema": "JSON Schema object defining expected parameters"
+      },
+      "best_practices": [
+        "Provide extremely detailed descriptions (3-4+ sentences)",
+        "Explain what tool does, when to use it, parameter meanings, and limitations",
+        "Prioritize descriptions over examples"
+      ]
+    },
+    "controlling_output": {
+      "tool_choice_options": {
+        "auto": "Default when tools provided; Claude decides whether to use tools",
+        "any": "Forces Claude to use one of the provided tools, but not a specific one",
+        "tool": "Forces Claude to use a specific tool",
+        "none": "Default when no tools provided; prevents tool use"
+      },
+      "chain_of_thought": {
+        "description": "Claude's step-by-step reasoning before tool use",
+        "default_behavior": "Claude 3 Opus does this automatically with tool_choice=auto",
+        "manual_trigger": "Add 'Before answering, explain your reasoning step-by-step in tags' to prompt",
+        "format": "<thinking>...</thinking> tags (format may change)"
+      },
+      "parallel_tool_use": {
+        "default": "Claude may use multiple tools to answer a query",
+        "disable": "Set disable_parallel_tool_use=true in tool_choice field"
+      }
+    },
+    "handling_responses": {
+      "tool_use_content": {
+        "stop_reason": "tool_use",
+        "content_blocks": [
+          {
+            "id": "Unique identifier for this tool use",
+            "name": "Name of tool being used",
+            "input": "Object containing input conforming to tool's input_schema"
+          }
+        ]
+      },
+      "tool_result_response": {
+        "format": {
+          "tool_use_id": "ID from the original tool_use request",
+          "content": "Result as string or nested content blocks",
+          "is_error": "Optional boolean, true if execution resulted in error"
+        },
+        "content_types": ["text", "image"]
+      }
+    },
+    "error_handling": {
+      "tool_execution_error": "Return error message with is_error: true",
+      "max_tokens_exceeded": "Retry with higher max_tokens value",
+      "invalid_tool_use": "Return error in tool_result, Claude will retry 2-3 times"
+    },
+    "use_cases": {
+      "single_tool": "Simple tool execution for straightforward tasks",
+      "multiple_tools": "Providing multiple tools for Claude to choose from",
+      "sequential_tools": "Calling tools in sequence using output of one as input to another",
+      "json_output": "Using tools to get structured JSON output following a schema"
+    },
+    "pricing": {
+      "basis": "Regular Claude API pricing (input + output tokens)",
+      "additional_tokens": [
+        "tools parameter in API requests",
+        "tool_use content blocks in requests/responses",
+        "tool_result content blocks in requests",
+        "Special system prompt (varies by model and tool_choice setting)"
+      ],
+      "system_prompt_tokens": {
+        "Claude 3.7 Sonnet": {"auto/none": 346, "any/tool": 313},
+        "Claude 3.5 Sonnet (Oct)": {"auto/none": 346, "any/tool": 313},
+        "Claude 3 Opus": {"auto/none": 530, "any/tool": 281},
+        "Claude 3 Sonnet": {"auto/none": 159, "any/tool": 235},
+        "Claude 3 Haiku": {"auto/none": 264, "any/tool": 340},
+        "Claude 3.5 Sonnet (June)": {"auto/none": 294, "any/tool": 261}
+      }
+    }
+  },
+  "sample_implementation": {
+    "basic_tool_definition": {
+      "name": "get_weather",
+      "description": "Get the current weather in a given location",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "location": {
+            "type": "string",
+            "description": "The city and state, e.g. San Francisco, CA"
+          },
+          "unit": {
+            "type": "string",
+            "enum": ["celsius", "fahrenheit"],
+            "description": "The unit of temperature"
+          }
+        },
+        "required": ["location"]
+      }
+    },
+    "python_example": "import anthropic\nclient = anthropic.Anthropic()\nresponse = client.messages.create(\n  model=\"claude-3-7-sonnet-20250219\",\n  max_tokens=1024,\n  tools=[{tool_definition}],\n  messages=[{\"role\": \"user\", \"content\": \"What's the weather in SF?\"}]\n)"
+  }
+}

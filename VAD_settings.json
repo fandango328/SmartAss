@@ -1,0 +1,15 @@
+{
+  "active_profile": "current",
+  "profiles": {
+    "current": {
+      "energy_threshold": 0.06,
+      "continued_threshold_ratio": 0.7,
+      "continued_threshold": 0.041999999999999996,
+      "silence_duration": 3.0,
+      "speech_buffer_time": 1.0,
+      "min_speech_duration": 0.4,
+      "max_recording_time": 30,
+      "chunk_size": 2048
+    }
+  }
+}
