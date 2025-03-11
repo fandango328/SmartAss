@@ -1,0 +1,71 @@
+[
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "tool_result",
+                "tool_use_id": "toolu_01Y2kikfX6guHJwqejAYNGC6",
+                "content": "Event created successfully: https://www.google.com/calendar/event?eid=Ym91bTN1NTFsc2w1Y2I5M29mczNubWtkdWMgY2Fyc29uQHR3aW5wZWFrc3Rvd25pZS5jb20"
+            }
+        ]
+    },
+    {
+        "role": "assistant",
+        "content": "I've scheduled a one-hour board demonstration with James starting at 2:30 PM today. Would you like me to check if James has confirmed the meeting?"
+    },
+    {
+        "role": "user",
+        "content": "did i give you an email address her james boys yeah oh yeah yeah"
+    },
+    {
+        "role": "assistant",
+        "content": "You're right - I apologize for assuming James's email address. I should have asked for it first. Could you please provide James's email address so I can properly schedule the meeting with him?"
+    },
+    {
+        "role": "user",
+        "content": "that's fine we'll just do it just me on the event the"
+    },
+    {
+        "role": "assistant",
+        "content": [
+            {
+                "citations": null,
+                "text": "[neutral] I'll reschedule the meeting without any attendees - just for you.",
+                "type": "text"
+            },
+            {
+                "id": "toolu_01GSY5e73SHuHXRv3w7izxqx",
+                "input": {
+                    "summary": "Board Demonstration",
+                    "start_time": "2024-03-06T14:30:00",
+                    "end_time": "2024-03-06T15:30:00",
+                    "description": "Board demonstration meeting"
+                },
+                "name": "create_calendar_event",
+                "type": "tool_use"
+            }
+        ]
+    },
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "tool_result",
+                "tool_use_id": "toolu_01GSY5e73SHuHXRv3w7izxqx",
+                "content": "Event created successfully: https://www.google.com/calendar/event?eid=MWlmcDlvZG1uOGJwOTZ2NHNhdm1pZXM3aGsgY2Fyc29uQHR3aW5wZWFrc3Rvd25pZS5jb20"
+            }
+        ]
+    },
+    {
+        "role": "assistant",
+        "content": "I've created the board demonstration for 2:30 PM today, just for your calendar. Would you like me to check your updated schedule for the rest of the day?"
+    },
+    {
+        "role": "user",
+        "content": "the more test of the van collaboration settings"
+    },
+    {
+        "role": "assistant",
+        "content": "I hear you're wanting to test more voice collaboration settings, but I'm not quite sure what specific aspect you'd like to try. Would you like to test calendar scheduling, email drafting, location services, or something else to demonstrate the voice interaction capabilities?"
+    }
+]
