@@ -77,7 +77,7 @@ from tool_analyzer import get_tools_for_query
 from tool_context import TOOL_CONTEXTS
 from token_manager import TokenManager
 
-from config_transcription_v3 import (
+from config_transcription_v4 import (
     TRANSCRIPTION_SERVER,
     TRANSCRIPTION_MODE,
     VOSK_MODEL_PATH,
