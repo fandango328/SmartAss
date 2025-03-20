@@ -2,28 +2,39 @@
 
 """
 TokenManager for SmartAss Voice Assistant
-Last Updated: 2025-03-12 23:14:18
+Last Updated: 2025-03-16 20:08:25
 
 Purpose:
-    Manages token usage, costs, and authorization states for the SmartAss voice assistant,
+    Manages token usage, costs, and tool state for the SmartAss voice assistant,
     with specific handling of tool-related overheads and model-specific pricing.
 
 Key Features:
     - Token counting and cost calculation for different Claude models
     - Tool usage and definition overhead tracking
-    - Authorization state management for tool usage
+    - Simplified binary tool state with auto-disable after 3 non-tool queries
+    - Voice-optimized command phrases for reliable tool state management
     - Session-based cost accumulation
 """
-
+import os
+import json
+import glob
+import traceback
+from config_og import CHAT_LOG_MAX_TOKENS, CHAT_LOG_RECOVERY_TOKENS, CHAT_LOG_DIR, SYSTEM_PROMPT, ANTHROPIC_MODEL 
 from datetime import datetime
 from decimal import Decimal
-from typing import Dict, Tuple, Optional, Any
-from config_transcription_v3 import ANTHROPIC_MODEL  # Direct import from config
+from typing import Dict, Tuple, Optional, Any, List
 from laura_tools import AVAILABLE_TOOLS, get_tool_by_name, get_tools_by_category
 
 class TokenManager:
     """
     Manages token counting, cost calculation, and tool usage authorization for SmartAss.
+    
+    Features:
+    - Binary tool state (enabled/disabled)
+    - Auto-disable tools after 3 consecutive non-tool queries
+    - Phonetically optimized voice commands for tool state changes
+    - Mixed command resolution (prioritizing last mentioned command)
+    - Token and cost tracking for API interactions
     """
 
     # Model-specific costs per million tokens (MTok)
@@ -57,368 +68,546 @@ class TokenManager:
         }
     }
 
-    # Define authorization phrases
-    ACTION_INDICATORS = {
-        # Direct requests
-        "please", "can you", "could you", "would you", 
-        "i want to", "i need to", "i'd like to", "let's",
-        "i need you to", "i want you to", "i'd like you to",
-
-        # Imperative forms
-        "go ahead and", "just", "help me",
-
-        # Polite forms
-        "would you mind", "could you please", "would you please",
-        "if you could", "if you would",
-
-        # Direct commands
-        "make", "create", "do", "start",
-
-        # Intent indicators
-        "i'm trying to", "i am trying to", "i would like to",
-        "i'm looking to", "i am looking to"
+    # Voice-optimized tool enabling phrases
+    # These phrases were specifically selected to have distinctive phonetic patterns
+    # that are less likely to be confused by voice transcription systems like VOSK
+    TOOL_ENABLE_PHRASES = {
+        # Primary commands (most distinctive)
+        "tools activate", "launch toolkit", "begin assistance", "enable tool use",
+        "start tools", "enable assistant", "tools online", "enable tools",
+        
+        # Additional distinctive commands
+        "assistant power up", "toolkit online", "helper mode active",
+        "utilities on", "activate functions", "tools ready",
+        
+        # Short commands with distinctive sounds
+        "tools on", "toolkit on", "functions on",
+        
+        # Commands with unique phonetic patterns
+        "wake up tools", "prepare toolkit", "bring tools online"
     }
 
-    TOOL_PHRASES = {
-        # Tool enabling
-        "enable tool use", "enable tools",
-        "start using tools", "activate tools",
-        "use tools", "turn on tools",
-        "get tools ready", "prepare tools",
+    # Voice-optimized tool disabling phrases
+    # Selected for clear phonetic distinction from enabling phrases and from
+    # common conversation patterns to minimize false positives/negatives
+    TOOL_DISABLE_PHRASES = {
+        # Primary commands (most distinctive)
+        "tools offline", "end toolkit", "close assistant",
+        "stop tools", "disable assistant", "conversation only",
+        
+        # Additional distinctive commands
+        "assistant power down", "toolkit offline", "helper mode inactive",
+        "utilities off", "deactivate functions", "tools away",
+        
+        # Short commands with distinctive sounds
+        "tools off", "toolkit off", "functions off",
+        
+        # Commands with unique phonetic patterns
+        "sleep tools", "dismiss toolkit", "take tools offline"
+    }
 
-        # Email specific
-        "draft an email", "send an email",
-        "create an email", "compose an email",
-        "write an email", "prepare an email",
-        "make an email", "start an email",
-
-        # Generic tool actions
-        "use the tools", "work with tools",
-        "access tools", "initialize tools"
+    # Tool category keywords for contextual tool detection
+    TOOL_CATEGORY_KEYWORDS = {
+        'EMAIL': ['email', 'mail', 'send', 'write', 'compose', 'draft'],
+        'CALENDAR': ['calendar', 'schedule', 'event', 'meeting', 'appointment'],
+        'TASK': ['task', 'todo', 'reminder', 'checklist', 'to-do'],
+        'UTILITY': ['time', 'location', 'calibrate', 'voice', 'settings'],
+        'CONTACT': ['contact', 'person', 'people', 'address', 'phone']
     }
 
     def __init__(self, anthropic_client):
-            """
-            Initialize TokenManager with client using settings from config.
-
-            Args:
-                anthropic_client: Anthropic API client instance for API interactions
-
-            Raises:
-                ValueError: If ANTHROPIC_MODEL from config is not in MODEL_COSTS
-                TypeError: If anthropic_client is None
-            """
-            if anthropic_client is None:
-                raise TypeError("anthropic_client cannot be None")
-        
-            if ANTHROPIC_MODEL not in self.MODEL_COSTS:
-                raise ValueError(f"Model {ANTHROPIC_MODEL} not found in supported models: {list(self.MODEL_COSTS.keys())}")
-
-            # API Client
-            self.client = anthropic_client
-        
-            # Model Configuration
-            self.query_model = ANTHROPIC_MODEL
-            self.tool_model = "claude-3-5-sonnet-20241022"
-        
-            # Session Tracking
-            self.total_input_tokens = 0
-            self.total_output_tokens = 0
-            self.session_start_time = datetime.now()
-            self.last_interaction_time = None
-        
-            # Cost Tracking (using Decimal for precision)
-            self.total_tool_definition_costs = Decimal('0.00')
-            self.total_tool_usage_costs = Decimal('0.00')
-            self.total_query_costs = Decimal('0.00')
-        
-            # Authorization State Management
-            self.authorization_state = "none"
-            self.pending_confirmation = {
-                "type": None,
-                "expiration_time": None
-            }
-            self.last_authorization_time = None
-            self.tool_attempts_remaining = 0
-            self.tools_used_in_session = False  # Add this line
-
-    def check_authorization_state(self, query: str, voice_confidence: float) -> Dict[str, Any]:
         """
-        Check if tools should be enabled based on query analysis and voice confidence.
+        Initialize TokenManager with streamlined session tracking.
+        
+        Args:
+            anthropic_client: Anthropic API client instance
+            
+        Raises:
+            TypeError: If anthropic_client is None
         """
-        # First get tool context analysis with the new implementation
-        needs_tools, tool_names, tool_confidence = self.get_tools_for_query(query)
+        # CHANGE: Simplified client validation - removed MODEL_COSTS check since we're using native token counting
+        if anthropic_client is None:
+            raise TypeError("anthropic_client cannot be None")
+            
+        # KEEP: Core client and model settings
+        self.anthropic_client = anthropic_client
+        self.query_model = ANTHROPIC_MODEL
+        self.tool_model = "claude-3-5-sonnet-20241022"
+
+        # KEEP: Session state tracking
+        self.session_active = False
+        self.session_start_time = None
+
         
-        # Rest of the method stays the same, but add more debug prints
-        query_lower = query.lower()
-        print(f"Authorization Check - Query: {query_lower}")
-        print(f"Current Auth State: {self.authorization_state}")
+        self.haiku_tracker = {
+            'input_tokens': 0,
+            'output_tokens': 0,
+            'cost': Decimal('0.00')
+        }
         
-        is_explicit_request = False
-        for action in self.ACTION_INDICATORS:
-            for phrase in self.TOOL_PHRASES:
-                combined = f"{action} {phrase}"
-                if combined in query_lower:
-                    print(f"Found explicit request: {combined}")
-                    is_explicit_request = True
-                    self.authorization_state = "active"
-                    print(f"Authorization state updated to: {self.authorization_state}")
-                    break
-            if is_explicit_request:
-                break
+        self.sonnet_tracker = {
+            'input_tokens': 0,
+            'output_tokens': 0,
+            'tool_definition_tokens': 0,
+            'cost': Decimal('0.00'),
+            'tools_initialized': False
+        }
+
+        # Update session tracker to include model info
+        self.session = {
+            'current_model': 'claude-3-5-haiku-20241022',
+            'history_tokens': 0,
+            'total_cost': Decimal('0.00'),
+            'tools_enabled': False,
+        }
+              
+        # KEEP: Tool state management
+        self.tools_enabled = False
+        self.tools_used_in_session = False
+        self.consecutive_non_tool_queries = 0
+        self.tool_disable_threshold = 3
+
+
+    def prepare_messages_for_token_count(self, current_query: str, chat_log: list, system_prompt: str = None) -> tuple:
+        formatted_messages = []
+        
+        # Handle chat log messages
+        if chat_log and isinstance(chat_log, list):
+            for msg in chat_log:
+                if isinstance(msg, dict) and 'role' in msg and 'content' in msg:
+                    formatted_messages.append({
+                        "role": msg['role'],
+                        "content": [{
+                            "type": "text",
+                            "text": str(msg['content'])
+                        }]
+                    })
+        
+        # Add current query
+        formatted_messages.append({
+            "role": "user",
+            "content": [{"type": "text", "text": str(current_query)}]
+        })
+        
+        system_content = (system_prompt or SYSTEM_PROMPT).strip()
+        return formatted_messages, system_content
+
+    def count_message_tokens(self, current_query: str, chat_log: list = None, system_prompt: str = None) -> tuple[int, int]:
+        try:
+            messages, system_content = self.prepare_messages_for_token_count(current_query, chat_log, system_prompt)
+            
+            count_result = self.anthropic_client.messages.count_tokens(
+                model=self.query_model,
+                messages=messages,
+                system=system_content
+            )
+            
+            input_tokens = count_result.input_tokens if hasattr(count_result, 'input_tokens') else 0
+            
+            if self.tools_enabled:
+                self.sonnet_tracker['input_tokens'] += input_tokens
+            else:
+                self.haiku_tracker['input_tokens'] += input_tokens
                 
-        # Enhanced debug output for authorization decision
-        print(f"Authorization Decision:")
-        print(f"- Is Explicit Request: {is_explicit_request}")
-        print(f"- Voice Confidence: {voice_confidence}")
-        print(f"- Needs Tools: {needs_tools}")
-        print(f"- Tool Confidence: {tool_confidence}")
+            return (input_tokens, 0)
+            
+        except Exception as e:
+            print(f"ERROR in token counting: {str(e)}")
+            traceback.print_exc()
+            return (0, 0)
         
-        # Rest of the logic stays the same but with better feedback
-        if is_explicit_request and voice_confidence >= 90:
-            self.tool_attempts_remaining = 2
-            return {
-                "state": "authorized",
-                "needs_confirmation": False,
-                "message": "Tools enabled. What would you like help with?",
-                "tools": tool_names
-            }
-            
-        if needs_tools and voice_confidence >= 90:
-            return {
-                "state": "pending",
-                "needs_confirmation": True,
-                "message": "Just to confirm, we're going to be enabling tools now, right?",
-                "tools": tool_names
-            }
-            
-        return {
-            "state": "none",
-            "needs_confirmation": False,
-            "message": None,
-            "tools": []
+    def start_session(self):
+        self.session_active = True
+        self.session_start_time = datetime.now()
+        
+        self.haiku_tracker = {
+            'input_tokens': 0,
+            'output_tokens': 0,
+            'cost': Decimal('0.00')
         }
+        
+        self.sonnet_tracker = {
+            'input_tokens': 0,
+            'output_tokens': 0,
+            'tool_definition_tokens': 0,
+            'cost': Decimal('0.00'),
+            'tools_initialized': False
+        }
+        
+        self.session = {
+            'current_model': 'claude-3-5-haiku-20241022',
+            'history_tokens': 0,
+            'total_cost': Decimal('0.00'),
+            'tools_enabled': False
+        }
+        
+        self.tools_enabled = False
+        self.tools_used_in_session = False
+        self.consecutive_non_tool_queries = 0
+        
+        print(f"Token tracking session started at {self.session_start_time}")
+        return {
+            "status": "started",
+            "timestamp": self.session_start_time.isoformat()
+        }
+
+    def display_token_usage(self, query_tokens: int = None):
+        print("\n┌─ Token Usage Report " + "─" * 40)
+        
+        if query_tokens:
+            print(f"│ Current Query Tokens: {query_tokens:,}")
+            print("│" + "─" * 50)
+            
+        print("│ Haiku Usage:")
+        print(f"│   Input Tokens:  {self.haiku_tracker['input_tokens']:,}")
+        print(f"│   Output Tokens: {self.haiku_tracker['output_tokens']:,}")
+        print(f"│   Cost:         ${self.haiku_tracker['cost']:.4f}")
+        
+        print("│\n│ Sonnet Usage:")
+        print(f"│   Input Tokens:  {self.sonnet_tracker['input_tokens']:,}")
+        print(f"│   Output Tokens: {self.sonnet_tracker['output_tokens']:,}")
+        print(f"│   Tool Def Tokens: {self.sonnet_tracker['tool_definition_tokens']:,}")
+        print(f"│   Cost:         ${self.sonnet_tracker['cost']:.4f}")
+        
+        print("│\n│ Session Totals:")
+        total_cost = self.haiku_tracker['cost'] + self.sonnet_tracker['cost']
+        print(f"│   Total Cost:    ${total_cost:.4f}")
+        
+        if self.session_start_time:
+            duration = datetime.now() - self.session_start_time
+            print(f"│   Duration:      {duration.total_seconds():.1f}s")
+        
+        print("└" + "─" * 50)
+
+    def update_session_costs(self, input_tokens: int, output_tokens: int, is_tool_use: bool = False):
+        try:
+            tracker = self.sonnet_tracker if is_tool_use else self.haiku_tracker
+            model = self.tool_model if is_tool_use else self.query_model
+            
+            current_input = max(0, input_tokens)
+            current_output = max(0, output_tokens)
+            
+            if is_tool_use and not self.sonnet_tracker['tools_initialized']:
+                current_input += self.TOOL_COSTS['definition_overhead']
+                self.sonnet_tracker['tool_definition_tokens'] = self.TOOL_COSTS['definition_overhead']
+                self.sonnet_tracker['tools_initialized'] = True
                 
-        # CASE 1: Explicit tool request with high confidence
-        if is_explicit_request:
-            if voice_confidence >= 90:
-                self.tool_attempts_remaining = 2
-                return {
-                    "state": "authorized",
-                    "needs_confirmation": False,
-                    "message": "Tools enabled. What would you like help with?",
-                    "tools": tool_names
-                }
-            return {
-                "state": "none",
-                "needs_confirmation": False,
-                "message": "I couldn't understand that clearly. Could you repeat your request?",
-                "tools": set()
-            }
+            input_cost = self.calculate_token_cost(model, "input", current_input)
+            output_cost = self.calculate_token_cost(model, "output", current_output)
             
-        # CASE 2: Tool context detected from query
-        if needs_tools and voice_confidence >= 90:
-            return {
-                "state": "pending",
-                "needs_confirmation": True,
-                "message": "Just to confirm, we're going to be enabling tools now, right?",
-                "tools": tool_names
-            }
+            tracker['input_tokens'] += current_input
+            tracker['output_tokens'] += current_output
+            tracker['cost'] += input_cost + output_cost
             
-        # CASE 3: No tool needs detected
-        return {
-            "state": "none",
-            "needs_confirmation": False,
-            "message": None,
-            "tools": set()
-        }
-
-    def request_continuation(self):
-        """Ask if user wants to continue using tools."""
-        print(f"Requesting continuation of tool use")
-        # This method is called after successful tool use to potentially ask about continued tool usage
-        pass
-
-    def record_tool_usage(self, tool_name: str):
-        """Record that a tool was used in the current session."""
-        self.tools_used_in_session = True
-        print(f"Tool usage recorded: {tool_name}")
-
-    def tools_are_active(self) -> bool:
-        """Check if tools are currently active."""
-        active = self.authorization_state == "active"
-        print(f"Checking if tools are active: {active}")
-        return active
-
-    def request_authorization(self):
-        """Request authorization for tool use."""
-        self.authorization_state = "active"  # Changed from "requested" to "active"
-        print(f"Authorization requested. New state: {self.authorization_state}")
-
-    def handle_confirmation(self, response: str, voice_confidence: float) -> Dict[str, Any]:
-        """Process user's response to tool confirmation prompt."""
-        if voice_confidence >= 90 and any(word in response.lower() 
-                                        for word in {'yes', 'yeah', 'correct', 'right'}):
-            self.tool_attempts_remaining = 2
-            self.authorization_state = "active"  # Added this line to fix state inconsistency
-            return {
-                "state": "authorized",
-                "message": "What would you like me to help you with using tools?",
-                "needs_input": True
-            }
-        
-        self.authorization_state = "none"
-        return {
-            "state": "none",
-            "message": "Continuing without tools.",
-            "needs_input": False
-        }
-
-    # Keeping placeholder methods for future implementation
-    def get_tools_for_query(self, query: str) -> Tuple[bool, list, float]:
-        """
-        Analyze query to determine if tools are needed.
-        Returns: (needs_tools, relevant_tools, confidence)
-        """
-        query_lower = query.lower()
-    
-        relevant_tools = []
-        confidence = 0.0
-        is_tool_request = False
-    
-        # Check for tool enabling without early return
-        if any(phrase in query_lower for phrase in self.TOOL_PHRASES):
-            if "enable tool" in query_lower or "use tool" in query_lower:
-                is_tool_request = True
-                confidence = max(confidence, 0.9)
-    
-        # Email-related patterns
-        if any(word in query_lower for word in ['email', 'mail', 'send', 'write', 'compose', 'draft']):
-            email_tools = get_tools_by_category('EMAIL')
-            relevant_tools.extend(email_tools)
-            confidence = max(confidence, 0.8)
+            self.session['total_cost'] += input_cost + output_cost
+            self.session['history_tokens'] += current_input + current_output
             
-        # Calendar-related patterns
-        if any(word in query_lower for word in ['calendar', 'schedule', 'event', 'meeting']):
-            calendar_tools = get_tools_by_category('CALENDAR')
-            relevant_tools.extend(calendar_tools)
-            confidence = max(confidence, 0.8)
+            self.display_token_usage(input_tokens + output_tokens)
             
-        # Task-related patterns
-        if any(word in query_lower for word in ['task', 'todo', 'reminder']):
-            task_tools = get_tools_by_category('TASK')
-            relevant_tools.extend(task_tools)
-            confidence = max(confidence, 0.8)
-            
-        # Utility patterns
-        if any(word in query_lower for word in ['time', 'location', 'calibrate', 'voice']):
-            utility_tools = get_tools_by_category('UTILITY')
-            relevant_tools.extend(utility_tools)
-            confidence = max(confidence, 0.8)
-            
-        # Contact patterns
-        if any(word in query_lower for word in ['contact', 'person', 'people']):
-            contact_tools = get_tools_by_category('CONTACT')
-            relevant_tools.extend(contact_tools)
-            confidence = max(confidence, 0.8)
-        
-        # Remove duplicates while preserving order
-        relevant_tools = list({tool['name']: tool for tool in relevant_tools}.values())
-    
-        # Tool need is determined by either explicit request or finding relevant tools
-        needs_tools = is_tool_request or bool(relevant_tools) or confidence > 0.7
-    
-        print(f"Tool Analysis - Query: {query_lower}")
-        print(f"Is Tool Request: {is_tool_request}")
-        print(f"Needs Tools: {needs_tools}")
-        print(f"Confidence: {confidence}")
-        print(f"Relevant Tools: {[tool['name'] for tool in relevant_tools]}")
-    
-        return needs_tools, relevant_tools, confidence
-
-    def handle_tool_command(self, query):
-        return False, None
-
-    def start_conversation_session(self):
-        pass
-
-    def end_conversation_session(self):
-        pass
-
-    def start_interaction(self):
-        """Start tracking a new user interaction"""
-        self.last_interaction_time = datetime.now()
-        self.tools_used_in_session = False  # Reset tool usage tracking
-
-    def authorization_requested(self):
-        """Check if authorization is currently requested."""
-        return self.authorization_state == "requested"
-
-    def update_session_costs(self, input_tokens: int, output_tokens: int, 
-                           is_tool_use: bool = False, tools_enabled: bool = False) -> Tuple[Decimal, Decimal]:
-        """Update session costs with clear, separate calculation and accumulation steps."""
-        model = self.tool_model if is_tool_use else self.query_model
-        
-        current_input = input_tokens
-        current_output = output_tokens
-        
-        if tools_enabled:
-            current_input += self.TOOL_COSTS["definition_overhead"]
-        if is_tool_use:
-            current_input += self.TOOL_COSTS["usage_overhead"]["tool"]
-            
-        update_input_cost = self.calculate_token_cost(model, "input", current_input)
-        update_output_cost = self.calculate_token_cost(model, "output", current_output)
-        
-        self.total_input_tokens += current_input
-        self.total_output_tokens += current_output
-        
-        if is_tool_use:
-            self.total_tool_usage_costs += update_input_cost + update_output_cost
-        else:
-            self.total_query_costs += update_input_cost + update_output_cost
-            
-        return update_input_cost, update_output_cost
+        except Exception as e:
+            print(f"Error updating session costs: {e}")
 
     def calculate_token_cost(self, model: str, token_type: str, token_count: int) -> Decimal:
-        """Calculate cost for given token count based on model and token type."""
-        if token_count < 0:
-            raise ValueError("Token count cannot be negative")
-        if model not in self.MODEL_COSTS or token_type not in self.MODEL_COSTS[model]:
-            raise KeyError(f"Invalid model ({model}) or token type ({token_type})")
+        try:
+            if token_count < 0:
+                print(f"Warning: Negative token count ({token_count}) adjusted to 0")
+                token_count = 0
+            
+            if model not in self.MODEL_COSTS:
+                print(f"Warning: Unknown model '{model}', using claude-3-5-sonnet-20241022 pricing")
+                model = "claude-3-5-sonnet-20241022"
+                
+            if token_type not in self.MODEL_COSTS[model]:
+                print(f"Warning: Unknown token type '{token_type}' for model '{model}', using 'input' pricing")
+                token_type = "input"
+                
+            per_million_rate = self.MODEL_COSTS[model][token_type]
+            if not isinstance(per_million_rate, Decimal):
+                per_million_rate = Decimal(str(per_million_rate))
+                
+            return (per_million_rate / Decimal('1000000')) * Decimal(str(token_count))
+            
+        except Exception as e:
+            print(f"Error calculating token cost: {e}")
+            return Decimal('0')
+
+    def get_session_summary(self) -> Dict[str, Any]:
+        session_duration = datetime.now() - self.session_start_time
+        minutes = session_duration.total_seconds() / 60
         
-        per_million_rate = Decimal(str(self.MODEL_COSTS[model][token_type]))
-        return (per_million_rate / Decimal('1000000')) * Decimal(str(token_count))
-
-    def log_api_interaction(self, interaction_type, query_text):
-        """Log details about an API interaction."""
-        print(f"API Interaction - Type: {interaction_type}, Query: {query_text[:50]}...")
-
-    def log_error(self, error_message):
-        """Log an error that occurred during processing."""
-        print(f"Token Manager Error: {error_message}")
-
-    def track_tool_attempt(self, successful: bool) -> Dict[str, Any]:
-        """Track tool usage attempt and manage remaining attempts."""
-        if successful:
-            return {
-                "state": "pending",
-                "message": "Would you like to use another tool?",
-                "continue_tools": True
-            }
-    
-        self.tool_attempts_remaining -= 1
-    
-        if self.tool_attempts_remaining <= 0:
-            self.authorization_state = "none"
-            return {
-                "state": "none",
-                "message": "Reverting to normal conversation mode.",
-                "continue_tools": False
-            }
-    
+        haiku = self.haiku_tracker
+        sonnet = self.sonnet_tracker
+        
         return {
-            "state": "authorized",
-            "message": "What tool would you like to use? You have one more attempt.",
-            "continue_tools": True
+            "session_duration_minutes": round(minutes, 2),
+            "haiku_stats": {
+                "input_tokens": haiku['input_tokens'],
+                "output_tokens": haiku['output_tokens'],
+                "total_cost": float(haiku['cost'])
+            },
+            "sonnet_stats": {
+                "input_tokens": sonnet['input_tokens'],
+                "output_tokens": sonnet['output_tokens'],
+                "tool_definition_tokens": sonnet['tool_definition_tokens'],
+                "total_cost": float(sonnet['cost'])
+            },
+            "session_totals": {
+                "total_tokens": (haiku['input_tokens'] + haiku['output_tokens'] + 
+                               sonnet['input_tokens'] + sonnet['output_tokens']),
+                "total_cost_usd": float(haiku['cost'] + sonnet['cost'])
+            },
+            "tools_currently_enabled": self.tools_enabled,
+            "tools_used_in_session": self.tools_used_in_session
         }
+
+    def enable_tools(self, query: str = None) -> Dict[str, Any]:
+        self.tools_enabled = True
+        self.consecutive_non_tool_queries = 0
+        
+        return {
+            "state": "enabled",
+            "message": "Tools are now enabled. What would you like help with?",
+            "tools_active": True
+        }
+
+    def disable_tools(self, reason: str = "manual") -> Dict[str, Any]:
+        was_enabled = self.tools_enabled
+        self.tools_enabled = False
+        self.consecutive_non_tool_queries = 0
+        
+        message = "Tools are now disabled." if was_enabled else "Tools are already disabled."
+        if reason == "auto":
+            message = "Tools have been automatically disabled after 3 queries without tool usage."
+            
+        return {
+            "state": "disabled",
+            "message": message,
+            "tools_active": False
+        }
+
+    def record_tool_usage(self, tool_name: str) -> Dict[str, Any]:
+        self.tools_used_in_session = True
+        self.consecutive_non_tool_queries = 0
+        
+        print(f"Tool usage recorded: {tool_name}")
+        print(f"Non-tool query counter reset to 0")
+        
+        return {
+            "status": "recorded",
+            "tool": tool_name,
+            "reset_counter": True
+        }
+
+    def track_query_completion(self, used_tool: bool = False) -> Dict[str, Any]:
+        if not self.tools_enabled:
+            return {
+                "state_changed": False,
+                "tools_active": False,
+                "queries_remaining": 0
+            }
+                
+        if used_tool:
+            return {
+                "state_changed": False,
+                "tools_active": True,
+                "queries_remaining": self.tool_disable_threshold
+            }
+                
+        self.consecutive_non_tool_queries += 1
+        print(f"Non-tool query counter increased to {self.consecutive_non_tool_queries}")
+            
+        if self.consecutive_non_tool_queries >= self.tool_disable_threshold:
+            result = self.disable_tools(reason="auto")
+            return {
+                "state_changed": True, 
+                "tools_active": False,
+                "queries_remaining": 0,
+                "message": result["message"]
+            }
+                
+        queries_remaining = self.tool_disable_threshold - self.consecutive_non_tool_queries
+        return {
+            "state_changed": False, 
+            "tools_active": True,
+            "queries_remaining": queries_remaining
+        }
+
+    def tools_are_active(self) -> bool:
+        return self.tools_enabled
+
+    def handle_tool_command(self, query: str) -> Tuple[bool, Optional[str]]:
+        try:
+            query_lower = query.lower()
+            
+            has_enable_command = any(phrase in query_lower for phrase in self.TOOL_ENABLE_PHRASES)
+            has_disable_command = any(phrase in query_lower for phrase in self.TOOL_DISABLE_PHRASES)
+            
+            if has_enable_command and has_disable_command:
+                print(f"Mixed tool commands detected in: {query_lower}")
+                
+                last_enable_pos = max((query_lower.rfind(phrase) for phrase in self.TOOL_ENABLE_PHRASES), default=-1)
+                last_disable_pos = max((query_lower.rfind(phrase) for phrase in self.TOOL_DISABLE_PHRASES), default=-1)
+                
+                if last_disable_pos > last_enable_pos:
+                    result = self._handle_disable_command()
+                else:
+                    result = self._handle_enable_command()
+                    
+                return True, result.get("message") if isinstance(result, dict) else str(result)
+            
+            elif has_disable_command:
+                result = self._handle_disable_command()
+                return True, result.get("message") if isinstance(result, dict) else str(result)
+            elif has_enable_command:
+                result = self._handle_enable_command()
+                return True, result.get("message") if isinstance(result, dict) else str(result)
+                
+            return False, None
+                
+        except Exception as e:
+            print(f"Error in handle_tool_command: {e}")
+            return False, str(e)
+        
+    def _handle_enable_command(self) -> Dict[str, Any]:
+        """
+        Handle a command to enable tools.
+        
+        Returns:
+            Dict containing:
+                - success (bool): Whether command was handled successfully
+                - message (str): Response message
+                - state (str): Current state of tools
+        """
+        try:
+            if not self.tools_enabled:
+                result = self.enable_tools()
+                return {
+                    "success": True,
+                    "message": result["message"],
+                    "state": "enabled"
+                }
+            return {
+                "success": True,
+                "message": "Tools are already enabled.",
+                "state": "enabled"
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"Error enabling tools: {str(e)}",
+                "state": "error"
+            }
+
+    def _handle_disable_command(self) -> Dict[str, Any]:
+        """
+        Handle a command to disable tools.
+        
+        Returns:
+            Dict containing:
+                - success (bool): Whether command was handled successfully
+                - message (str): Response message
+                - state (str): Current state of tools
+        """
+        try:
+            if self.tools_enabled:
+                result = self.disable_tools(reason="manual")
+                if not isinstance(result, dict) or "message" not in result:
+                    raise ValueError("Invalid result from disable_tools")
+                return {
+                    "success": True,
+                    "message": result["message"],
+                    "state": "disabled"
+                }
+            return {
+                "success": True,
+                "message": "Tools are already disabled.",
+                "state": "disabled"
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "message": f"Error disabling tools: {str(e)}",
+                "state": "error"
+            }
+
+    def get_tools_for_query(self, query: str) -> Tuple[bool, List[dict]]:
+        """
+        Determine if tools are needed and which ones are relevant for a query.
+        
+        Args:
+            query: User's voice query text
+            
+        Returns:
+            Tuple containing:
+                - bool: Whether any tools are needed for this query
+                - List[dict]: List of relevant tool definitions
+        """
+        query_lower = query.lower()
+        relevant_tools = []
+        
+        # Check if this is ONLY a tool command
+        is_enable = any(phrase in query_lower for phrase in self.TOOL_ENABLE_PHRASES)
+        is_disable = any(phrase in query_lower for phrase in self.TOOL_DISABLE_PHRASES)
+        
+        if is_enable or is_disable:
+            # Remove the tool command part from query for further analysis
+            for phrase in self.TOOL_ENABLE_PHRASES + self.TOOL_DISABLE_PHRASES:
+                query_lower = query_lower.replace(phrase, '').strip()
+                
+            # If nothing left after removing tool command, return early
+            if not query_lower:
+                return False, []
+        
+        # Continue with tool analysis on remaining query
+        for category, keywords in self.TOOL_CATEGORY_KEYWORDS.items():
+            if any(word in query_lower for word in keywords):
+                category_tools = get_tools_by_category(category)
+                relevant_tools.extend(category_tools)
+        
+        # Remove duplicate tools while preserving order
+        relevant_tools = list({tool['name']: tool for tool in relevant_tools}.values())
+        
+        # Debug logging
+        print(f"\nTool Analysis:")
+        print(f"Query: {query_lower[:50]}...")
+        print(f"Contains Tool Command: {is_enable or is_disable}")
+        print(f"Tools Found: {[tool['name'] for tool in relevant_tools]}")
+        
+        return bool(relevant_tools), relevant_tools
+    
+    def process_confirmation(self, response: str) -> Tuple[bool, bool, str]:
+        """
+        Process user's response to a confirmation prompt about using tools.
+        
+        Args:
+            response: User's response text
+            
+        Returns:
+            Tuple of (was_confirmation, is_affirmative, message)
+        """
+        response_lower = response.lower()
+        
+        # Check if this is a confirmation response
+        confirmation_words = {'yes', 'yeah', 'correct', 'right', 'sure', 'okay', 'yep', 'yup'}
+        rejection_words = {'no', 'nope', 'don\'t', 'do not', 'negative', 'cancel', 'stop'}
+        
+        is_confirmation = any(word in response_lower for word in confirmation_words) or \
+                         any(word in response_lower for word in rejection_words)
+        
+        if not is_confirmation:
+            return False, False, ""
+            
+        is_affirmative = any(word in response_lower for word in confirmation_words)
+        
+        # Update tool state based on response
+        if is_affirmative:
+            self.enable_tools()
+            message = "Tools enabled. I'll use them to assist you."
+        else:
+            self.disable_tools(reason="declined")
+            message = "I'll proceed without using tools."
+            
+        return True, is_affirmative, message
+
+
+
