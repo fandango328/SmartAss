@@ -175,7 +175,7 @@ class TokenManager:
         if not self.session_active:
             self.start_session()
             
-        print("\n=== Starting New Interaction ===")
+        print("\n=== Token Log ===")
         return {
             "status": "started",
             "timestamp": datetime.now().isoformat(),
@@ -275,8 +275,8 @@ class TokenManager:
             messages, system_content = self.prepare_messages_for_token_count(current_query, chat_log, system_prompt)
 
             # Log the prepared messages and system content
-            print(f"DEBUG: Prepared messages for token count: {messages}")
-            print(f"DEBUG: Prepared system content: {system_content}")
+            #print(f"DEBUG: Prepared messages for token count: {messages}")
+            #print(f"DEBUG: Prepared system content: {system_content}")
 
             count_result = self.anthropic_client.messages.count_tokens(
                 model=self.query_model,
@@ -285,7 +285,7 @@ class TokenManager:
             )
 
             # Log the API response
-            print(f"DEBUG: Anthropic API response for input tokens: {count_result}")
+            #print(f"DEBUG: Anthropic API response for input tokens: {count_result}")
 
             input_tokens = count_result.input_tokens if hasattr(count_result, 'input_tokens') else 0
 
@@ -317,7 +317,7 @@ class TokenManager:
             return 0
 
         # Log the response text
-        print(f"DEBUG: Response text for output token estimation: {response_text}")
+        #print(f"DEBUG: Response text for output token estimation: {response_text}")
 
         char_count = len(response_text)
         estimated_tokens = char_count // 4
@@ -397,12 +397,12 @@ class TokenManager:
             model = self.tool_model if is_tool_use else self.query_model
 
             # Log the input tokens and response text
-            print(f"DEBUG: Input tokens: {input_tokens}")
-            print(f"DEBUG: Response text: {response_text}")
+            print(f" Input tokens: {input_tokens}")
+            print(f" Response text: {response_text}")
 
             output_tokens = self.count_output_tokens(response_text)  # Ensure correct response text
 
-            print(f"DEBUG: Updating session costs - input_tokens: {input_tokens}, output_tokens: {output_tokens}")
+            print(f" Updating session costs - input_tokens: {input_tokens}, output_tokens: {output_tokens}")
 
             current_input = max(0, input_tokens)
             current_output = max(0, output_tokens)
@@ -422,7 +422,7 @@ class TokenManager:
             self.session['total_cost'] += input_cost + output_cost
             self.session['history_tokens'] += current_input + current_output
 
-            print(f"DEBUG: Session costs updated - input_cost: {input_cost}, output_cost: {output_cost}")
+            print(f" Session costs updated - input_cost: {input_cost}, output_cost: {output_cost}")
 
             self.display_token_usage(current_input + current_output)
 
@@ -512,7 +512,7 @@ class TokenManager:
         self.consecutive_non_tool_queries = 0
         
         print(f"Tool usage recorded: {tool_name}")
-        print(f"Non-tool query counter reset to 0")
+        #print(f"Non-tool query counter reset to 0")
         
         return {
             "status": "recorded",

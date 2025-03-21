@@ -7,7 +7,7 @@ from pathlib import Path
 class DisplayManager:
     def __init__(self):
         pygame.init()
-        self.base_path = Path('/home/zach/LAURA/pygame')
+        self.base_path = Path('/home/user/LAURA/pygame')
         self.screen = None
         self.image_cache = {}
         self.current_state = 'sleep'
@@ -57,7 +57,7 @@ class DisplayManager:
     def load_image_directories(self):
         #print("\nLoading image directories...")
         for state, directory in self.states.items():
-            print(f"\nChecking state: {state}")
+            #print(f"\nChecking state: {state}")
             #print(f"Path: {directory}")
             
             if state == 'speaking':
@@ -65,10 +65,10 @@ class DisplayManager:
                 for mood in self.moods:
                     mood_path = Path(directory) / mood
                     print(f"Checking mood: {mood}")
-                    print(f"Path: {mood_path}")
+                    #print(f"Path: {mood_path}")
                     if mood_path.exists():
                         png_files = list(mood_path.glob('*.png'))
-                        print(f"Found {len(png_files)} images")
+                        #print(f"Found {len(png_files)} images")
                         if png_files:
                             self.image_cache[state][mood] = [
                                 pygame.transform.scale(pygame.image.load(str(img)), (512, 512))
@@ -78,7 +78,7 @@ class DisplayManager:
                 state_path = Path(directory)
                 if state_path.exists():
                     png_files = list(state_path.glob('*.png'))
-                    print(f"Found {len(png_files)} images")
+                    #print(f"Found {len(png_files)} images")
                     if png_files:
                         self.image_cache[state] = [
                             pygame.transform.scale(pygame.image.load(str(img)), (512, 512))
@@ -132,17 +132,17 @@ class DisplayManager:
     async def rotate_background(self):
         while not self.initialized:
             await asyncio.sleep(0.1)
-        print("Rotation background task started")
+        #print("Rotation background task started")
     
         while True:
             try:
                 current_time = time.time()
-                print(f"\nRotation check at: {time.strftime('%H:%M:%S')}")
+                #print(f"\nRotation check at: {time.strftime('%H:%M:%S')}")
             
                 if self.current_state in ['idle', 'sleep']:
                     time_diff = current_time - self.last_image_change
-                    print(f"Current state: {self.current_state}")
-                    print(f"Time since last change: {time_diff:.2f} seconds")
+                    #print(f"Current state: {self.current_state}")
+                    #print(f"Time since last change: {time_diff:.2f} seconds")
                 
                     if time_diff >= 15:
                         available_images = self.image_cache[self.current_state]
@@ -154,11 +154,11 @@ class DisplayManager:
                                 self.screen.blit(self.current_image, (0, 0))
                                 pygame.display.flip()
                                 self.last_image_change = current_time
-                                print(f"Rotated image at {time.strftime('%H:%M:%S')}")
-                    else:
-                        print(f"Not time to rotate yet. Waiting {15 - time_diff:.2f} more seconds")
-                else:
-                    print(f"Not in rotating state. Current state: {self.current_state}")
+                                #print(f"Rotated image at {time.strftime('%H:%M:%S')}")
+                    #else:
+                        #print(f"Not time to rotate yet. Waiting {15 - time_diff:.2f} more seconds")
+                #else:
+                    #print(f"Not in rotating state. Current state: {self.current_state}")
                 
             except Exception as e:
                 print(f"Error in rotate_background: {e}")
