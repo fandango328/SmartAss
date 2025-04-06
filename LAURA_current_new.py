@@ -4057,22 +4057,23 @@ async def run_main_loop():
     Core interaction loop managing LAURA's conversation flow.
     """
     global document_manager, chat_log, system_manager
-    try:
-        from system_manager import SystemManager
-        system_manager = SystemManager(
-            display_manager=display_manager,
-            audio_manager=audio_manager,
-            document_manager=document_manager,
-            token_tracker=token_tracker
-        )
-    except ImportError as e:
-        print(f"Failed to import SystemManager: {e}")
-        print("Please ensure system_manager.py is in the same directory")
-        return
-    except Exception as e:
-        print(f"Error initializing SystemManager: {e}")
-        print("SystemManager initialization failed")
-        return
+
+    # Initialize SystemManager if not already initialized
+    async with system_manager_lock:
+        if system_manager is None:
+            try:
+                print("Initializing SystemManager...")
+                system_manager = SystemManager(
+                    display_manager=display_manager,
+                    audio_manager=audio_manager,
+                    document_manager=document_manager,
+                    token_tracker=token_tracker
+                )
+                print("SystemManager initialized successfully")
+            except Exception as e:
+                print(f"Error initializing SystemManager: {e}")
+                print("SystemManager initialization failed")
+                return
             
     while True:
         try:
