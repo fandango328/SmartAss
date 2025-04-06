@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 
 # =============================================================================
 # Standard Library Imports - Core
@@ -1311,8 +1311,6 @@ def email_action(email_id, action):
         traceback.print_exc()
         return f"Sorry, I encountered an error while trying to {action} the email: {str(e)}"
 
-
-
 def draft_email(subject: str, content: str, recipient: str = "") -> str:
     global creds
     if not USE_GOOGLE:
@@ -1320,7 +1318,7 @@ def draft_email(subject: str, content: str, recipient: str = "") -> str:
     try:
         # Ensure credentials are available
         if not creds:
-            creds = initialize_google_credentials()
+            creds = initialize_google_services()
             if not creds:
                 return "Failed to initialize Google credentials. Please check your authentication."
         
@@ -3482,54 +3480,7 @@ async def conversation_mode():
     finally:
         await audio_manager.stop_listening()
 
-def initialize_google_credentials():
-    """Initialize Google API credentials"""
-    global creds
-    try:
-        # Register Chrome browser for OAuth flow
-        webbrowser.register('chromium', None, webbrowser.Chrome('/usr/bin/chromium'))
-        
-        if not USE_GOOGLE:
-            print("Google integration is disabled")
-            return None
-            
-        creds = None
-        if os.path.exists("token.json"):
-            try:
-                creds = Credentials.from_authorized_user_file("token.json", SCOPES)
-            except Exception as e:
-                print(f"Error loading credentials: {e}")
-                if os.path.exists("token.json"):
-                    os.remove("token.json")
-        
-        # Handle credential refresh or new authentication
-        if not creds or not creds.valid:
-            try:
-                if creds and creds.expired and creds.refresh_token:
-                    creds.refresh(Request())
-                else:
-                    flow = InstalledAppFlow.from_client_secrets_file(
-                        "credentials.json", 
-                        SCOPES
-                    )
-                    creds = flow.run_local_server(
-                        port=8080,
-                        host='localhost',
-                        open_browser=True,
-                        browser_path='/usr/bin/chromium'
-                    )
-                
-                # Save valid credentials
-                with open("token.json", "w") as token:
-                    token.write(creds.to_json())
-                    
-            except Exception as e:
-                print(f"Error during Google authentication: {e}")
-                if os.path.exists("token.json"):
-                    os.remove("token.json")
-                raise
-                
-        return creds
+
             
     except Exception as e:
         print(f"Error setting up Google integration: {e}")
@@ -3561,59 +3512,6 @@ async def print_response(chat):
     paragraphs = chat.split('\n')
     wrapped_chat = "\n".join([wrapper.fill(p) for p in paragraphs if p.strip()])
     print(wrapped_chat)
-
-def initialize_google_credentials():
-    """Initialize Google API credentials"""
-    global creds
-    try:
-        # Register Chrome browser for OAuth flow
-        webbrowser.register('chromium', None, webbrowser.Chrome('/usr/bin/chromium'))
-        
-        if not USE_GOOGLE:
-            print("Google integration is disabled")
-            return None
-            
-        creds = None
-        if os.path.exists("token.json"):
-            try:
-                creds = Credentials.from_authorized_user_file("token.json", SCOPES)
-            except Exception as e:
-                print(f"Error loading credentials: {e}")
-                if os.path.exists("token.json"):
-                    os.remove("token.json")
-        
-        # Handle credential refresh or new authentication
-        if not creds or not creds.valid:
-            try:
-                if creds and creds.expired and creds.refresh_token:
-                    creds.refresh(Request())
-                else:
-                    flow = InstalledAppFlow.from_client_secrets_file(
-                        "credentials.json", 
-                        SCOPES
-                    )
-                    creds = flow.run_local_server(
-                        port=8080,
-                        host='localhost',
-                        open_browser=True,
-                        browser_path='/usr/bin/chromium'
-                    )
-                
-                # Save valid credentials
-                with open("token.json", "w") as token:
-                    token.write(creds.to_json())
-                    
-            except Exception as e:
-                print(f"Error during Google authentication: {e}")
-                if os.path.exists("token.json"):
-                    os.remove("token.json")
-                raise
-                
-        return creds
-            
-    except Exception as e:
-        print(f"Error setting up Google integration: {e}")
-        return None
 
 async def generate_voice(chat):
     # Skip voice generation for control signals like [CONTINUE]
