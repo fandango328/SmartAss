@@ -1,7 +1,18 @@
-from enum import Enum
-from typing import Optional, Tuple, Dict, Any
 import asyncio
+import traceback
+from datetime import datetime
 from pathlib import Path
+from typing import Optional, Tuple, Dict, Any
+from enum import Enum
+
+# Configuration imports
+from config_cl import (
+    VAD_SETTINGS,
+    SOUND_PATHS
+)
+
+# Token state management
+from token_manager import TokenState, TokenManager
 
 class SystemManager:
     """
@@ -59,13 +70,11 @@ class SystemManager:
         """
         transcript_lower = transcript.lower()
         
-        # Check each command type and its patterns
         for command_type, actions in self.command_patterns.items():
             for action, patterns in actions.items():
                 if any(pattern in transcript_lower for pattern in patterns):
                     return True, command_type, action
         
-        # If we get here, no command was found
         return False, None, None
 
     async def handle_command(self, command_type: str, action: str) -> bool:
@@ -74,14 +83,16 @@ class SystemManager:
         Returns True if command succeeded, False if it failed
         """
         try:
-            # Show tools display
             await self.display_manager.update_display('tools')
             
-            # Execute command based on type
             if command_type == "document":
                 if action == "load":
-                    await self.document_manager.load_all_files(clear_existing=False)
-                    audio_file = self.audio_manager.get_random_audio('file', 'loaded')
+                    load_success = await self.document_manager.load_all_files(clear_existing=False)
+                    if load_success:
+                        audio_file = self.audio_manager.get_random_audio('file', 'loaded')
+                    else:
+                        audio_file = self.audio_manager.get_random_audio('file', 'error')
+                        return False
                 else:  # offload
                     await self.document_manager.offload_all_files()
                     audio_file = self.audio_manager.get_random_audio('file', 'offloaded')
@@ -89,10 +100,12 @@ class SystemManager:
             elif command_type == "tool":
                 if action == "enable":
                     self.token_tracker.enable_tools()
-                    audio_file = self.audio_manager.get_random_audio('tool', 'status/enabled')
+                    if self.token_tracker.current_state == TokenState.TOOLS_ENABLED:
+                        audio_file = self.audio_manager.get_random_audio('tool', 'status/enabled')
                 else:  # disable
                     self.token_tracker.disable_tools()
-                    audio_file = self.audio_manager.get_random_audio('tool', 'status/disabled')
+                    if self.token_tracker.current_state == TokenState.TOOLS_DISABLED:
+                        audio_file = self.audio_manager.get_random_audio('tool', 'status/disabled')
                     
             elif command_type == "calibration":
                 success = await self._run_calibration()
@@ -101,18 +114,23 @@ class SystemManager:
                     'complete' if success else 'failed'
                 )
             
-            # Play audio feedback and wait for completion
             if audio_file:
                 await self.audio_manager.play_audio(audio_file)
             await self.audio_manager.wait_for_audio_completion()
             
-            # Update display to listening state
             await self.display_manager.update_display('listening')
             
             return True
             
         except Exception as e:
-            print(f"Command error: {e}")
+            error_msg = f"Command error: {str(e)}"
+            print(error_msg)
+            print(f"Traceback: {traceback.format_exc()}")
+            
+            error_audio = self.audio_manager.get_random_audio('system', 'error')
+            if error_audio:
+                await self.audio_manager.play_audio(error_audio)
+            
             return False
 
     async def _run_calibration(self) -> bool:
@@ -121,17 +139,27 @@ class SystemManager:
         Returns True if calibration succeeded, False if it failed
         """
         try:
-            # Run the calibration script
+            calib_script = Path("vad_calib.py").absolute()
+            
             process = await asyncio.create_subprocess_exec(
-                "python3", "vad_calib.py",
+                "python3", str(calib_script),
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE
             )
             
-            # Wait for it to finish and check result
             stdout, stderr = await process.communicate()
-            return "CALIBRATION_COMPLETE" in stdout.decode()
+            success = "CALIBRATION_COMPLETE" in stdout.decode()
+            
+            if success:
+                print("Voice calibration completed successfully")
+            else:
+                print("Voice calibration failed")
+                if stderr:
+                    print(f"Calibration error: {stderr.decode()}")
+                    
+            return success
             
         except Exception as e:
-            print(f"Calibration error: {e}")
+            print(f"Calibration error: {str(e)}")
+            print(f"Traceback: {traceback.format_exc()}")
             return False
