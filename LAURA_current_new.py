@@ -73,6 +73,7 @@ from display_manager import DisplayManager
 from audio_manager_vosk import AudioManager
 from whisper_transcriber import WhisperCppTranscriber
 from vosk_transcriber import VoskTranscriber
+from system_manager import SystemManager
 from secret import (
     GOOGLE_MAPS_API_KEY,
     OPENROUTER_API_KEY,
@@ -439,16 +440,22 @@ class TTSHandler:
 
 # Global variables
 # =============================================================================
-# Core System Components
+# Core System Components - Global Declarations
 # =============================================================================
-transcriber = None
-remote_transcriber = None
-audio_manager = None
-display_manager = None
-document_manager = None
-tts_handler = None
-anthropic_client = None
-token_tracker = None
+# Initialize all global variables at module level
+transcriber: Optional[Union[VoskTranscriber, WhisperCppTranscriber]] = None
+remote_transcriber: Optional[RemoteTranscriber] = None
+audio_manager: Optional[AudioManager] = None
+display_manager: Optional[DisplayManager] = None
+document_manager: Optional[DocumentManager] = None
+tts_handler: Optional[TTSHandler] = None
+anthropic_client: Optional[Anthropic] = None
+token_tracker: Optional[TokenManager] = None
+system_manager: Optional[SystemManager] = None
+snowboy = None  # Type hint not added as snowboydetect types aren't standard
+
+# Create a lock for SystemManager initialization
+system_manager_lock = asyncio.Lock()
 
 # =============================================================================
 # Google Integration Setup
@@ -2477,10 +2484,17 @@ async def wake_word():
                     print(f"ERROR: Model file not found at {model_path.absolute()}")
                     return None
             
-            snowboy = snowboydetect.SnowboyDetect(
-                resource_filename=str(resource_path.absolute()).encode(),
-                model_str=",".join(str(p.absolute()) for p in model_paths).encode()
-            )
+            try:
+                snowboy = snowboydetect.SnowboyDetect(
+                    resource_filename=str(resource_path.absolute()).encode(),
+                    model_str=",".join(str(p.absolute()) for p in model_paths).encode()
+                )
+                if not snowboy:
+                    print("Error: Failed to initialize SnowboyDetect")
+                    return None
+            except Exception as e:
+                print(f"Error initializing Snowboy: {e}")
+                return None
             
             snowboy.SetSensitivity(b"0.5,0.5,0.45")
             
@@ -3103,10 +3117,12 @@ async def conversation_mode():
         await audio_manager.stop_listening()
 
 
-            
-    except Exception as e:
-        print(f"Error setting up Google integration: {e}")
-        return None
+def draft_email(subject: str, content: str, recipient: str = "") -> str:
+    global creds
+    if not USE_GOOGLE:
+        return "Please let the user know that Google is turned off in the script."
+    try:
+        service = build("gmail", "v1", credentials=creds)
         message = EmailMessage()
         message.set_content(content)
         if recipient:
@@ -3921,7 +3937,7 @@ async def main():
     Last Updated: 2025-03-28 20:37:10 UTC
     Author: fandango328
     """
-    global remote_transcriber, display_manager, transcriber, token_tracker, chat_log, document_manager  # Added document_manager
+    global remote_transcriber, display_manager, transcriber, token_tracker, chat_log, document_manager, system_manager
     tasks = []  
     
     try:
@@ -4040,15 +4056,24 @@ async def run_main_loop():
     """
     Core interaction loop managing LAURA's conversation flow.
     """
-    global document_manager, chat_log
-    global system_manager
-    system_manager = SystemManager(
-        display_manager=display_manager,
-        audio_manager=audio_manager,
-        document_manager=document_manager,
-        token_tracker=token_tracker
-    )
-    
+    global document_manager, chat_log, system_manager
+    try:
+        from system_manager import SystemManager
+        system_manager = SystemManager(
+            display_manager=display_manager,
+            audio_manager=audio_manager,
+            document_manager=document_manager,
+            token_tracker=token_tracker
+        )
+    except ImportError as e:
+        print(f"Failed to import SystemManager: {e}")
+        print("Please ensure system_manager.py is in the same directory")
+        return
+    except Exception as e:
+        print(f"Error initializing SystemManager: {e}")
+        print("SystemManager initialization failed")
+        return
+            
     while True:
         try:
             if display_manager.current_state in ['sleep', 'idle']:
