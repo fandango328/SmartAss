@@ -1989,12 +1989,12 @@ async def process_response_content(content):
         for content_block in content:
             if hasattr(content_block, 'type') and content_block.type == "text":
                 text += content_block.text
-                break
         
         if not text:
             print("DEBUG - No valid text content found")
             return "No valid response content"
     
+    print(f"DEBUG - Full response text:\n{text}\n")
     print(f"DEBUG - Parsed text content: {text[:100]}...")
     
     # Step 2: Parse mood and preserve full message
@@ -2011,16 +2011,25 @@ async def process_response_content(content):
         clean_message = text
         print("DEBUG - No mood detected in message")
 
-    # Step 3: Format message for voice generation while preserving content
+    # Step 3: Format message for voice generation while preserving content and structure
     formatted_message = clean_message
-    formatted_message = re.sub(r'\n{2,}', '. ', formatted_message)  # Multiple newlines become period + space
-    formatted_message = formatted_message.replace('\n', ' ')         # Single newlines become spaces
+    
+    # Handle numbered lists by adding pauses
+    formatted_message = re.sub(r'(\d+\.)\s*([^\n]+)', r'\1 \2.', formatted_message)
+    
+    # Convert double newlines to periods for natural pauses
+    formatted_message = re.sub(r'\n\n+', '. ', formatted_message)
+    
+    # Convert single newlines to spaces but preserve list structure
+    formatted_message = re.sub(r'(?<!\d\.)\n(?!\d\.)', ' ', formatted_message)
+    
+    # Clean up spacing and punctuation
     formatted_message = re.sub(r'\s{2,}', ' ', formatted_message)   # Normalize multiple spaces
     formatted_message = re.sub(r'\.{2,}', '.', formatted_message)   # Multiple periods become single
     formatted_message = re.sub(r'\(\s*\)', '', formatted_message)   # Remove empty parentheses
     formatted_message = formatted_message.strip()                    # Remove leading/trailing spaces
     
-    print(f"DEBUG - Formatted message for voice: {formatted_message[:100]}...")
+    print(f"DEBUG - Formatted message for voice (full):\n{formatted_message}\n")
     
     # Step 4: Add complete response to chat_log and save to log file
     assistant_message = {"role": "assistant", "content": original_message}
@@ -3649,6 +3658,11 @@ async def heartbeat(remote_transcriber):
             await asyncio.sleep(30)  # Check every 30 seconds
         except:
             remote_transcriber.websocket = None
+
+async def get_random_audio_async(category, context=None):
+    """Asynchronous wrapper for get_random_audio"""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, get_random_audio, category, context)
 
 def get_random_audio(category, context=None):
     """
