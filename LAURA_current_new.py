@@ -2006,29 +2006,21 @@ async def process_response_content(content):
     else:
         full_message = text
 
-    # Step 3: Format message for voice generation while preserving content
-    voice_message = full_message
-    voice_message = re.sub(r'\n{2,}', '. ', voice_message)  # Multiple newlines become period + space
-    voice_message = voice_message.replace('\n', ' ')         # Single newlines become spaces
-    voice_message = re.sub(r'\s{2,}', ' ', voice_message)   # Normalize multiple spaces
-    voice_message = re.sub(r'\.{2,}', '.', voice_message)   # Multiple periods become single
-    voice_message = re.sub(r'\(\s*\)', '', voice_message)   # Remove empty parentheses
-    voice_message = voice_message.strip()                  # Remove leading/trailing spaces
-    
     # Step 4: ALWAYS add assistant response to chat_log and save to log file
-    assistant_message = {"role": "assistant", "content": message}
+    assistant_message = {"role": "assistant", "content": full_message}
     chat_log.append(assistant_message)
     
     # Step 5: SAVE TO PERSISTENT STORAGE
     print(f"DEBUG ASSISTANT MESSAGE: {type(assistant_message)} - {assistant_message}")
-    print(f"DEBUG ASSISTANT CONTENT: {type(assistant_message['content'])} - {assistant_message['content'][:100]}")
+    print(f"DEBUG ASSISTANT CONTENT: {type(assistant_message['content'])} - {full_message[:100]}")
     save_to_log_file(assistant_message)
     
     print(f"DEBUG - Assistant response added to chat_log and saved to file")
     print(f"DEBUG - Chat_log now has {len(chat_log)} messages")
+    print(f"DEBUG - Voice message preview: {voice_message[:100]}")
     
-    # Step 6: Return cleaned message for voice generation
-    return message
+    # Step 6: Return formatted message for voice generation
+    return voice_message
 
 async def generate_response(query):
     global chat_log, last_interaction, last_interaction_check, token_tracker
@@ -2633,7 +2625,7 @@ async def handle_conversation_loop(initial_response):
             await display_manager.update_display('thinking')
             res = await generate_response(follow_up)
             print(f"\n{Style.BRIGHT}Response:{Style.NORMAL}")
-            print(res)
+            print(f"Full message: {res[:200]}..." if len(res) > 200 else res)
             
             if res == "[CONTINUE]":
                 print("DEBUG - Detected [CONTINUE] control signal, skipping voice generation")
@@ -3016,6 +3008,10 @@ async def generate_voice(chat):
     print(f"DEBUG - GENERATE_VOICE received chat: '{chat[:50]}...'")
     try:
         print(f"DEBUG - GENERATE_VOICE RECEIVED: '{chat[:50]}...' (Length: {len(chat)})")
+        print(f"DEBUG - Content type: {type(chat)}")
+        if isinstance(chat, str):
+            paragraphs = chat.count('\n\n') + 1
+            print(f"DEBUG - Number of paragraphs: {paragraphs}")
 
         # Preprocess text to handle paragraph breaks with natural punctuation
         chat = chat.replace('\n\n', '. ').replace('\n', ' ')
@@ -3418,6 +3414,12 @@ def sanitize_messages_for_api(chat_log):
     print(f"DEBUG - Sanitized message history: {len(chat_log)} messages -> {len(sanitized)} messages")
     print(f"DEBUG - First message: {sanitized[0]['role'] if sanitized else 'none'}")
     print(f"DEBUG - Last message: {sanitized[-1]['role'] if sanitized else 'none'}")
+    if sanitized:
+        last_msg = sanitized[-1]
+        if isinstance(last_msg['content'], str):
+            print(f"DEBUG - Last message content preview: {last_msg['content'][:100]}")
+        elif isinstance(last_msg['content'], list):
+            print(f"DEBUG - Last message contains {len(last_msg['content'])} content blocks")
     
     # Final check: If the last message isn't from user, we might need to handle that elsewhere
     if sanitized and sanitized[-1]["role"] != "user":
@@ -3943,16 +3945,21 @@ async def run_main_loop():
                 try:
                     previous_state = display_manager.current_state
                     
+                    # Start getting audio file while updating display
+                    wake_audio_task = asyncio.create_task(get_random_audio_async('wake', detected_model))
+                    
                     if previous_state == 'sleep':
                         await display_manager.update_display('wake')
-                        await asyncio.sleep(0.1)
                     
-                    # Get context-specific wake response
-                    wake_audio = get_random_audio('wake', detected_model)
-                    await audio_manager.wait_for_audio_completion()
+                    # Only wait for audio completion if actually playing something
+                    if audio_manager.is_playing:
+                        await audio_manager.wait_for_audio_completion()
+                    
+                    # Get wake audio result
+                    wake_audio = await wake_audio_task
                     
                     if wake_audio:
-                        await audio_manager.play_audio(wake_audio)
+                        await audio_manager.play_audio(wake_audio, interrupt_current=True)
                     else:
                         await generate_voice("I'm here")
                     
