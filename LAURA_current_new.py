@@ -1978,7 +1978,7 @@ async def process_response_content(content):
     """
     global chat_log
     
-    print(f"DEBUG - PROCESS_RESPONSE_CONTENT starting")
+    print("DEBUG - Starting response content processing")
     
     # Step 1: Parse content into usable text
     if isinstance(content, str):
@@ -1995,32 +1995,47 @@ async def process_response_content(content):
             print("DEBUG - No valid text content found")
             return "No valid response content"
     
+    print(f"DEBUG - Parsed text content: {text[:100]}...")
+    
     # Step 2: Parse mood and preserve full message
+    original_message = text  # Store original message before any processing
     mood_match = re.match(r'^\[(.*?)\](.*)', text, re.IGNORECASE)
     if mood_match:
         raw_mood = mood_match.group(1)         # Extract [mood]
-        full_message = mood_match.group(2)     # Get message without mood
+        clean_message = mood_match.group(2)     # Get message without mood
         mapped_mood = map_mood(raw_mood)
         if mapped_mood:
             await display_manager.update_display('speaking', mood=mapped_mood)
+            print(f"DEBUG - Mood detected: {mapped_mood}")
     else:
-        full_message = text
+        clean_message = text
+        print("DEBUG - No mood detected in message")
 
-    # Step 4: ALWAYS add assistant response to chat_log and save to log file
-    assistant_message = {"role": "assistant", "content": full_message}
+    # Step 3: Format message for voice generation while preserving content
+    formatted_message = clean_message
+    formatted_message = re.sub(r'\n{2,}', '. ', formatted_message)  # Multiple newlines become period + space
+    formatted_message = formatted_message.replace('\n', ' ')         # Single newlines become spaces
+    formatted_message = re.sub(r'\s{2,}', ' ', formatted_message)   # Normalize multiple spaces
+    formatted_message = re.sub(r'\.{2,}', '.', formatted_message)   # Multiple periods become single
+    formatted_message = re.sub(r'\(\s*\)', '', formatted_message)   # Remove empty parentheses
+    formatted_message = formatted_message.strip()                    # Remove leading/trailing spaces
+    
+    print(f"DEBUG - Formatted message for voice: {formatted_message[:100]}...")
+    
+    # Step 4: Add complete response to chat_log and save to log file
+    assistant_message = {"role": "assistant", "content": original_message}
     chat_log.append(assistant_message)
     
     # Step 5: SAVE TO PERSISTENT STORAGE
     print(f"DEBUG ASSISTANT MESSAGE: {type(assistant_message)} - {assistant_message}")
-    print(f"DEBUG ASSISTANT CONTENT: {type(assistant_message['content'])} - {full_message[:100]}")
+    print(f"DEBUG ASSISTANT CONTENT: {type(assistant_message['content'])} - {original_message[:100]}")
     save_to_log_file(assistant_message)
     
     print(f"DEBUG - Assistant response added to chat_log and saved to file")
     print(f"DEBUG - Chat_log now has {len(chat_log)} messages")
-    print(f"DEBUG - Voice message preview: {voice_message[:100]}")
     
     # Step 6: Return formatted message for voice generation
-    return voice_message
+    return formatted_message
 
 async def generate_response(query):
     global chat_log, last_interaction, last_interaction_check, token_tracker
@@ -2402,10 +2417,23 @@ async def generate_response(query):
         
         else:
             print(f"DEBUG: Returning response. Tools active: {token_tracker.tools_are_active()}, Tools used in session: {token_tracker.tools_used_in_session}")
-            # Fixed the indentation issue by removing the empty if statement
             
-            # Always return the processed response content
-            return await process_response_content(response.content)    
+            try:
+                # Process the response content
+                formatted_response = await process_response_content(response.content)
+                
+                # Debug logging
+                print(f"DEBUG - Response processed:")
+                print(f"  Type: {type(formatted_response)}")
+                print(f"  Length: {len(formatted_response) if isinstance(formatted_response, str) else 'N/A'}")
+                print(f"  Preview: {formatted_response[:100] if isinstance(formatted_response, str) else formatted_response}")
+                
+                return formatted_response
+                
+            except Exception as process_error:
+                print(f"Error processing response content: {process_error}")
+                traceback.print_exc()
+                return "Sorry, there was an error processing the response"    
             
     except (APIError, APIConnectionError, BadRequestError, InternalServerError) as e:
         error_msg = ("I apologize, but the service is temporarily overloaded. Please try again in a moment." 
@@ -3000,6 +3028,13 @@ async def print_response(chat):
     print(wrapped_chat)
 
 async def generate_voice(chat):
+    """
+    Generate voice audio from formatted text.
+    
+    Args:
+        chat (str): Pre-formatted text from process_response_content
+                   Should already have newlines and spaces normalized
+    """
     # Skip voice generation for control signals like [CONTINUE]
     if chat == "[CONTINUE]":
         print(f"DEBUG - GENERATE_VOICE skipping control signal: '{chat}'")
@@ -3009,25 +3044,30 @@ async def generate_voice(chat):
     try:
         print(f"DEBUG - GENERATE_VOICE RECEIVED: '{chat[:50]}...' (Length: {len(chat)})")
         print(f"DEBUG - Content type: {type(chat)}")
-        if isinstance(chat, str):
-            paragraphs = chat.count('\n\n') + 1
-            print(f"DEBUG - Number of paragraphs: {paragraphs}")
 
-        # Preprocess text to handle paragraph breaks with natural punctuation
-        chat = chat.replace('\n\n', '. ').replace('\n', ' ')
+        # Verify input is properly formatted
+        if not isinstance(chat, str):
+            print(f"WARNING: Unexpected content type in generate_voice: {type(chat)}")
+            chat = str(chat)
+
+        # No need for newline handling since process_response_content already did it
+        # Just add a final normalization pass for safety
+        chat = ' '.join(chat.split())
         
         print(f"Sending to TTS: {chat[:50]}..." if len(chat) > 50 else f"Sending to TTS: {chat}")
 
+        # Generate and save audio
         audio = tts_handler.generate_audio(chat)
-
         with open(AUDIO_FILE, "wb") as f:
             f.write(audio)
     
+        # Play the generated audio
         await audio_manager.play_audio(AUDIO_FILE)
 
     except Exception as e:
         print(f"Error in generate_voice: {e}")
         traceback.print_exc()
+        raise  # Re-raise to allow proper error handling by caller
 
 def get_location(format: str) -> str:
     print("DEBUG: Entering get_location function")
@@ -4014,21 +4054,30 @@ async def run_main_loop():
                                 save_to_log_file(user_message)
                                 
                                 await display_manager.update_display('thinking')
-                                res = await generate_response(follow_up)
-                                if res != "[CONTINUE]":
+                                formatted_response = await generate_response(follow_up)
+                                
+                                if formatted_response == "[CONTINUE]":
+                                    print("DEBUG - Detected control signal in follow-up, continuing")
+                                    continue
+                                
+                                try:
                                     await display_manager.update_display('speaking')
-                                    await generate_voice(res)
+                                    await generate_voice(formatted_response)
                                     
-                                    if isinstance(res, str) and has_conversation_hook(res):
+                                    if isinstance(formatted_response, str) and has_conversation_hook(formatted_response):
                                         await audio_manager.wait_for_audio_completion()
                                         await display_manager.update_display('listening')
                                         
                                         # Pass control to conversation loop handler
-                                        await handle_conversation_loop(res)
+                                        await handle_conversation_loop(formatted_response)
                                         break  # Exit follow-up loop after conversation
                                     else:
                                         await audio_manager.wait_for_audio_completion()
                                         break  # Exit follow-up loop if no conversation hooks
+                                except Exception as voice_error:
+                                    print(f"Error during follow-up voice generation: {voice_error}")
+                                    await display_manager.update_display('idle')
+                                    break
                                 
                                 # Check for next follow-up
                                 follow_up = await capture_speech(is_follow_up=True)
@@ -4049,35 +4098,53 @@ async def run_main_loop():
                 # Normal conversation flow
                 try:
                     await display_manager.update_display('thinking')
-                    res = await generate_response(transcript)
+                    formatted_response = await generate_response(transcript)
+                    
+                    if formatted_response == "[CONTINUE]":
+                        print("DEBUG - Detected control signal, skipping voice generation")
+                        continue
+                    
+                    # Print response before voice generation
                     print(f"\n{Style.BRIGHT}Laura:{Style.NORMAL}")
-                    print(res)
+                    print(formatted_response)
                     
-                    await display_manager.update_display('speaking')
-                    await generate_voice(res)
-                    
-                    if isinstance(res, str) and has_conversation_hook(res):
-                        await audio_manager.wait_for_audio_completion()
-                        await display_manager.update_display('listening')
+                    # Display and voice handling
+                    try:
+                        await display_manager.update_display('speaking')
+                        await generate_voice(formatted_response)
                         
-                        # Pass to the conversation loop handler
-                        await handle_conversation_loop(res)
-                    else:
-                        await audio_manager.wait_for_audio_completion()
+                        if isinstance(formatted_response, str) and has_conversation_hook(formatted_response):
+                            await audio_manager.wait_for_audio_completion()
+                            await display_manager.update_display('listening')
+                            
+                            # Pass to conversation loop handler with formatted response
+                            await handle_conversation_loop(formatted_response)
+                        else:
+                            await audio_manager.wait_for_audio_completion()
+                            await display_manager.update_display('idle')
+                    except Exception as voice_error:
+                        print(f"Error during voice generation: {voice_error}")
                         await display_manager.update_display('idle')
+                        continue
                         
                 except Exception as api_error:
                     print(f"API Error: {api_error}")
                     await display_manager.update_display('idle')
-            
+
             else:
-                timeout_audio = get_random_audio('timeout')
-                if timeout_audio:
-                    await audio_manager.play_audio(timeout_audio)
-                else:
-                    await generate_voice("No input detected. Feel free to ask for assistance when needed")
-                await audio_manager.wait_for_audio_completion()
-                await display_manager.update_display('idle')
+                try:
+                    timeout_audio = get_random_audio('timeout')
+                    if timeout_audio:
+                        await audio_manager.play_audio(timeout_audio)
+                    else:
+                        # Use pre-formatted timeout message
+                        timeout_message = "No input detected. Feel free to ask for assistance when needed"
+                        await generate_voice(timeout_message)
+                    await audio_manager.wait_for_audio_completion()
+                except Exception as timeout_error:
+                    print(f"Error during timeout handling: {timeout_error}")
+                finally:
+                    await display_manager.update_display('idle')
                 
         except Exception as e:
             print(f"Error in main loop: {e}")
