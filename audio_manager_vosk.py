@@ -14,11 +14,13 @@ class AudioManager:
         self.audio_stream = None
         self.is_speaking = False
         self.is_listening = False
+        self.current_process = None  # Store current audio playback process
         self.audio_complete = Event()
         self.audio_complete.set()  # Initially set to True since no audio is playing
         self.audio_state_changed = asyncio.Queue()
         self.activation_lock = asyncio.Lock()
         self.wake_sentence_duration = 0
+        self.playback_lock = asyncio.Lock()  # Add lock for playback management
         
         # Add a new event for notification signals
         self.notification_ready = Event()
@@ -81,40 +83,64 @@ class AudioManager:
             finally:
                 self.audio_stream = None
 
-    async def play_audio(self, audio_file):
-        """Play audio file using mpg123"""
-        self.is_speaking = True
-        self.audio_complete.clear()
-        
-        try:
-            # Calculate audio duration before playback
+    async def play_audio(self, audio_file, interrupt_current=False):
+        """
+        Play audio file using mpg123
+        Args:
+            audio_file: Path to audio file
+            interrupt_current: If True, stop current audio before playing
+        """
+        async with self.playback_lock:
+            if interrupt_current and self.is_speaking:
+                await self.stop_current_audio()
+            
+            self.is_speaking = True
+            self.audio_complete.clear()
+            
             try:
-                audio = MP3(audio_file)
-                self.wake_sentence_duration = audio.info.length
+                # Calculate audio duration before playback
+                try:
+                    audio = MP3(audio_file)
+                    self.wake_sentence_duration = audio.info.length
+                except Exception as e:
+                    print(f"Error calculating audio duration: {e}")
+                    self.wake_sentence_duration = 2.0  # Default duration if can't determine
+                
+                # Start the playback process - removed hardcoded audio device
+                self.current_process = await asyncio.create_subprocess_shell(
+                    f'/usr/bin/mpg123 -q {audio_file}',
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL
+                )
+                
+                # Wait for process to complete
+                await self.current_process.wait()
+                
+                # Add buffer time - critical for good UX
+                buffer_time = 0.7  # Increased buffer time
+                await asyncio.sleep(buffer_time)
+                
             except Exception as e:
-                print(f"Error calculating audio duration: {e}")
-                self.wake_sentence_duration = 2.0  # Default duration if can't determine
-            
-            # Start the playback process - removed hardcoded audio device
-            proc = await asyncio.create_subprocess_shell(
-                f'/usr/bin/mpg123 -q {audio_file}',
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL
-            )
-            
-            # Wait for process to complete
-            await proc.wait()
-            
-            # Add buffer time - critical for good UX
-            buffer_time = 0.7  # Increased buffer time
-            await asyncio.sleep(buffer_time)
-            
-        except Exception as e:
-            print(f"Error in play_audio: {e}")
-        finally:
-            self.is_speaking = False
-            self.audio_complete.set()
-            await self.audio_state_changed.put(('audio_completed', True))
+                print(f"Error in play_audio: {e}")
+            finally:
+                self.current_process = None
+                self.is_speaking = False
+                self.audio_complete.set()
+                await self.audio_state_changed.put(('audio_completed', True))
+
+    async def stop_current_audio(self):
+        """Stop currently playing audio if any"""
+        if self.current_process and self.is_speaking:
+            try:
+                self.current_process.terminate()
+                await self.current_process.wait()
+            except Exception as e:
+                print(f"Error stopping current audio: {e}")
+            finally:
+                self.current_process = None
+                self.is_speaking = False
+                self.audio_complete.set()
+                await self.audio_state_changed.put(('audio_completed', True))
 
     def set_notification(self, text):
         """Set notification text and trigger event"""
