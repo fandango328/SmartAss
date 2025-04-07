@@ -4118,11 +4118,17 @@ async def run_main_loop():
                 transcript_lower = transcript.lower().strip()
                 
                 # Check for system commands using system_manager
-                is_command, command_type, action = system_manager.detect_command(transcript)
-                if is_command:
-                    success = await system_manager.handle_command(command_type, action)
-                    if success:
-                        # Handle follow-up conversation
+                command_result = system_manager.detect_command(transcript)
+                if command_result:
+                    is_command, command_type, action = command_result
+                    if is_command:
+                        success = await system_manager.handle_command(command_type, action)
+                        if not success:
+                            # Only revert to idle if command failed
+                            await display_manager.update_display('idle')
+                            return
+                        
+                        # For successful commands, engage conversation mode
                         follow_up = await conversation_mode()
                         if follow_up:
                             await display_manager.update_display('thinking')
@@ -4130,13 +4136,7 @@ async def run_main_loop():
                             if res != "[CONTINUE]":
                                 await display_manager.update_display('speaking')
                                 await generate_voice(res)
-                                if has_conversation_hook(res):
-                                    await audio_manager.wait_for_audio_completion()
-                                    await display_manager.update_display('listening')
-                                else:
-                                    await audio_manager.wait_for_audio_completion()
-                                    await display_manager.update_display('idle')
-                        continue
+                        return
                 
                 # If not a system command, add to chat log
                 user_message = {"role": "user", "content": transcript}
