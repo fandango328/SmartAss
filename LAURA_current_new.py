@@ -1995,23 +1995,25 @@ async def process_response_content(content):
             print("DEBUG - No valid text content found")
             return "No valid response content"
     
-    # Step 2: Parse mood and clean up message
+    # Step 2: Parse mood and preserve full message
     mood_match = re.match(r'^\[(.*?)\](.*)', text, re.IGNORECASE)
     if mood_match:
         raw_mood = mood_match.group(1)         # Extract [mood]
-        message = mood_match.group(2).strip()  # Get actual message
+        full_message = mood_match.group(2)     # Get message without mood
         mapped_mood = map_mood(raw_mood)
         if mapped_mood:
             await display_manager.update_display('speaking', mood=mapped_mood)
     else:
-        message = text
-        
-    # Step 3: Clean up text formatting for voice generation
-    message = message.replace('\n\n', '. ')    # Double line breaks become periods
-    message = message.replace('\n', ' ')       # Single line breaks become spaces
-    message = re.sub(r'\s+', ' ', message)     # Multiple spaces become single
-    message = re.sub(r'\(\s*\)', '', message)  # Remove empty parentheses
-    message = message.strip()                  # Remove leading/trailing spaces
+        full_message = text
+
+    # Step 3: Format message for voice generation while preserving content
+    voice_message = full_message
+    voice_message = re.sub(r'\n{2,}', '. ', voice_message)  # Multiple newlines become period + space
+    voice_message = voice_message.replace('\n', ' ')         # Single newlines become spaces
+    voice_message = re.sub(r'\s{2,}', ' ', voice_message)   # Normalize multiple spaces
+    voice_message = re.sub(r'\.{2,}', '.', voice_message)   # Multiple periods become single
+    voice_message = re.sub(r'\(\s*\)', '', voice_message)   # Remove empty parentheses
+    voice_message = voice_message.strip()                  # Remove leading/trailing spaces
     
     # Step 4: ALWAYS add assistant response to chat_log and save to log file
     assistant_message = {"role": "assistant", "content": message}
@@ -2038,24 +2040,6 @@ async def generate_response(query):
     
     query_lower = query.lower().strip()
     
-    # Check for system commands FIRST before adding to chat_log
-    
-    # Calibration commands
-    is_calibration_command = (
-        ("voice" in query_lower or "boys" in query_lower) and 
-        any(word in query_lower for word in ["calibrat", "detect"])
-    )
-    
-    if is_calibration_command:
-        await run_vad_calibration()
-        return "[CONTINUE]"
-
-    # Document loading commands    
-    if query_lower in [cmd.lower() for cmd in SYSTEM_STATE_COMMANDS["document"]["load"]]:
-        await display_manager.update_display('tools')
-        await document_manager.load_all_files(clear_existing=False)
-        return "[CONTINUE]"
-
     # In generate_response, modify the tool command section:
     try:
         was_command, command_response = token_tracker.handle_tool_command(query)
@@ -2113,45 +2097,45 @@ async def generate_response(query):
         # Get sanitized message history
         sanitized_messages = sanitize_messages_for_api(chat_log)
 
-        # Prepare system content
+        # Prepare system content with documents
         system_content = SYSTEM_PROMPT
+        
+        # Add document content to system prompt if available
+        if document_manager and document_manager.files_loaded:
+            loaded_content = document_manager.get_loaded_content()
+            if loaded_content["system_content"]:
+                system_content += "\n\nLoaded Documents:\n" + loaded_content["system_content"]
 
         # If tools are enabled, append tool definitions
         if use_tools and relevant_tools:
             system_content += "\n\nAvailable Tools:\n" + json.dumps(relevant_tools, indent=2)
 
-        # Build API message - SIMPLIFIED LOGIC
-        if document_manager and document_manager.files_loaded and ("look" in query_lower or "load" in query_lower):
-            print("\nDEBUG - Including image in API call")
-            api_message_content = []
-            
-            # Add images
-            for filename, file_data in document_manager.loaded_files.items():
-                if isinstance(file_data, dict) and file_data.get('type') == 'image':
-                    api_message_content.extend([
-                        {"type": "text", "text": f"Image {filename}:"},
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": file_data.get('mime_type', 'image/jpeg'),
-                                "data": file_data['base64']
-                            }
-                        }
-                    ])
-                    print(f"Added image {filename} to API message")
-            
-            # Add the query
-            api_message_content.append({"type": "text", "text": query})
-            
-            # Update or append the message
-            if sanitized_messages and sanitized_messages[-1]["role"] == "user":
-                sanitized_messages[-1]["content"] = api_message_content
+        # Handle image content in messages
+        if document_manager and document_manager.files_loaded:
+            loaded_content = document_manager.get_loaded_content()
+            if loaded_content["image_content"]:
+                print("\nDEBUG - Including images in API call")
+                api_message_content = loaded_content["image_content"]
+                api_message_content.append({"type": "text", "text": query})
+                
+                # Update or append the message
+                if sanitized_messages and sanitized_messages[-1]["role"] == "user":
+                    sanitized_messages[-1]["content"] = api_message_content
+                else:
+                    sanitized_messages.append({
+                        "role": "user",
+                        "content": api_message_content
+                    })
+                print(f"Added {len(loaded_content['image_content'])//2} images to API message")
             else:
-                sanitized_messages.append({
-                    "role": "user",
-                    "content": api_message_content
-                })
+                # No images, just update with text query
+                if sanitized_messages and sanitized_messages[-1]["role"] == "user":
+                    sanitized_messages[-1]["content"] = query
+                else:
+                    sanitized_messages.append({
+                        "role": "user",
+                        "content": query
+                    })
         else:
             print("\nDEBUG - Regular message, using text only")
             if sanitized_messages and sanitized_messages[-1]["role"] == "user":
