@@ -2675,7 +2675,8 @@ async def handle_conversation_loop(initial_response):
             await audio_manager.wait_for_audio_completion()
             await display_manager.update_display('idle')
             break
-            
+
+
 async def capture_speech(is_follow_up=False):
     """
     Unified function to capture and transcribe speech, replacing both 
