@@ -2018,12 +2018,9 @@ async def process_response_content(content):
     chat_log.append(assistant_message)
     
     # Step 5: SAVE TO PERSISTENT STORAGE
-    # Changed from: save_to_log_file(assistant_message, CommandType.CONVERSATION)
-    # To: save_to_log_file(assistant_message)  <-- REMOVED THE SECOND ARGUMENT
-    # In process_response_content:
     print(f"DEBUG ASSISTANT MESSAGE: {type(assistant_message)} - {assistant_message}")
     print(f"DEBUG ASSISTANT CONTENT: {type(assistant_message['content'])} - {assistant_message['content'][:100]}")
-    save_to_log_file(assistant_message)  # ← THIS IS THE CHANGE
+    save_to_log_file(assistant_message)
     
     print(f"DEBUG - Assistant response added to chat_log and saved to file")
     print(f"DEBUG - Chat_log now has {len(chat_log)} messages")
@@ -2604,6 +2601,81 @@ def has_conversation_hook(response):
     
     return any(phrase in response.lower() for phrase in continuation_phrases)
 
+async def handle_conversation_loop(initial_response):
+    """
+    Handle the ongoing conversation loop after an initial response with conversation hooks.
+    
+    Args:
+        initial_response (str): The initial response that triggered the conversation loop
+    """
+    global chat_log
+    
+    res = initial_response
+    while has_conversation_hook(res):
+        # Capture the follow-up speech
+        follow_up = await capture_speech(is_follow_up=True)
+        
+        if follow_up == "[CONTINUE]":
+            # This is a special control signal - just continue listening
+            # without modifying the response or conversation state
+            await display_manager.update_display('listening')
+            continue
+            
+        elif follow_up:
+            # First check if this is a system command
+            cmd_result = system_manager.detect_command(follow_up)
+            if cmd_result and cmd_result[0]:  # is_command is True
+                # Handle the system command directly
+                is_cmd, cmd_type, action = cmd_result
+                success = await system_manager.handle_command(cmd_type, action)
+                
+                if success:
+                    # Re-enter conversation loop after system command
+                    await display_manager.update_display('listening')
+                    continue
+                else:
+                    # Exit loop if command failed
+                    await display_manager.update_display('idle')
+                    break
+            
+            # Process as normal conversation
+            # Create a user message to add to chat_log
+            print(f"\n**** ABOUT TO CALL SAVE_TO_LOG_FILE IN CONVERSATION: {follow_up[:30]}... ****\n")
+            user_message = {"role": "user", "content": follow_up}
+            chat_log.append(user_message)
+            save_to_log_file(user_message)
+            
+            # Now proceed with response generation
+            await display_manager.update_display('thinking')
+            res = await generate_response(follow_up)
+            print(f"\n{Style.BRIGHT}Response:{Style.NORMAL}")
+            print(res)
+            
+            if res == "[CONTINUE]":
+                print("DEBUG - Detected [CONTINUE] control signal, skipping voice generation")
+                continue
+            
+            await display_manager.update_display('speaking')
+            await generate_voice(res)
+            
+            if not has_conversation_hook(res):
+                await audio_manager.wait_for_audio_completion()
+                await display_manager.update_display('idle')
+                break
+            
+            await audio_manager.wait_for_audio_completion()
+            await display_manager.update_display('listening')
+        else:
+            # No follow-up detected, play timeout message
+            timeout_audio = get_random_audio("timeout")
+            if timeout_audio:
+                await audio_manager.play_audio(timeout_audio)
+            else:
+                await generate_voice("No input detected. Feel free to ask for assistance when needed")
+            await audio_manager.wait_for_audio_completion()
+            await display_manager.update_display('idle')
+            break
+            
 async def capture_speech(is_follow_up=False):
     """
     Unified function to capture and transcribe speech, replacing both 
@@ -3907,8 +3979,8 @@ async def run_main_loop():
                     await display_manager.update_display(previous_state)
                     continue
                 
-                # Get user input
-                transcript = await handle_voice_query()
+                # Get user input using the unified capture_speech function
+                transcript = await capture_speech(is_follow_up=False)
                 if not transcript:
                     print("No input detected. Returning to idle state.")
                     await display_manager.update_display('idle')
@@ -3916,7 +3988,6 @@ async def run_main_loop():
                 
                 transcript_lower = transcript.lower().strip()
                 
-# Inside run_main_loop()
                 # Check for system commands using system_manager
                 command_result = system_manager.detect_command(transcript)
                 if command_result:
@@ -3926,20 +3997,48 @@ async def run_main_loop():
                         if success:
                             # SystemManager has already handled audio and display updates
                             # Just wait for any follow-up
-                            follow_up = await conversation_mode()
+                            await display_manager.update_display('listening')
+                            follow_up = await capture_speech(is_follow_up=True)
+                            
                             if follow_up:
+                                # Check if follow-up is also a system command
+                                cmd_result = system_manager.detect_command(follow_up)
+                                if cmd_result and cmd_result[0]:  # is_command is True
+                                    # Handle the system command directly
+                                    is_cmd, cmd_type, action = cmd_result
+                                    await system_manager.handle_command(cmd_type, action)
+                                    # Continue main loop after system command
+                                    continue
+                                
+                                # Process as normal conversation
+                                user_message = {"role": "user", "content": follow_up}
+                                chat_log.append(user_message)
+                                save_to_log_file(user_message)
+                                
                                 await display_manager.update_display('thinking')
                                 res = await generate_response(follow_up)
                                 if res != "[CONTINUE]":
                                     await display_manager.update_display('speaking')
                                     await generate_voice(res)
+                                    
+                                    # If response has conversation hooks, enter conversation loop
+                                    if isinstance(res, str) and has_conversation_hook(res):
+                                        await audio_manager.wait_for_audio_completion()
+                                        await display_manager.update_display('listening')
+                                        
+                                        # Start conversation loop
+                                        await handle_conversation_loop(res)
                         else:
                             # Only update display if command failed
                             await display_manager.update_display('idle')
+                        
+                        # Continue to next iteration of the main loop
+                        continue
                 
                 # If not a system command, add to chat log
                 user_message = {"role": "user", "content": transcript}
                 chat_log.append(user_message)
+                save_to_log_file(user_message)
                 print(f"DEBUG - Added user message to chat_log: {transcript}")
                 print(f"DEBUG - Chat log now has {len(chat_log)} messages")
                 
@@ -3957,45 +4056,8 @@ async def run_main_loop():
                         await audio_manager.wait_for_audio_completion()
                         await display_manager.update_display('listening')
                         
-                        while has_conversation_hook(res):
-                            follow_up = await conversation_mode()
-                            if follow_up == "[CONTINUE]":
-                                continue
-                            elif follow_up:
-                                # Create a user message to add to chat_log
-                                print(f"\n**** ABOUT TO CALL SAVE_TO_LOG_FILE IN CONVERSATION MODE: {follow_up[:30]}... ****\n")
-                                user_message = {"role": "user", "content": follow_up}
-                                chat_log.append(user_message)
-                                
-                                # Now proceed with response generation
-                                await display_manager.update_display('thinking')
-                                res = await generate_response(follow_up)
-                                print(f"\n{Style.BRIGHT}Response:{Style.NORMAL}")
-                                print(res)
-                                
-                                if res == "[CONTINUE]":
-                                    print("DEBUG - Detected [CONTINUE] control signal, skipping voice generation")
-                                    continue
-                                
-                                await display_manager.update_display('speaking')
-                                await generate_voice(res)
-                                
-                                if not has_conversation_hook(res):
-                                    await audio_manager.wait_for_audio_completion()
-                                    await display_manager.update_display('idle')
-                                    break
-                                
-                                await audio_manager.wait_for_audio_completion()
-                                await display_manager.update_display('listening')
-                            else:
-                                timeout_audio = get_random_audio("timeout")
-                                if timeout_audio:
-                                    await audio_manager.play_audio(timeout_audio)
-                                else:
-                                    await generate_voice("No input detected. Feel free to ask for assistance when needed")
-                                await audio_manager.wait_for_audio_completion()
-                                await display_manager.update_display('idle')
-                                break
+                        # Pass to the conversation loop handler
+                        await handle_conversation_loop(res)
                     else:
                         await audio_manager.wait_for_audio_completion()
                         await display_manager.update_display('idle')
@@ -4017,7 +4079,7 @@ async def run_main_loop():
             print(f"Error in main loop: {e}")
             traceback.print_exc()
             await display_manager.update_display('idle')
-
+            
 if __name__ == "__main__":
     try:
         display_manager = DisplayManager()
