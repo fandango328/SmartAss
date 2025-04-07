@@ -4117,26 +4117,26 @@ async def run_main_loop():
                 
                 transcript_lower = transcript.lower().strip()
                 
+# Inside run_main_loop()
                 # Check for system commands using system_manager
                 command_result = system_manager.detect_command(transcript)
                 if command_result:
                     is_command, command_type, action = command_result
                     if is_command:
                         success = await system_manager.handle_command(command_type, action)
-                        if not success:
-                            # Only revert to idle if command failed
+                        if success:
+                            # SystemManager has already handled audio and display updates
+                            # Just wait for any follow-up
+                            follow_up = await conversation_mode()
+                            if follow_up:
+                                await display_manager.update_display('thinking')
+                                res = await generate_response(follow_up)
+                                if res != "[CONTINUE]":
+                                    await display_manager.update_display('speaking')
+                                    await generate_voice(res)
+                        else:
+                            # Only update display if command failed
                             await display_manager.update_display('idle')
-                            return
-                        
-                        # For successful commands, engage conversation mode
-                        follow_up = await conversation_mode()
-                        if follow_up:
-                            await display_manager.update_display('thinking')
-                            res = await generate_response(follow_up)
-                            if res != "[CONTINUE]":
-                                await display_manager.update_display('speaking')
-                                await generate_voice(res)
-                        return
                 
                 # If not a system command, add to chat log
                 user_message = {"role": "user", "content": transcript}
