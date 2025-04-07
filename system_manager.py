@@ -1,18 +1,18 @@
 import asyncio
+import os
+import random
 import traceback
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Tuple, Dict, Any
 from enum import Enum
+from token_manager import TokenManager
 
 # Configuration imports
 from config_cl import (
     VAD_SETTINGS,
     SOUND_PATHS
 )
-
-# Token state management
-from token_manager import TokenState, TokenManager
 
 class SystemManager:
     """
@@ -30,7 +30,6 @@ class SystemManager:
         self.document_manager = document_manager
         self.token_tracker = token_tracker
         
-        # Define our command patterns - what words trigger what commands
         self.command_patterns = {
             "document": {
                 "load": [
@@ -59,6 +58,41 @@ class SystemManager:
                 ]
             }
         }
+        
+        # Debug flag for command detection
+        self.debug_detection = False  # Set to True to see matching details
+
+    def has_command_components(self, transcript: str, required_words: list, max_word_gap: int = 2) -> bool:
+        """
+        Check if command words appear within 2 words of each other in the transcript
+        Example: "load of my file" would match ["load", "file"] but 
+                "load something else then file" would not
+        """
+        words = transcript.lower().split()
+        positions = []
+        
+        if self.debug_detection:
+            print(f"Checking command components: {required_words}")
+            print(f"Transcript words: {words}")
+        
+        for req_word in required_words:
+            found = False
+            for i, word in enumerate(words):
+                if req_word in word:
+                    positions.append(i)
+                    found = True
+                    break
+            if not found:
+                return False
+                            
+        # Check if words are within 2 words of each other
+        positions.sort()
+        
+        if self.debug_detection:
+            print(f"Word positions: {positions}")
+            
+        return all(positions[i+1] - positions[i] <= 2 
+                  for i in range(len(positions)-1))
 
     def detect_command(self, transcript: str) -> Tuple[bool, Optional[str], Optional[str]]:
         """
@@ -68,12 +102,19 @@ class SystemManager:
         - what type of command? (document/tool/calibration)
         - what action to take? (load/offload/enable/disable)
         """
-        transcript_lower = transcript.lower()
+        transcript_lower = transcript.lower().strip()
         
         for command_type, actions in self.command_patterns.items():
             for action, patterns in actions.items():
-                if any(pattern in transcript_lower for pattern in patterns):
+                # First try exact matches
+                if any(pattern == transcript_lower for pattern in patterns):
                     return True, command_type, action
+                    
+                # Then try component matching for more flexible detection
+                for pattern in patterns:
+                    components = pattern.split()
+                    if self.has_command_components(transcript_lower, components):
+                        return True, command_type, action
         
         return False, None, None
 
@@ -84,37 +125,47 @@ class SystemManager:
         """
         try:
             await self.display_manager.update_display('tools')
+            audio_file = None
             
             if command_type == "document":
                 if action == "load":
                     load_success = await self.document_manager.load_all_files(clear_existing=False)
-                    if load_success:
-                        audio_file = self.audio_manager.get_random_audio('file', 'loaded')
-                    else:
-                        audio_file = self.audio_manager.get_random_audio('file', 'error')
+                    folder_path = SOUND_PATHS['file']['loaded' if load_success else 'error']
+                    mp3_files = [f for f in os.listdir(folder_path) if f.endswith('.mp3')]
+                    if mp3_files:
+                        audio_file = os.path.join(folder_path, random.choice(mp3_files))
+                    if not load_success:
                         return False
                 else:  # offload
                     await self.document_manager.offload_all_files()
-                    audio_file = self.audio_manager.get_random_audio('file', 'offloaded')
+                    folder_path = SOUND_PATHS['file']['offloaded']
+                    mp3_files = [f for f in os.listdir(folder_path) if f.endswith('.mp3')]
+                    if mp3_files:
+                        audio_file = os.path.join(folder_path, random.choice(mp3_files))
                     
             elif command_type == "tool":
                 if action == "enable":
-                    self.token_tracker.enable_tools()
-                    if self.token_tracker.current_state == TokenState.TOOLS_ENABLED:
-                        audio_file = self.audio_manager.get_random_audio('tool', 'status/enabled')
+                    result = self.token_tracker.enable_tools()
+                    if result["state"] == "enabled":
+                        folder_path = SOUND_PATHS['tool']['status']['enabled']
+                        mp3_files = [f for f in os.listdir(folder_path) if f.endswith('.mp3')]
+                        if mp3_files:
+                            audio_file = os.path.join(folder_path, random.choice(mp3_files))
                 else:  # disable
-                    self.token_tracker.disable_tools()
-                    if self.token_tracker.current_state == TokenState.TOOLS_DISABLED:
-                        audio_file = self.audio_manager.get_random_audio('tool', 'status/disabled')
+                    result = self.token_tracker.disable_tools()
+                    if result["state"] == "disabled":
+                        folder_path = SOUND_PATHS['tool']['status']['disabled']
+                        mp3_files = [f for f in os.listdir(folder_path) if f.endswith('.mp3')]
+                        if mp3_files:
+                            audio_file = os.path.join(folder_path, random.choice(mp3_files))
                     
             elif command_type == "calibration":
                 success = await self._run_calibration()
-                audio_file = self.audio_manager.get_random_audio(
-                    'calibration', 
-                    'complete' if success else 'failed'
-                )
-            
-            if audio_file:
+                if success:
+                    audio_file = os.path.join(SOUND_PATHS['calibration'],
+                                            'voicecalibrationcomplete.mp3')
+
+            if audio_file and os.path.exists(audio_file):
                 await self.audio_manager.play_audio(audio_file)
             await self.audio_manager.wait_for_audio_completion()
             
@@ -127,8 +178,8 @@ class SystemManager:
             print(error_msg)
             print(f"Traceback: {traceback.format_exc()}")
             
-            error_audio = self.audio_manager.get_random_audio('system', 'error')
-            if error_audio:
+            error_audio = os.path.join(SOUND_PATHS['system']['error'], 'error.mp3')
+            if os.path.exists(error_audio):
                 await self.audio_manager.play_audio(error_audio)
             
             return False
