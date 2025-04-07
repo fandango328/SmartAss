@@ -4000,17 +4000,23 @@ async def run_main_loop():
                             await display_manager.update_display('listening')
                             follow_up = await capture_speech(is_follow_up=True)
                             
-                            if follow_up:
-                                # Check if follow-up is also a system command
+                            while follow_up:
                                 cmd_result = system_manager.detect_command(follow_up)
                                 if cmd_result and cmd_result[0]:  # is_command is True
                                     # Handle the system command directly
                                     is_cmd, cmd_type, action = cmd_result
-                                    await system_manager.handle_command(cmd_type, action)
-                                    # Continue main loop after system command
-                                    continue
+                                    success = await system_manager.handle_command(cmd_type, action)
+                                    
+                                    if success:
+                                        # Stay in listening mode for more commands
+                                        await display_manager.update_display('listening')
+                                        follow_up = await capture_speech(is_follow_up=True)
+                                        continue
+                                    else:
+                                        # On command failure, exit the follow-up loop
+                                        break
                                 
-                                # Process as normal conversation
+                                # Not a system command, process as normal conversation
                                 user_message = {"role": "user", "content": follow_up}
                                 chat_log.append(user_message)
                                 save_to_log_file(user_message)
@@ -4021,13 +4027,19 @@ async def run_main_loop():
                                     await display_manager.update_display('speaking')
                                     await generate_voice(res)
                                     
-                                    # If response has conversation hooks, enter conversation loop
                                     if isinstance(res, str) and has_conversation_hook(res):
                                         await audio_manager.wait_for_audio_completion()
                                         await display_manager.update_display('listening')
                                         
-                                        # Start conversation loop
+                                        # Pass control to conversation loop handler
                                         await handle_conversation_loop(res)
+                                        break  # Exit follow-up loop after conversation
+                                    else:
+                                        await audio_manager.wait_for_audio_completion()
+                                        break  # Exit follow-up loop if no conversation hooks
+                                
+                                # Check for next follow-up
+                                follow_up = await capture_speech(is_follow_up=True)
                         else:
                             # Only update display if command failed
                             await display_manager.update_display('idle')
