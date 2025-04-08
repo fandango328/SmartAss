@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 
 # =============================================================================
 # Standard Library Imports - Core
@@ -3876,6 +3876,15 @@ async def main():
         print("\n=== Chat Log Initialization Debug ===")
         print(f"Timestamp: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"Total messages in chat_log: {len(chat_log)}")
+
+        print("\nFirst 6 messages:")
+        for i, msg in enumerate(chat_log[:6]):
+            print(f"\nMessage {i}:")
+            print(f"Role: {msg.get('role', 'NO_ROLE')}")
+            print(f"Content Type: {type(msg.get('content', None))}")
+            print(f"Content Preview: {str(msg.get('content', ''))[:100]}")
+            print("-" * 50)
+
         print("\nLast 6 messages:")
         for i, msg in enumerate(chat_log[-6:]):
             print(f"\nMessage {len(chat_log)-6+i}:")
