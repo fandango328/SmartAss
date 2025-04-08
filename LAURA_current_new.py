@@ -2651,12 +2651,11 @@ async def handle_conversation_loop(initial_response):
                     await display_manager.update_display('idle')
                     break
             
-            # Process as normal conversation
             # Create a user message to add to chat_log
-            print(f"\n**** ABOUT TO CALL SAVE_TO_LOG_FILE IN CONVERSATION: {follow_up[:30]}... ****\n")
             user_message = {"role": "user", "content": follow_up}
-            chat_log.append(user_message)
-            save_to_log_file(user_message)
+            if not any(msg["role"] == "user" and msg["content"] == follow_up for msg in chat_log[-2:]):
+                chat_log.append(user_message)
+                save_to_log_file(user_message)
             
             # Now proceed with response generation
             await display_manager.update_display('thinking')
@@ -4062,10 +4061,11 @@ async def run_main_loop():
                                         # On command failure, exit the follow-up loop
                                         break
                                 
-                                # Not a system command, process as normal conversation
+                                # Check if message already exists before adding
                                 user_message = {"role": "user", "content": follow_up}
-                                chat_log.append(user_message)
-                                save_to_log_file(user_message)
+                                if not any(msg["role"] == "user" and msg["content"] == follow_up for msg in chat_log[-2:]):
+                                    chat_log.append(user_message)
+                                    save_to_log_file(user_message)
                                 
                                 await display_manager.update_display('thinking')
                                 formatted_response = await generate_response(follow_up)
