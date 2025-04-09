@@ -2658,12 +2658,7 @@ async def handle_conversation_loop(initial_response):
                     # Exit loop if command failed
                     await display_manager.update_display('idle')
                     break
-            
-            # Create a user message to add to chat_log
-            user_message = {"role": "user", "content": follow_up}
-            if not any(msg["role"] == "user" and msg["content"] == follow_up for msg in chat_log[-2:]):
-                chat_log.append(user_message)
-            
+                        
             # Now proceed with response generation
             await display_manager.update_display('thinking')
             res = await generate_response(follow_up)
@@ -4116,13 +4111,7 @@ async def run_main_loop():
                         
                         # Continue to next iteration of the main loop
                         continue
-                
-                # If not a system command, add to chat log
-                user_message = {"role": "user", "content": transcript}
-                chat_log.append(user_message)
-                print(f"DEBUG - Added user message to chat_log: {transcript}")
-                print(f"DEBUG - Chat log now has {len(chat_log)} messages")
-                
+                                
                 # Normal conversation flow
                 try:
                     await display_manager.update_display('thinking')
