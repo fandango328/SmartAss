@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 
 # =============================================================================
 # Standard Library Imports - Core
@@ -3841,6 +3841,14 @@ async def main():
             print(f"{Fore.YELLOW}No Pi 500 Keyboard found{Fore.WHITE}")
             keyboard_device = None
 
+        # Debug: Print key mapping information
+        if keyboard_device:
+            print(f"{Fore.CYAN}Keyboard capabilities:{Fore.WHITE}")
+            for event_type, event_codes in keyboard_device.capabilities(verbose=True).items():
+                if event_type[0] == 'EV_KEY':
+                    for code in event_codes:
+                        print(f"Key: {code[0]}, Code: {code[1]}")
+
         # INITIALIZATION PHASE
         # Google services should already be initialized in global scope
         if not creds and USE_GOOGLE:
@@ -4006,17 +4014,22 @@ async def run_main_loop():
                 wake_detected = False
                 detected_model = None
                 
-                # Non-blocking check for KEY_LEFTMETA
+                # Check for Pi 500 LEFTMETA key (Code 125)
                 try:
                     if keyboard_device:
                         r, w, x = select.select([keyboard_device.fd], [], [], 0)
                         if r:
                             for event in keyboard_device.read():
-                                print(f"Event: type={event.type} code={event.code} value={event.value}")
-                                if event.type == ecodes.EV_KEY and event.code == ecodes.KEY_LEFTMETA and event.value == 1:
-                                    print(f"{Fore.GREEN}Raspberry button press detected!{Fore.WHITE}")
-                                    wake_detected = True
-                                    break
+                                if event.type == ecodes.EV_KEY and event.code == 125 and event.value == 1:
+                                    print(f"{Fore.GREEN}Pi 500 LEFTMETA key pressed - transitioning to listening{Fore.WHITE}")
+                                    await display_manager.update_display('listening')
+                                    transcript = await capture_speech(is_follow_up=False)
+                                    if transcript:
+                                        await display_manager.update_display('thinking')
+                                        break
+                                    else:
+                                        await display_manager.update_display('idle')
+                                        continue
                 except Exception as e:
                     print(f"Keyboard check error: {e}")
                 
