@@ -3861,99 +3861,75 @@ async def main():
         print(f"{Fore.CYAN}Available input devices:{Fore.WHITE}")
         keyboard_devices = []  # List to store keyboard devices
         
-        # First print all devices for debugging
         for device in list_devices():
             try:
                 device_obj = InputDevice(device)
                 print(f"Device: {device_obj.name} at {device_obj.path}")
-                device_obj.close()
-            except Exception as e:
-                print(f"{Fore.RED}Error identifying device {device}: {e}{Fore.WHITE}")
-        
-        # Direct method: try to open the exact device we want first
-        try:
-            # Target device path directly
-            target_path = '/dev/input/event5'  # Primary Pi 500 keyboard
-            keyboard_device = InputDevice(target_path)
-            print(f"{Fore.GREEN}Successfully opened Pi 500 Keyboard at {target_path}{Fore.WHITE}")
-            
-            # Get device capabilities and check for key support
-            caps = keyboard_device.capabilities()
-            key_caps = caps.get(ecodes.EV_KEY, [])
-            if key_caps:
-                print(f"{Fore.GREEN}Found valid Pi 500 Keyboard with {len(key_caps)} keys{Fore.WHITE}")
                 
-                # Grab exclusive access to keyboard
-                try:
-                    keyboard_device.grab()
-                    print(f"{Fore.GREEN}Successfully grabbed exclusive access to keyboard{Fore.WHITE}")
-                except Exception as e:
-                    print(f"{Fore.RED}Failed to grab keyboard: {e}{Fore.WHITE}")
-                    # Try without grabbing
-                    print(f"{Fore.YELLOW}Continuing without exclusive access{Fore.WHITE}")
-            else:
-                print(f"{Fore.YELLOW}Device at {target_path} has no key capabilities{Fore.WHITE}")
-                keyboard_device.close()
-                keyboard_device = None
-                
-        except Exception as direct_error:
-            print(f"{Fore.RED}Error opening Pi 500 keyboard directly: {direct_error}{Fore.WHITE}")
-            print(f"{Fore.YELLOW}Falling back to device scanning...{Fore.WHITE}")
-            keyboard_device = None
-            
-            # Fallback: scan for devices
-            for device in list_devices():
-                try:
-                    device_obj = InputDevice(device)
-                    
-                    # Check if it's a Pi 500 Keyboard (main keyboard, not auxiliary interfaces)
-                    if (("Pi 500" in device_obj.name and 
-                        "Mouse" not in device_obj.name and 
-                        "Consumer" not in device_obj.name and 
-                        "System" not in device_obj.name)):
-                        # Get device capabilities and check for key support
-                        caps = device_obj.capabilities()
-                        key_caps = caps.get(ecodes.EV_KEY, [])
-                        if key_caps:  # If we have any key capabilities
-                            keyboard_devices.append(device_obj)
-                            print(f"{Fore.GREEN}Found valid Pi 500 Keyboard at {device_obj.path}{Fore.WHITE}")
-                            print(f"Supported keys: {len(key_caps)} keys")
-                            continue  # Don't close this one
-                    
-                    # Close any non-matched devices
+                # Check if it's a Pi 500 Keyboard (main keyboard, not auxiliary interfaces)
+                if (("Pi 500" in device_obj.name and 
+                    "Mouse" not in device_obj.name and 
+                    "Consumer" not in device_obj.name and 
+                    "System" not in device_obj.name)):
+                    # Get device capabilities and check for key support
+                    caps = device_obj.capabilities()
+                    key_caps = caps.get(ecodes.EV_KEY, [])
+                    if key_caps:  # If we have any key capabilities
+                        keyboard_devices.append(device_obj)
+                        print(f"{Fore.GREEN}Found valid Pi 500 Keyboard at {device_obj.path}{Fore.WHITE}")
+                        print(f"Supported keys: {len(key_caps)} keys")
+                    else:
+                        print(f"{Fore.YELLOW}Device at {device_obj.path} has no key capabilities{Fore.WHITE}")
+                        device_obj.close()
+                else:
                     device_obj.close()
-                except Exception as e:
-                    print(f"{Fore.RED}Error checking device {device}: {e}{Fore.WHITE}")
-            
-            print(f"\nFound {len(keyboard_devices)} valid keyboard devices")
-            
-            # Use the first valid keyboard device from scan
-            if keyboard_devices:
-                keyboard_device = keyboard_devices[0]
-                print(f"{Fore.GREEN}Using keyboard device: {keyboard_device.path}{Fore.WHITE}")
-                
-                # Grab exclusive access to keyboard
-                try:
-                    keyboard_device.grab()
-                    print(f"{Fore.GREEN}Successfully grabbed exclusive access to keyboard{Fore.WHITE}")
-                except Exception as e:
-                    print(f"{Fore.RED}Failed to grab keyboard: {e}{Fore.WHITE}")
-                    print(f"{Fore.YELLOW}Continuing without exclusive access{Fore.WHITE}")
-                
-                # Keep other devices in case we need them
-                keyboard_device_alternates = keyboard_devices[1:]
-            else:
-                print(f"{Fore.YELLOW}No valid Pi 500 Keyboard found{Fore.WHITE}")
-                keyboard_device = None
-                keyboard_device_alternates = []
+            except Exception as e:
+                print(f"{Fore.RED}Error checking device {device}: {e}{Fore.WHITE}")
+        
+        print(f"\nFound {len(keyboard_devices)} valid keyboard devices")
 
-        # Debug: Print key mapping information for the selected device
+            # Diagnostic: Reset and flush keyboard buffer
         if keyboard_device:
-            print(f"{Fore.CYAN}Keyboard capabilities:{Fore.WHITE}")
+            try:
+                # Try to clear any pending events
+                print(f"{Fore.CYAN}Flushing keyboard event buffer...{Fore.WHITE}")
+                # Read with very small timeout to clear buffer
+                r, w, x = select.select([keyboard_device.fd], [], [], 0.01)
+                if r:
+                    keyboard_device.read()
+                print(f"{Fore.GREEN}Keyboard ready for input{Fore.WHITE}")
+            except Exception as e:
+                print(f"{Fore.YELLOW}Keyboard initialization note: {str(e)}{Fore.WHITE}")
+        
+        # Use the first valid keyboard device
+        if keyboard_devices:
+            keyboard_device = keyboard_devices[0]
+            print(f"{Fore.GREEN}Using keyboard device: {keyboard_device.path}{Fore.WHITE}")
+            
+            # Do NOT grab exclusive access - that blocks normal keyboard input
+            print(f"{Fore.GREEN}Using keyboard without exclusive access to allow normal typing{Fore.WHITE}")
+            
+            # Debug: Print capabilities
+            print("\nKeyboard capabilities:")
             caps = keyboard_device.capabilities(verbose=True)
             if ecodes.EV_KEY in caps:
                 for key_info in caps[ecodes.EV_KEY]:
                     print(f"Key: {key_info[0]}, Code: {key_info[1]}")
+            
+            # Keep other devices in case we need them
+            keyboard_device_alternates = keyboard_devices[1:]
+        else:
+            print(f"{Fore.YELLOW}No valid Pi 500 Keyboard found{Fore.WHITE}")
+            keyboard_device = None
+            keyboard_device_alternates = []
+
+        # Debug: Print key mapping information
+        if keyboard_device:
+            print(f"{Fore.CYAN}Keyboard capabilities:{Fore.WHITE}")
+            for event_type, event_codes in keyboard_device.capabilities(verbose=True).items():
+                if event_type[0] == 'EV_KEY':
+                    for code in event_codes:
+                        print(f"Key: {code[0]}, Code: {code[1]}")
 
         # INITIALIZATION PHASE
         # Google services should already be initialized in global scope
@@ -4100,7 +4076,8 @@ async def run_main_loop():
     Core interaction loop managing LAURA's conversation flow.
     """
     global document_manager, chat_log, system_manager, keyboard_device
-
+    iteration_count = 0
+    
     # Initialize SystemManager if not already initialized
     async with system_manager_lock:
         if system_manager is None:
@@ -4119,6 +4096,16 @@ async def run_main_loop():
                 return
             
     while True:
+        # Start of iteration - clear variables
+        wake_detected = False
+        detected_model = None
+        
+        # Iteration debug - every 100 iterations
+        if iteration_count % 100 == 0:
+            print(f"{Fore.BLUE}Waiting for wake input (LEFTMETA key or wake word)...{Fore.WHITE}")
+            
+        iteration_count += 1
+
         try:
             current_state = display_manager.current_state
             
@@ -4127,31 +4114,54 @@ async def run_main_loop():
                 wake_detected = False
                 detected_model = None
                 
-                # Check for keyboard wake
+                # Check for keyboard wake - using same approach as input_test.py
                 if keyboard_device:
                     try:
-                        # Use select with a very short timeout
+                        # Use non-blocking select with a very short timeout
                         r, w, x = select.select([keyboard_device.fd], [], [], 0.01)
                         
                         if r:
                             try:
-                                events = list(keyboard_device.read())
-                                for event in events:
-                                    # Only care about key events
+                                # Read all pending events
+                                for event in keyboard_device.read():
+                                    # Only process KEY events
                                     if event.type == ecodes.EV_KEY:
-                                        print(f"Key event: code={event.code}, value={event.value}")
+                                        print(f"{Fore.YELLOW}Key Event: Code={event.code}, Value={event.value}{Fore.WHITE}")
                                         
-                                        # Check for LEFTMETA (code 125) or ESC (code 1) key press
-                                        if (event.code == 125 or event.code == 1) and event.value == 1:
-                                            key_name = "LEFTMETA" if event.code == 125 else "ESC"
-                                            print(f"{key_name} key pressed - activating")
-                                            wake_detected = True
-                                            detected_model = None
-                                            break
-                            except (OSError, BlockingIOError) as e:
-                                print(f"Keyboard read error: {e}")
+                                        # Value 1 = key press (not release=0 or repeat=2)
+                                        if event.value == 1:
+                                            # Check for LEFTMETA code 125
+                                            if event.code == 125:
+                                                print(f"{Fore.GREEN}LEFTMETA key pressed - activating{Fore.WHITE}")
+                                                wake_detected = True
+                                                detected_model = None
+                                                break
+                            except BlockingIOError:
+                                # This is normal for non-blocking IO - silently ignore
+                                pass
+                            except Exception as e:
+                                # Log other errors without stopping the loop
+                                print(f"{Fore.RED}Error reading keyboard: {str(e)}{Fore.WHITE}")
                     except Exception as e:
-                        print(f"Keyboard error: {e}")
+                        print(f"{Fore.RED}Keyboard check error: {e}{Fore.WHITE}")
+                        # Continue to next iteration
+                        await asyncio.sleep(0.01)
+                        continue
+
+                        except OSError as e:
+                            if e.errno == 19:  # No such device
+                                print(f"Device error: {e} - Trying to reopen device")
+                                # Try to reopen the device
+                                try:
+                                    keyboard_device = InputDevice(keyboard_device.path)
+                                except:
+                                    print("Failed to reopen device")
+                            # Don't print other errors - they're common with shared devices
+                        except Exception as e:
+                            # Silent for most errors to reduce spam
+                            pass
+                    except Exception as e:
+                        print(f"Keyboard check error: {e}")
                         # Continue to wake word detection
                 
                 # If no keyboard wake, check for wake word
