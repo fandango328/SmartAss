@@ -3831,17 +3831,19 @@ async def main():
                 print(f"Device: {device_obj.name} at {device_obj.path}")
                 
                 # Check if it's a Pi 500 Keyboard (main keyboard, not auxiliary interfaces)
-                if ("Pi 500" in device_obj.name and 
+                if (("Pi 500" in device_obj.name and 
                     "Mouse" not in device_obj.name and 
                     "Consumer" not in device_obj.name and 
-                    "System" not in device_obj.name):
-                    # Verify device supports key events
+                    "System" not in device_obj.name)):
+                    # Get device capabilities and check for key support
                     caps = device_obj.capabilities()
-                    if ecodes.EV_KEY in caps:
+                    key_caps = caps.get(ecodes.EV_KEY, [])
+                    if key_caps:  # If we have any key capabilities
                         keyboard_devices.append(device_obj)
                         print(f"{Fore.GREEN}Found valid Pi 500 Keyboard at {device_obj.path}{Fore.WHITE}")
+                        print(f"Supported keys: {len(key_caps)} keys")
                     else:
-                        print(f"{Fore.YELLOW}Device at {device_obj.path} doesn't support key events{Fore.WHITE}")
+                        print(f"{Fore.YELLOW}Device at {device_obj.path} has no key capabilities{Fore.WHITE}")
                         device_obj.close()
                 else:
                     device_obj.close()
@@ -3850,6 +3852,19 @@ async def main():
         
         print(f"\nFound {len(keyboard_devices)} valid keyboard devices")
         
+        # Use the first valid keyboard device
+        if keyboard_devices:
+            keyboard_device = keyboard_devices[0]
+            print(f"{Fore.GREEN}Using keyboard device: {keyboard_device.path}{Fore.WHITE}")
+            
+            # Grab exclusive access to keyboard
+            try:
+                keyboard_device.grab()
+                print(f"{Fore.GREEN}Successfully grabbed exclusive access to keyboard{Fore.WHITE}")
+            except Exception as e:
+                print(f"{Fore.RED}Failed to grab keyboard: {e}{Fore.WHITE}")
+                keyboard_device = None
+                
         # Use the first valid keyboard device
         if keyboard_devices:
             keyboard_device = keyboard_devices[0]
@@ -3890,8 +3905,7 @@ async def main():
         # Initialize DocumentManager
         print(f"{Fore.CYAN}Initializing document management system...{Fore.WHITE}")
         document_manager = DocumentManager()
-
-        
+      
         
         
         # NEW: Load chat log from recent context
@@ -3900,17 +3914,17 @@ async def main():
         print(f"Timestamp: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"Total messages in chat_log: {len(chat_log)}")
 
-        print("\nFirst 6 messages:")
-        for i, msg in enumerate(chat_log[:6]):
+        print("\nFirst 3 messages:")
+        for i, msg in enumerate(chat_log[:3]):
             print(f"\nMessage {i}:")
             print(f"Role: {msg.get('role', 'NO_ROLE')}")
             print(f"Content Type: {type(msg.get('content', None))}")
             print(f"Content Preview: {str(msg.get('content', ''))[:100]}")
             print("-" * 50)
 
-        print("\nLast 6 messages:")
-        for i, msg in enumerate(chat_log[-6:]):
-            print(f"\nMessage {len(chat_log)-6+i}:")
+        print("\nLast 3 messages:")
+        for i, msg in enumerate(chat_log[-3:]):
+            print(f"\nMessage {len(chat_log)-3+i}:")
             print(f"Role: {msg.get('role', 'NO_ROLE')}")
             print(f"Content Type: {type(msg.get('content', None))}")
             print(f"Content Preview: {str(msg.get('content', ''))[:100]}")
@@ -3954,6 +3968,12 @@ async def main():
         # Add websocket heartbeat task for remote transcription
         if TRANSCRIPTION_MODE == "remote":
             tasks.append(asyncio.create_task(heartbeat(remote_transcriber)))
+        
+        # EXECUTION PHASE
+        # -------------------------------------------------------------
+        # Run all tasks concurrently with error handling
+        # Set initial state to sleep
+        await display_manager.update_display('sleep')
         
         # EXECUTION PHASE
         # -------------------------------------------------------------
@@ -4037,229 +4057,185 @@ async def run_main_loop():
             
     while True:
         try:
-            if display_manager.current_state in ['sleep', 'idle']:
-                # Check both wake word and keyboard
+            current_state = display_manager.current_state
+            
+            # Sleep state - only check for wake events
+            if current_state == 'sleep':
                 wake_detected = False
                 detected_model = None
                 
-                # Check for Pi 500 LEFTMETA key (Code 125) first
-                try:
-                    if keyboard_device:
-                        # Check main keyboard device
+                # Debug - verify keyboard device is still valid
+                if keyboard_device:
+                    print(f"{Fore.CYAN}Debug - Keyboard Status:{Fore.WHITE}")
+                    print(f"Primary keyboard path: {keyboard_device.path}")
+                    print(f"Keyboard fd: {keyboard_device.fd}")
+                
+                # Check for keyboard wake
+                if keyboard_device:
+                    try:
+                        # Debug - show we're checking for keyboard input
+                        print(f"{Fore.CYAN}Checking keyboard input...{Fore.WHITE}")
                         r, w, x = select.select([keyboard_device.fd], [], [], 0)
+                        
                         if r:
                             events = list(keyboard_device.read())
+                            # Debug - log all events
                             for event in events:
+                                print(f"{Fore.YELLOW}Raw Event - Type: {event.type}, Code: {event.code}, Value: {event.value}, Timestamp: {event.timestamp()}{Fore.WHITE}")
+                                
+                                # Check for any key press (debug)
                                 if event.type == ecodes.EV_KEY:
-                                    print(f"Key Event - Code: {event.code}, Value: {event.value}")
-                                    if event.code == 125 and event.value == 1:  # LEFTMETA press
-                                        print(f"{Fore.GREEN}Pi 500 LEFTMETA key pressed - direct to listening{Fore.WHITE}")
-                                        # Skip wake audio and go straight to listening
-                                        await display_manager.update_display('listening')
-                                        transcript = await capture_speech(is_follow_up=False)
-                                        if transcript:
-                                            print(f"{Fore.GREEN}Got transcript: {transcript}{Fore.WHITE}")
-                                            await display_manager.update_display('thinking')
+                                    print(f"{Fore.GREEN}Key Event Detected - Code: {event.code}{Fore.WHITE}")
+                                    
+                                    # Specific check for LEFTMETA
+                                    if event.code == 125:
+                                        print(f"{Fore.GREEN}LEFTMETA Event - Value: {event.value}{Fore.WHITE}")
+                                        if event.value == 1:  # Key press
+                                            print(f"{Fore.GREEN}LEFTMETA key pressed - activating{Fore.WHITE}")
                                             wake_detected = True
-                                            detected_model = None  # Ensure no wake word audio plays
+                                            detected_model = None
+                                            break
+                        else:
+                            print(f"{Fore.CYAN}Waiting for input...{Fore.WHITE}")
+                            
+                    except Exception as e:
+                        print(f"{Fore.RED}Keyboard check error: {e}{Fore.WHITE}")
+                        traceback.print_exc()
+                        await asyncio.sleep(0.1)
+                        continue
+                else:
+                    print(f"{Fore.YELLOW}No keyboard device available{Fore.WHITE}")
+                    await asyncio.sleep(0.1)
+                    continue
+                
+                # If no keyboard wake, check for wake word
+                if not wake_detected:
+                    detected_model = await wake_word()
+                    if detected_model:
+                        wake_detected = True
+                
+                # If no wake event detected, continue sleeping
+                if not wake_detected:
+                    await asyncio.sleep(0.1)
+                    continue
+                
+                # Handle wake event
+                if wake_detected:
+                    # Only play wake audio if wake word was used (not keyboard)
+                    if detected_model:
+                        wake_audio = await get_random_audio_async('wake', detected_model)
+                        await display_manager.update_display('wake')
+                        if wake_audio:
+                            await audio_manager.play_audio(wake_audio)
+                            await audio_manager.wait_for_audio_completion()
+                    
+                    # Transition to listening state
+                    await display_manager.update_display('listening')
+                    transcript = await capture_speech(is_follow_up=False)
+                    
+                    if not transcript:
+                        print(f"{Fore.YELLOW}No input detected. Returning to sleep state.{Fore.WHITE}")
+                        await display_manager.update_display('sleep')
+                        continue
+                    
+                    # Process the transcript
+                    transcript_lower = transcript.lower().strip()
+                    
+                    # Check for system commands
+                    command_result = system_manager.detect_command(transcript)
+                    if command_result:
+                        is_command, command_type, action = command_result
+                        if is_command:
+                            success = await system_manager.handle_command(command_type, action)
+                            if success:
+                                await display_manager.update_display('listening')
+                                follow_up = await capture_speech(is_follow_up=True)
+                                
+                                while follow_up:
+                                    cmd_result = system_manager.detect_command(follow_up)
+                                    if cmd_result and cmd_result[0]:
+                                        is_cmd, cmd_type, action = cmd_result
+                                        success = await system_manager.handle_command(cmd_type, action)
+                                        
+                                        if success:
+                                            await display_manager.update_display('listening')
+                                            follow_up = await capture_speech(is_follow_up=True)
+                                            continue
+                                        else:
+                                            break
+                                    
+                                    user_message = {"role": "user", "content": follow_up}
+                                    if not any(msg["role"] == "user" and msg["content"] == follow_up for msg in chat_log[-2:]):
+                                        chat_log.append(user_message)
+                                    
+                                    await display_manager.update_display('thinking')
+                                    formatted_response = await generate_response(follow_up)
+                                    
+                                    if formatted_response == "[CONTINUE]":
+                                        print("DEBUG - Detected control signal in follow-up, continuing")
+                                        continue
+                                    
+                                    try:
+                                        await display_manager.update_display('speaking')
+                                        await generate_voice(formatted_response)
+                                        
+                                        if isinstance(formatted_response, str) and has_conversation_hook(formatted_response):
+                                            await audio_manager.wait_for_audio_completion()
+                                            await display_manager.update_display('listening')
+                                            await handle_conversation_loop(formatted_response)
                                             break
                                         else:
-                                            print(f"{Fore.YELLOW}No transcript detected{Fore.WHITE}")
-                                            await display_manager.update_display('idle')
-                                            continue
-                        
-                        # Check alternate keyboard devices if available
-                        for alt_device in keyboard_device_alternates:
-                            r, w, x = select.select([alt_device.fd], [], [], 0)
-                            if r:
-                                events = list(alt_device.read())
-                                for event in events:
-                                    if event.type == ecodes.EV_KEY:
-                                        print(f"Alt Key Event - Code: {event.code}, Value: {event.value}")
-                                        if event.code == 125 and event.value == 1:  # LEFTMETA press
-                                            print(f"{Fore.GREEN}Pi 500 LEFTMETA key pressed (alt device) - direct to listening{Fore.WHITE}")
-                                            await display_manager.update_display('listening')
-                                            transcript = await capture_speech(is_follow_up=False)
-                                            if transcript:
-                                                print(f"{Fore.GREEN}Got transcript: {transcript}{Fore.WHITE}")
-                                                await display_manager.update_display('thinking')
-                                                wake_detected = True
-                                                detected_model = None
-                                                break
-                                            else:
-                                                print(f"{Fore.YELLOW}No transcript detected{Fore.WHITE}")
-                                                await display_manager.update_display('idle')
-                                                continue
-                    else:
-                        print(f"{Fore.RED}No keyboard device available{Fore.WHITE}")
-                except Exception as e:
-                    print(f"{Fore.RED}Keyboard check error: {e}{Fore.WHITE}")
-                    traceback.print_exc()
-                
-                try:
-                    # Only play wake audio if wake word was used (not keyboard)
-                    if detected_model:  # Wake word triggered
-                        previous_state = display_manager.current_state
-                        
-                        # Start getting audio file while updating display
-                        wake_audio_task = asyncio.create_task(get_random_audio_async('wake', detected_model))
-                        
-                        if previous_state == 'sleep':
-                            await display_manager.update_display('wake')
-                        
-                        # Only wait for audio completion if actually playing something
-                        if audio_manager.is_playing:
-                            await audio_manager.wait_for_audio_completion()
-                        
-                        # Get wake audio result
-                        wake_audio = await wake_audio_task
-                        
-                        if wake_audio:
-                            await audio_manager.play_audio(wake_audio, interrupt_current=True)
-                        else:
-                            await generate_voice("I'm here")
-                        
-                        await audio_manager.wait_for_audio_completion()
-                        await display_manager.update_display('listening')
-                    # For keyboard wake, we're already in listening state
-                    
-                except Exception as e:
-                    print(f"Error during wake response: {e}")
-                    await display_manager.update_display(previous_state)
-                    continue
-                
-                # Get user input using the unified capture_speech function
-                transcript = await capture_speech(is_follow_up=False)
-                if not transcript:
-                    print("No input detected. Returning to idle state.")
-                    await display_manager.update_display('idle')
-                    continue
-                
-                transcript_lower = transcript.lower().strip()
-                
-                # Check for system commands using system_manager
-                command_result = system_manager.detect_command(transcript)
-                if command_result:
-                    is_command, command_type, action = command_result
-                    if is_command:
-                        success = await system_manager.handle_command(command_type, action)
-                        if success:
-                            # SystemManager has already handled audio and display updates
-                            # Just wait for any follow-up
-                            await display_manager.update_display('listening')
-                            follow_up = await capture_speech(is_follow_up=True)
-                            
-                            while follow_up:
-                                cmd_result = system_manager.detect_command(follow_up)
-                                if cmd_result and cmd_result[0]:  # is_command is True
-                                    # Handle the system command directly
-                                    is_cmd, cmd_type, action = cmd_result
-                                    success = await system_manager.handle_command(cmd_type, action)
-                                    
-                                    if success:
-                                        # Stay in listening mode for more commands
-                                        await display_manager.update_display('listening')
-                                        follow_up = await capture_speech(is_follow_up=True)
-                                        continue
-                                    else:
-                                        # On command failure, exit the follow-up loop
+                                            await audio_manager.wait_for_audio_completion()
+                                            break
+                                    except Exception as voice_error:
+                                        print(f"Error during follow-up voice generation: {voice_error}")
+                                        await display_manager.update_display('sleep')
                                         break
-                                
-                                # Check if message already exists before adding
-                                user_message = {"role": "user", "content": follow_up}
-                                if not any(msg["role"] == "user" and msg["content"] == follow_up for msg in chat_log[-2:]):
-                                    chat_log.append(user_message)
-                                
-                                await display_manager.update_display('thinking')
-                                formatted_response = await generate_response(follow_up)
-                                
-                                if formatted_response == "[CONTINUE]":
-                                    print("DEBUG - Detected control signal in follow-up, continuing")
-                                    continue
-                                
-                                try:
-                                    await display_manager.update_display('speaking')
-                                    await generate_voice(formatted_response)
                                     
-                                    if isinstance(formatted_response, str) and has_conversation_hook(formatted_response):
-                                        await audio_manager.wait_for_audio_completion()
-                                        await display_manager.update_display('listening')
-                                        
-                                        # Pass control to conversation loop handler
-                                        await handle_conversation_loop(formatted_response)
-                                        break  # Exit follow-up loop after conversation
-                                    else:
-                                        await audio_manager.wait_for_audio_completion()
-                                        break  # Exit follow-up loop if no conversation hooks
-                                except Exception as voice_error:
-                                    print(f"Error during follow-up voice generation: {voice_error}")
-                                    await display_manager.update_display('idle')
-                                    break
-                                
-                                # Check for next follow-up
-                                follow_up = await capture_speech(is_follow_up=True)
-                        else:
-                            # Only update display if command failed
-                            await display_manager.update_display('idle')
-                        
-                        # Continue to next iteration of the main loop
-                        continue
-                                
-                # Normal conversation flow
-                try:
-                    await display_manager.update_display('thinking')
-                    formatted_response = await generate_response(transcript)
+                                    follow_up = await capture_speech(is_follow_up=True)
+                            else:
+                                await display_manager.update_display('sleep')
+                            continue
                     
-                    if formatted_response == "[CONTINUE]":
-                        print("DEBUG - Detected control signal, skipping voice generation")
-                        continue
-                    
-                    # Print response before voice generation
-                    print(f"\n{Style.BRIGHT}Laura:{Style.NORMAL}")
-                    print(formatted_response)
-                    
-                    # Display and voice handling
+                    # Normal conversation flow
                     try:
+                        await display_manager.update_display('thinking')
+                        formatted_response = await generate_response(transcript)
+                        
+                        if formatted_response == "[CONTINUE]":
+                            print("DEBUG - Detected control signal, skipping voice generation")
+                            continue
+                        
+                        print(f"\n{Style.BRIGHT}Laura:{Style.NORMAL}")
+                        print(formatted_response)
+                        
                         await display_manager.update_display('speaking')
                         await generate_voice(formatted_response)
                         
                         if isinstance(formatted_response, str) and has_conversation_hook(formatted_response):
                             await audio_manager.wait_for_audio_completion()
                             await display_manager.update_display('listening')
-                            
-                            # Pass to conversation loop handler with formatted response
                             await handle_conversation_loop(formatted_response)
                         else:
                             await audio_manager.wait_for_audio_completion()
-                            await display_manager.update_display('idle')
+                            await display_manager.update_display('sleep')
                     except Exception as voice_error:
                         print(f"Error during voice generation: {voice_error}")
-                        await display_manager.update_display('idle')
+                        await display_manager.update_display('sleep')
                         continue
                         
-                except Exception as api_error:
-                    print(f"API Error: {api_error}")
-                    await display_manager.update_display('idle')
-
             else:
-                try:
-                    timeout_audio = get_random_audio('timeout')
-                    if timeout_audio:
-                        await audio_manager.play_audio(timeout_audio)
-                    else:
-                        # Use pre-formatted timeout message
-                        timeout_message = "No input detected. Feel free to ask for assistance when needed"
-                        await generate_voice(timeout_message)
-                    await audio_manager.wait_for_audio_completion()
-                except Exception as timeout_error:
-                    print(f"Error during timeout handling: {timeout_error}")
-                finally:
-                    await display_manager.update_display('idle')
-                
+                print(f"{Fore.RED}Warning: Unexpected state transition from {current_state}{Fore.WHITE}")
+                await display_manager.update_display('sleep')
+                await asyncio.sleep(0.1)
+                continue
+
         except Exception as e:
             print(f"Error in main loop: {e}")
             traceback.print_exc()
-            await display_manager.update_display('idle')
+            await display_manager.update_display('sleep')
+            await asyncio.sleep(0.1)
+            continue
             
 if __name__ == "__main__":
     try:
