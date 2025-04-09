@@ -3821,25 +3821,53 @@ async def main():
     
     try:
         # KEYBOARD INITIALIZATION PHASE
+        print(f"\n{Fore.CYAN}=== Keyboard Initialization Phase ==={Fore.WHITE}")
         print(f"{Fore.CYAN}Available input devices:{Fore.WHITE}")
-        keyboard_path = None  # Initialize keyboard_path
-        for device in list_devices():
-            device_obj = InputDevice(device)
-            print(f"Device: {device_obj.name} at {device_obj.path}")
-            if ("Pi 500" in device_obj.name and 
-                "Mouse" not in device_obj.name and 
-                "Consumer" not in device_obj.name and 
-                "System" not in device_obj.name):
-                keyboard_path = device_obj.path
-                print(f"{Fore.GREEN}Found Pi 500 Keyboard at {keyboard_path}{Fore.WHITE}")
-            device_obj.close()
+        keyboard_devices = []  # List to store keyboard devices
         
-        if keyboard_path:
-            keyboard_device = InputDevice(keyboard_path)
-            print(f"{Fore.GREEN}Successfully opened keyboard device{Fore.WHITE}")
+        for device in list_devices():
+            try:
+                device_obj = InputDevice(device)
+                print(f"Device: {device_obj.name} at {device_obj.path}")
+                
+                # Check if it's a Pi 500 Keyboard (main keyboard, not auxiliary interfaces)
+                if ("Pi 500" in device_obj.name and 
+                    "Mouse" not in device_obj.name and 
+                    "Consumer" not in device_obj.name and 
+                    "System" not in device_obj.name):
+                    # Verify device supports key events
+                    caps = device_obj.capabilities()
+                    if ecodes.EV_KEY in caps:
+                        keyboard_devices.append(device_obj)
+                        print(f"{Fore.GREEN}Found valid Pi 500 Keyboard at {device_obj.path}{Fore.WHITE}")
+                    else:
+                        print(f"{Fore.YELLOW}Device at {device_obj.path} doesn't support key events{Fore.WHITE}")
+                        device_obj.close()
+                else:
+                    device_obj.close()
+            except Exception as e:
+                print(f"{Fore.RED}Error checking device {device}: {e}{Fore.WHITE}")
+        
+        print(f"\nFound {len(keyboard_devices)} valid keyboard devices")
+        
+        # Use the first valid keyboard device
+        if keyboard_devices:
+            keyboard_device = keyboard_devices[0]
+            print(f"{Fore.GREEN}Using keyboard device: {keyboard_device.path}{Fore.WHITE}")
+            
+            # Debug: Print capabilities
+            print("\nKeyboard capabilities:")
+            caps = keyboard_device.capabilities(verbose=True)
+            if ecodes.EV_KEY in caps:
+                for key_info in caps[ecodes.EV_KEY]:
+                    print(f"Key: {key_info[0]}, Code: {key_info[1]}")
+            
+            # Keep other devices in case we need them
+            keyboard_device_alternates = keyboard_devices[1:]
         else:
-            print(f"{Fore.YELLOW}No Pi 500 Keyboard found{Fore.WHITE}")
+            print(f"{Fore.YELLOW}No valid Pi 500 Keyboard found{Fore.WHITE}")
             keyboard_device = None
+            keyboard_device_alternates = []
 
         # Debug: Print key mapping information
         if keyboard_device:
@@ -4014,57 +4042,86 @@ async def run_main_loop():
                 wake_detected = False
                 detected_model = None
                 
-                # Check for Pi 500 LEFTMETA key (Code 125)
+                # Check for Pi 500 LEFTMETA key (Code 125) first
                 try:
                     if keyboard_device:
+                        # Check main keyboard device
                         r, w, x = select.select([keyboard_device.fd], [], [], 0)
                         if r:
-                            for event in keyboard_device.read():
-                                if event.type == ecodes.EV_KEY and event.code == 125 and event.value == 1:
-                                    print(f"{Fore.GREEN}Pi 500 LEFTMETA key pressed - transitioning to listening{Fore.WHITE}")
-                                    await display_manager.update_display('listening')
-                                    transcript = await capture_speech(is_follow_up=False)
-                                    if transcript:
-                                        await display_manager.update_display('thinking')
-                                        break
-                                    else:
-                                        await display_manager.update_display('idle')
-                                        continue
+                            events = list(keyboard_device.read())
+                            for event in events:
+                                if event.type == ecodes.EV_KEY:
+                                    print(f"Key Event - Code: {event.code}, Value: {event.value}")
+                                    if event.code == 125 and event.value == 1:  # LEFTMETA press
+                                        print(f"{Fore.GREEN}Pi 500 LEFTMETA key pressed - direct to listening{Fore.WHITE}")
+                                        # Skip wake audio and go straight to listening
+                                        await display_manager.update_display('listening')
+                                        transcript = await capture_speech(is_follow_up=False)
+                                        if transcript:
+                                            print(f"{Fore.GREEN}Got transcript: {transcript}{Fore.WHITE}")
+                                            await display_manager.update_display('thinking')
+                                            wake_detected = True
+                                            detected_model = None  # Ensure no wake word audio plays
+                                            break
+                                        else:
+                                            print(f"{Fore.YELLOW}No transcript detected{Fore.WHITE}")
+                                            await display_manager.update_display('idle')
+                                            continue
+                        
+                        # Check alternate keyboard devices if available
+                        for alt_device in keyboard_device_alternates:
+                            r, w, x = select.select([alt_device.fd], [], [], 0)
+                            if r:
+                                events = list(alt_device.read())
+                                for event in events:
+                                    if event.type == ecodes.EV_KEY:
+                                        print(f"Alt Key Event - Code: {event.code}, Value: {event.value}")
+                                        if event.code == 125 and event.value == 1:  # LEFTMETA press
+                                            print(f"{Fore.GREEN}Pi 500 LEFTMETA key pressed (alt device) - direct to listening{Fore.WHITE}")
+                                            await display_manager.update_display('listening')
+                                            transcript = await capture_speech(is_follow_up=False)
+                                            if transcript:
+                                                print(f"{Fore.GREEN}Got transcript: {transcript}{Fore.WHITE}")
+                                                await display_manager.update_display('thinking')
+                                                wake_detected = True
+                                                detected_model = None
+                                                break
+                                            else:
+                                                print(f"{Fore.YELLOW}No transcript detected{Fore.WHITE}")
+                                                await display_manager.update_display('idle')
+                                                continue
+                    else:
+                        print(f"{Fore.RED}No keyboard device available{Fore.WHITE}")
                 except Exception as e:
-                    print(f"Keyboard check error: {e}")
-                
-                # If no key press, check wake word
-                if not wake_detected:
-                    detected_model = await wake_word()
-                    wake_detected = detected_model is not None
-                
-                if not wake_detected:
-                    await asyncio.sleep(0.1)
-                    continue
+                    print(f"{Fore.RED}Keyboard check error: {e}{Fore.WHITE}")
+                    traceback.print_exc()
                 
                 try:
-                    previous_state = display_manager.current_state
-                    
-                    # Start getting audio file while updating display
-                    wake_audio_task = asyncio.create_task(get_random_audio_async('wake', detected_model))
-                    
-                    if previous_state == 'sleep':
-                        await display_manager.update_display('wake')
-                    
-                    # Only wait for audio completion if actually playing something
-                    if audio_manager.is_playing:
+                    # Only play wake audio if wake word was used (not keyboard)
+                    if detected_model:  # Wake word triggered
+                        previous_state = display_manager.current_state
+                        
+                        # Start getting audio file while updating display
+                        wake_audio_task = asyncio.create_task(get_random_audio_async('wake', detected_model))
+                        
+                        if previous_state == 'sleep':
+                            await display_manager.update_display('wake')
+                        
+                        # Only wait for audio completion if actually playing something
+                        if audio_manager.is_playing:
+                            await audio_manager.wait_for_audio_completion()
+                        
+                        # Get wake audio result
+                        wake_audio = await wake_audio_task
+                        
+                        if wake_audio:
+                            await audio_manager.play_audio(wake_audio, interrupt_current=True)
+                        else:
+                            await generate_voice("I'm here")
+                        
                         await audio_manager.wait_for_audio_completion()
-                    
-                    # Get wake audio result
-                    wake_audio = await wake_audio_task
-                    
-                    if wake_audio:
-                        await audio_manager.play_audio(wake_audio, interrupt_current=True)
-                    else:
-                        await generate_voice("I'm here")
-                    
-                    await audio_manager.wait_for_audio_completion()
-                    await display_manager.update_display('listening')
+                        await display_manager.update_display('listening')
+                    # For keyboard wake, we're already in listening state
                     
                 except Exception as e:
                     print(f"Error during wake response: {e}")
