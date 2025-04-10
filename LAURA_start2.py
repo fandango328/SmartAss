@@ -2476,116 +2476,102 @@ async def generate_response(query):
 
 
 async def wake_word():
-    """Wake word detection with context-aware breaks"""
-    global last_interaction_check, last_interaction
+    """Non-blocking wake word detection with resource management"""
+    global last_interaction_check, last_interaction, wake_word_state
+
+    # Initialize static state if not exists
+    if not hasattr(wake_word, 'state'):
+        wake_word.state = {
+            'snowboy': None,
+            'pa': None,
+            'stream': None,
+            'model_paths': None,
+            'resource_path': Path("resources/common.res"),
+            'last_error_time': 0
+        }
+
     try:
-        snowboy = None
-        wake_pa = None
-        wake_audio_stream = None
-        
-        # Track time since last break
-        last_break_time = time.time()
-        BREAK_INTERVAL = 20  # Take break every 30 seconds
-        BREAK_DURATION = 1   # Reduced from 5 to 1 second
-        
-        try:
-            print(f"{Fore.YELLOW}Initializing wake word detector...{Fore.WHITE}")
+        # Initialize detector if needed
+        if not wake_word.state['snowboy']:
+            model_paths = [
+                Path("GD_Laura.pmdl"),
+                Path("Wake_up_Laura.pmdl"),
+                Path("Laura.pmdl")
+            ]
             
-            # Keep original resource path code exactly as it was
-            resource_path = Path("resources/common.res")
-            model_paths = [Path("GD_Laura.pmdl"), Path("Wake_up_Laura.pmdl"), Path("Laura.pmdl")]
-            
-            if not resource_path.exists():
-                print(f"ERROR: Resource file not found at {resource_path.absolute()}")
-                return None
-                
-            for model_path in model_paths:
-                if not model_path.exists():
-                    print(f"ERROR: Model file not found at {model_path.absolute()}")
+            # Validate paths
+            for path in [wake_word.state['resource_path']] + model_paths:
+                if not path.exists():
+                    print(f"ERROR: File not found at {path.absolute()}")
                     return None
-            
+
             try:
-                snowboy = snowboydetect.SnowboyDetect(
-                    resource_filename=str(resource_path.absolute()).encode(),
+                wake_word.state['snowboy'] = snowboydetect.SnowboyDetect(
+                    resource_filename=str(wake_word.state['resource_path'].absolute()).encode(),
                     model_str=",".join(str(p.absolute()) for p in model_paths).encode()
                 )
-                if not snowboy:
-                    print("Error: Failed to initialize SnowboyDetect")
-                    return None
+                wake_word.state['snowboy'].SetSensitivity(b"0.5,0.5,0.45")
+                wake_word.state['model_paths'] = model_paths
+
+                # Initialize audio if needed
+                if not wake_word.state['pa']:
+                    wake_word.state['pa'] = pyaudio.PyAudio()
+                    wake_word.state['stream'] = wake_word.state['pa'].open(
+                        rate=16000,
+                        channels=1,
+                        format=pyaudio.paInt16,
+                        input=True,
+                        frames_per_buffer=2048,
+                        stream_callback=None
+                    )
+
             except Exception as e:
-                print(f"Error initializing Snowboy: {e}")
-                return None
-            
-            snowboy.SetSensitivity(b"0.5,0.5,0.45")
-            
-            wake_pa = pyaudio.PyAudio()
-            wake_audio_stream = wake_pa.open(
-                rate=16000,
-                channels=1,
-                format=pyaudio.paInt16,
-                input=True,
-                frames_per_buffer=2048
-            )
-            
-            while True:
                 current_time = time.time()
-                
-                # MODIFIED: Context-aware break logic
-                now = datetime.now()
-                time_since_interaction = (now - last_interaction).total_seconds()
-                
-                # Only take breaks when system is idle and not during active interactions
-                if (current_time - last_break_time >= BREAK_INTERVAL and 
-                    time_since_interaction > 10 and  # Only break if no interaction in last 10 seconds
-                    display_manager.current_state in ['idle', 'sleep']):  # Only break in idle states
-                    
-                    last_break_time = current_time
-                    
-                    # Shorter break duration
-                    wake_audio_stream.stop_stream()
-                    await asyncio.sleep(BREAK_DURATION)
-                    wake_audio_stream.start_stream()
-                    continue
-                
-                data = wake_audio_stream.read(2048, exception_on_overflow=False)
-                if len(data) == 0:
-                    print("Warning: Empty audio frame received")
-                    continue
-                
-                result = snowboy.RunDetection(data)
-                
-                if result > 0:
-                    print(f"{Fore.GREEN}Wake word detected! (Model {result}){Fore.WHITE}")
-                    last_interaction = datetime.now()
-                    last_interaction_check = datetime.now()
-                    
-                    # Return the model info instead of handling audio
-                    model_name = None
-                    if result <= len(model_paths):
-                        model_name = model_paths[result-1].name
-                    
-                    return model_name  # Return just the model name
-                
-                if random.random() < 0.01:
-                    await asyncio.sleep(0)
-                    
-                    now = datetime.now()
-                    if (now - last_interaction_check).total_seconds() > CONVERSATION_END_SECONDS:
-                        last_interaction_check = now
-                        if display_manager.current_state != 'sleep':
-                            await display_manager.update_display('sleep')
-                            
-        finally:
-            if wake_audio_stream:
-                wake_audio_stream.stop_stream()
-                wake_audio_stream.close()
-            if wake_pa:
-                wake_pa.terminate()
-                
+                if current_time - wake_word.state['last_error_time'] > 300:  # Log every 5 minutes
+                    print(f"Error initializing wake word detection: {e}")
+                    wake_word.state['last_error_time'] = current_time
+                return None
+
+        # Non-blocking read with error handling
+        try:
+            if wake_word.state['stream'].is_active():
+                data = wake_word.state['stream'].read(2048, exception_on_overflow=False)
+                if len(data) > 0:
+                    result = wake_word.state['snowboy'].RunDetection(data)
+                    if result > 0:
+                        print(f"{Fore.GREEN}Wake word detected! (Model {result}){Fore.WHITE}")
+                        last_interaction = datetime.now()
+                        last_interaction_check = datetime.now()
+                        
+                        model_name = None
+                        if result <= len(wake_word.state['model_paths']):
+                            model_name = wake_word.state['model_paths'][result-1].name
+                        return model_name
+
+        except (IOError, BlockingIOError) as e:
+            # Handle stream errors by resetting
+            print(f"Audio stream error: {e}")
+            await cleanup_wake_word()
+            return None
+
+        # Quick state check without blocking
+        now = datetime.now()
+        if (now - last_interaction_check).total_seconds() > CONVERSATION_END_SECONDS:
+            last_interaction_check = now
+            if display_manager.current_state != 'sleep':
+                await display_manager.update_display('sleep')
+
+        # Allow other tasks to run
+        await asyncio.sleep(0.01)
+        return None
+
     except Exception as e:
-        print(f"Error in wake word detection: {e}")
-        traceback.print_exc()
-        return None  # Changed from False to None to be consistent with return type
+        current_time = time.time()
+        if current_time - wake_word.state['last_error_time'] > 300:
+            print(f"Error in wake word detection: {e}")
+            traceback.print_exc()
+            wake_word.state['last_error_time'] = current_time
+        return None
 
 
 
@@ -3746,6 +3732,20 @@ def get_random_audio(category, context=None):
         print(f"Error in get_random_audio: {str(e)}")
         return None
 
+async def cleanup_wake_word():
+    """Clean up wake word detection resources"""
+    if hasattr(wake_word, 'state'):
+        try:
+            if wake_word.state['stream']:
+                wake_word.state['stream'].stop_stream()
+                wake_word.state['stream'].close()
+                wake_word.state['stream'] = None
+            if wake_word.state['pa']:
+                wake_word.state['pa'].terminate()
+                wake_word.state['pa'] = None
+            wake_word.state['snowboy'] = None
+        except Exception as e:
+            print(f"Error during wake word cleanup: {e}")
 
 def sanitize_tool_interactions(chat_history):
     """
@@ -4122,66 +4122,33 @@ async def run_main_loop():
             
             # Sleep state - only check for wake events
             if current_state == 'sleep':
-                wake_detected = False
-                detected_model = None
-                
-                # Diagnostic logging - every 100 iterations
-                if iteration_count % 100 == 0:
-                    if keyboard_device:
-                        print(f"\nKeyboard Diagnostic:")
-                        print(f"Device Path: {keyboard_device.path}")
-                        print(f"File Descriptor: {keyboard_device.fd}")
-                        print(f"Device Name: {keyboard_device.name}")
-                        try:
-                            # Test if device is still readable
-                            select.select([keyboard_device.fd], [], [], 0)
-                            print("Device Status: Readable")
-                        except Exception as e:
-                            print(f"Device Status: Error - {e}")
-                                            
-                # Check for keyboard wake
+                # Quick non-blocking keyboard check
                 if keyboard_device:
                     try:
-                        r, w, x = select.select([keyboard_device.fd], [], [], 0.1)
+                        r, w, x = select.select([keyboard_device.fd], [], [], 0)
                         if r:
-                            events = keyboard_device.read()
+                            events = read_keyboard_events(keyboard_device)
                             for event in events:
-                                if event.type == ecodes.EV_KEY:
-                                    key_name = "UNKNOWN"
-                                    try:
-                                        key_name = ecodes.KEY[event.code]
-                                        if isinstance(key_name, tuple):
-                                            key_name = key_name[0]
-                                    except:
-                                        pass
-                                    
-                                    state = "PRESSED" if event.value == 1 else "RELEASED" if event.value == 0 else "REPEATED"
-                                    print(f"Key: {key_name} (Code: {event.code}) - {state}")
-                                    
-                                    if event.code == 125 and event.value == 1:  # LEFTMETA key pressed
-                                        print(f"{Fore.GREEN}LEFTMETA key detected - activating{Fore.WHITE}")
-                                        wake_detected = True
-                                        detected_model = None
-                                        break
-                    except IOError:
-                        # Handle device read errors silently
+                                if event.type == ecodes.EV_KEY and event.code == 125 and event.value == 1:
+                                    print(f"{Fore.GREEN}LEFTMETA key detected - activating{Fore.WHITE}")
+                                    wake_detected = True
+                                    break
+                    except (IOError, BlockingIOError):
                         pass
                     except Exception as e:
                         print(f"Keyboard check error: {e}")
-                        await asyncio.sleep(0.01)
-                        continue
-                
-                # If no keyboard wake, check for wake word
+
+                # Quick wake word check if no keyboard wake
                 if not wake_detected:
                     detected_model = await wake_word()
                     if detected_model:
                         wake_detected = True
-                
-                # If no wake event detected, continue sleeping
+
+                # If no wake event detected, quick sleep and continue
                 if not wake_detected:
-                    await asyncio.sleep(0.1)
+                    await asyncio.sleep(0.01)
                     continue
-                
+
                 # Handle wake event
                 if wake_detected:
                     # Only play wake audio if wake word was used (not keyboard)
@@ -4192,13 +4159,26 @@ async def run_main_loop():
                             await audio_manager.play_audio(wake_audio)
                             await audio_manager.wait_for_audio_completion()
                     
-                    # Transition to listening state
+                    # Transition to listening state and pause wake word detection
                     await display_manager.update_display('listening')
+                    
+                    # Ensure we're not detecting wake words during speech capture
+                    if hasattr(wake_word, 'state') and wake_word.state.get('stream'):
+                        wake_word.state['stream'].stop_stream()
+                    
                     transcript = await capture_speech(is_follow_up=False)
+                    
+                    # Resume wake word detection after speech capture
+                    if hasattr(wake_word, 'state') and wake_word.state.get('stream'):
+                        wake_word.state['stream'].start_stream()
                     
                     if not transcript:
                         print(f"No input detected. Returning to sleep state.")
                         await display_manager.update_display('sleep')
+                        # Ensure wake detection is ready before continuing
+                        if hasattr(wake_word, 'state') and wake_word.state.get('stream'):
+                            wake_word.state['stream'].start_stream()
+                            await asyncio.sleep(0.1)  # Small buffer to prevent immediate detection
                         continue
                     
                     # Process the transcript
