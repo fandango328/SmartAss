@@ -4162,23 +4162,24 @@ async def run_main_loop():
                     # Transition to listening state and pause wake word detection
                     await display_manager.update_display('listening')
                     
-                    # Ensure we're not detecting wake words during speech capture
+                    # Properly manage wake word detection state
+                    wake_word_active = False
                     if hasattr(wake_word, 'state') and wake_word.state.get('stream'):
                         wake_word.state['stream'].stop_stream()
+                        wake_word_active = True
                     
-                    transcript = await capture_speech(is_follow_up=False)
-                    
-                    # Resume wake word detection after speech capture
-                    if hasattr(wake_word, 'state') and wake_word.state.get('stream'):
-                        wake_word.state['stream'].start_stream()
+                    try:
+                        transcript = await capture_speech(is_follow_up=False)
+                    finally:
+                        # Always restore wake word detection regardless of transcript result
+                        if wake_word_active:
+                            await asyncio.sleep(0.1)  # Small buffer to prevent immediate re-trigger
+                            wake_word.state['stream'].start_stream()
                     
                     if not transcript:
                         print(f"No input detected. Returning to sleep state.")
                         await display_manager.update_display('sleep')
-                        # Ensure wake detection is ready before continuing
-                        if hasattr(wake_word, 'state') and wake_word.state.get('stream'):
-                            wake_word.state['stream'].start_stream()
-                            await asyncio.sleep(0.1)  # Small buffer to prevent immediate detection
+                        await asyncio.sleep(0.1)  # Small buffer before next iteration
                         continue
                     
                     # Process the transcript
