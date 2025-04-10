@@ -4103,7 +4103,8 @@ async def run_main_loop():
                     document_manager=document_manager,
                     token_tracker=token_tracker
                 )
-                print("SystemManager initialized successfully")  #line 4100
+                print("SystemManager initialized successfully")
+                print(f"{Fore.MAGENTA}Listening for wake word or press Raspberry button to begin...{Fore.WHITE}")
             except Exception as e:
                 print(f"Error initializing SystemManager: {e}")
                 print("SystemManager initialization failed")
@@ -4145,7 +4146,7 @@ async def run_main_loop():
 
                 # If no wake event detected, quick sleep and continue
                 if not wake_detected:
-                    await asyncio.sleep(0.01)
+                    await asyncio.sleep(0.15)
                     continue
 
                 # Handle wake event
@@ -4242,41 +4243,55 @@ async def run_main_loop():
                     
                     # Normal conversation flow
                     try:
+                        # Allow any previous state changes to complete
+                        await asyncio.sleep(0.1)
                         await display_manager.update_display('thinking')
                         formatted_response = await generate_response(transcript)
                         
                         if formatted_response == "[CONTINUE]":
                             print("DEBUG - Detected control signal, skipping voice generation")
                             continue
-                                               
+                        
+                        # Ensure clean state transition
+                        await asyncio.sleep(0.1)
                         await display_manager.update_display('speaking')
-                        await generate_voice(formatted_response) #line 4250
+                        await generate_voice(formatted_response)
                         
                         if isinstance(formatted_response, str) and has_conversation_hook(formatted_response):
+                            # Ensure audio completes before state change
                             await audio_manager.wait_for_audio_completion()
+                            await asyncio.sleep(0.1)  # Buffer for state transition
                             await display_manager.update_display('listening')
                             await handle_conversation_loop(formatted_response)
                         else:
                             await audio_manager.wait_for_audio_completion()
                             now = datetime.now()
-                            if (now - last_interaction).total_seconds() > CONVERSATION_END_SECONDS:
-                                await display_manager.update_display('sleep')
-                            else:
-                                await display_manager.update_display('idle')
+                            
+                            # Coordinated state transition with buffer
+                            await asyncio.sleep(0.1)
+                            next_state = 'sleep' if (now - last_interaction).total_seconds() > CONVERSATION_END_SECONDS else 'idle'
+                            await display_manager.update_display(next_state)
+                            
                     except Exception as voice_error:
                         print(f"Error during voice generation: {voice_error}")
+                        await asyncio.sleep(0.1)  # Buffer before error state transition
                         await display_manager.update_display('sleep')
                         continue
                         
             else:
-                print(f"Warning: Unexpected state transition from {current_state}")
-                now = datetime.now()
-                if (now - last_interaction).total_seconds() > CONVERSATION_END_SECONDS:
-                    await display_manager.update_display('sleep')
+                # If we're in idle state, just wait for timeout
+                if current_state == 'idle':
+                    now = datetime.now()
+                    if (now - last_interaction).total_seconds() > CONVERSATION_END_SECONDS:
+                        await display_manager.update_display('sleep')
+                    await asyncio.sleep(0.1)
+                    continue
                 else:
-                    await display_manager.update_display('idle')
-                await asyncio.sleep(0.1)
-                continue
+                    # Only log unexpected states
+                    print(f"Warning: Unexpected state transition from {current_state}")
+                    await display_manager.update_display('sleep')
+                    await asyncio.sleep(0.1)
+                    continue
 
         except Exception as e:
             print(f"Error in main loop: {e}")
