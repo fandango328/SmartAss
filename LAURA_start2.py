@@ -3857,35 +3857,32 @@ async def main():
     
     try:
         # KEYBOARD INITIALIZATION PHASE
-        print(f"\n{Fore.CYAN}=== Keyboard Initialization Phase ==={Fore.WHITE}")
-        print(f"{Fore.CYAN}Available input devices:{Fore.WHITE}")
+        #print(f"\n{Fore.CYAN}=== Keyboard Initialization Phase ==={Fore.WHITE}")
+        #print(f"{Fore.CYAN}Available input devices:{Fore.WHITE}")
         keyboard_devices = []  # List to store keyboard devices
-        
-        # Enhanced keyboard initialization with better error handling
-        keyboard_devices = []  # List to store keyboard devices
-        print(f"\nAvailable input devices:")
+        #print(f"\nAvailable input devices:")
 
         for path in list_devices():
             try:
                 device = InputDevice(path)
-                print(f"Device: {device.name} at {path}")
+                #print(f"Device: {device.name} at {path}")
                 
                 # Check if we can read from this device
                 try:
                     select.select([device.fd], [], [], 0)
-                    print(f"  - Can read from device: YES")
+                    #print(f"  - Can read from device: YES")
                     
                     # Check for Pi 500 keyboard specifically
                     if "Pi 500" in device.name and "Keyboard" in device.name and "Mouse" not in device.name:
-                        print(f"{Fore.GREEN}Found Pi 500 Keyboard!{Fore.WHITE}")
+                        #print(f"{Fore.GREEN}Found Pi 500 Keyboard!{Fore.WHITE}")
                         # Try to get exclusive access
                         try:
                             device.grab()
-                            print(f"  - Can grab device: YES")
+                            #print(f"  - Can grab device: YES")
                             device.ungrab()  # Release the grab immediately
                             keyboard_devices.append(device)
                         except Exception as e:
-                            print(f"  - Can grab device: NO - {e}")
+                            #print(f"  - Can grab device: NO - {e}")
                             device.close()
                     else:
                         device.close()
@@ -3897,18 +3894,18 @@ async def main():
             except Exception as e:
                 print(f"Error with device {path}: {e}")
         
-        print(f"\nFound {len(keyboard_devices)} valid keyboard devices")
+        #print(f"\nFound {len(keyboard_devices)} valid keyboard devices")
 
             # Diagnostic: Reset and flush keyboard buffer
         if keyboard_device:
             try:
                 # Try to clear any pending events
-                print(f"{Fore.CYAN}Flushing keyboard event buffer...{Fore.WHITE}")
+                #print(f"{Fore.CYAN}Flushing keyboard event buffer...{Fore.WHITE}")
                 # Read with very small timeout to clear buffer
                 r, w, x = select.select([keyboard_device.fd], [], [], 0.01)
                 if r:
                     keyboard_device.read()
-                print(f"{Fore.GREEN}Keyboard ready for input{Fore.WHITE}")
+                #print(f"{Fore.GREEN}Keyboard ready for input{Fore.WHITE}")
             except Exception as e:
                 print(f"{Fore.YELLOW}Keyboard initialization note: {str(e)}{Fore.WHITE}")
         
@@ -4082,7 +4079,7 @@ async def main():
 
         print(f"{Fore.GREEN}VOSK resources released{Fore.WHITE}")
 
-async def run_main_loop():
+async def run_main_loop():   #line 4082
     """
     Core interaction loop managing LAURA's conversation flow.
     """
@@ -4100,7 +4097,7 @@ async def run_main_loop():
                     document_manager=document_manager,
                     token_tracker=token_tracker
                 )
-                print("SystemManager initialized successfully")
+                print("SystemManager initialized successfully")  #line 4100
             except Exception as e:
                 print(f"Error initializing SystemManager: {e}")
                 print("SystemManager initialization failed")
@@ -4110,11 +4107,7 @@ async def run_main_loop():
         # Start of iteration - clear variables
         wake_detected = False
         detected_model = None
-        
-        # Iteration debug - every 100 iterations
-        if iteration_count % 100 == 0:
-            print(f"{Fore.BLUE}Waiting for wake input (LEFTMETA key or wake word)...{Fore.WHITE}")
-            
+                   
         iteration_count += 1
 
         try:
@@ -4154,7 +4147,7 @@ async def run_main_loop():
                     # Only play wake audio if wake word was used (not keyboard)
                     if detected_model:
                         wake_audio = get_random_audio('wake', detected_model)
-                        await display_manager.update_display('wake')
+                        await display_manager.update_display('wake') #line 4150
                         if wake_audio:
                             await audio_manager.play_audio(wake_audio)
                             await audio_manager.wait_for_audio_completion()
@@ -4204,7 +4197,7 @@ async def run_main_loop():
                                         if success:
                                             await display_manager.update_display('listening')
                                             follow_up = await capture_speech(is_follow_up=True)
-                                            continue
+                                            continue  #line 4200
                                         else:
                                             break
                                     
@@ -4254,7 +4247,7 @@ async def run_main_loop():
                         print(formatted_response)
                         
                         await display_manager.update_display('speaking')
-                        await generate_voice(formatted_response)
+                        await generate_voice(formatted_response) #line 4250
                         
                         if isinstance(formatted_response, str) and has_conversation_hook(formatted_response):
                             await audio_manager.wait_for_audio_completion()
@@ -4279,7 +4272,7 @@ async def run_main_loop():
             traceback.print_exc()
             await display_manager.update_display('sleep')
             await asyncio.sleep(0.1)
-            continue
+            continue  #line 4275
             
 if __name__ == "__main__":
     try:
