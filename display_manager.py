@@ -18,6 +18,7 @@ class DisplayManager:
         self.last_image_change = None
         self.state_entry_time = None
         self.initialized = False
+        self.state_lock = asyncio.Lock()
         self.moods = [
             "caring", "casual", "cheerful", "concerned", "confused", "curious",
             "disappointed", "embarrassed", "sassy", "surprised", "suspicious", "thoughtful"
@@ -82,89 +83,74 @@ class DisplayManager:
                         ]
 
     async def update_display(self, state, mood=None):
-        # Wait for initialization
-        while not self.initialized:
-            await asyncio.sleep(0.1)
-            
-        if mood is None:
-            mood = self.current_mood
+        async with self.state_lock:
+            if mood is None:
+                mood = self.current_mood
 
-        #print(f"\nUpdating display:")
-        #print(f"Current state: {self.current_state} -> {state}")
-        #print(f"Current mood: {self.current_mood} -> {mood}")
-        
-        try:
-            # Update state tracking variables
-            self.last_state = self.current_state
-            self.current_state = state
-            self.current_mood = mood
-            
-            # Handle image selection
-            if state == 'speaking':
-                if mood not in self.image_cache[state]:
-                    print(f"Warning: Invalid mood '{mood}', using casual mood")
-                    mood = 'casual'
-                self.current_image = random.choice(self.image_cache[state][mood])
-            elif state in self.image_cache:
-                self.current_image = random.choice(self.image_cache[state])
-            else:
-                print(f"Error: Invalid state '{state}'")
-                return
+            if state == self.current_state and mood == self.current_mood:
+                return  # No change needed
                 
-            # Display the image
-            self.screen.blit(self.current_image, (0, 0))
-            pygame.display.flip()
-            
-            # Only update rotation timer for idle/sleep states
-            if state in ['idle', 'sleep']:
-                self.last_image_change = time.time()
+            try:
+                self.last_state = self.current_state
+                self.current_state = state
+                self.current_mood = mood
+                
+                if state == 'speaking':
+                    if mood not in self.image_cache[state]:
+                        print(f"Warning: Invalid mood '{mood}', using casual mood")
+                        mood = 'casual'
+                    self.current_image = random.choice(self.image_cache[state][mood])
+                elif state in self.image_cache:
+                    self.current_image = random.choice(self.image_cache[state])
+                else:
+                    print(f"Error: Invalid state '{state}'")
+                    return
+                    
+                self.screen.blit(self.current_image, (0, 0))
+                pygame.display.flip()
+                
                 self.state_entry_time = time.time()
-                
-            print(f"Display updated - State: {self.current_state}, Mood: {self.current_mood}")
-                
-        except Exception as e:
-            print(f"Error updating display: {e}")
+                if state in ['idle', 'sleep']:
+                    self.last_image_change = self.state_entry_time
+                    
+            except Exception as e:
+                print(f"Error updating display: {e}")
 
     async def rotate_background(self):
         while not self.initialized:
             await asyncio.sleep(0.1)
-        #print("Rotation background task started")
-    
+            
         while True:
             try:
                 current_time = time.time()
-                #print(f"\nRotation check at: {time.strftime('%H:%M:%S')}")
-            
-                if self.current_state in ['idle', 'sleep']:
-                    time_diff = current_time - self.last_image_change
-                    #print(f"Current state: {self.current_state}")
-                    #print(f"Time since last change: {time_diff:.2f} seconds")
                 
+                # Only proceed with rotation if in stable idle/sleep state
+                if self.current_state in ['idle', 'sleep']:
+                    # Check if we're in a state transition
+                    if current_time - self.state_entry_time < 1.0:
+                        await asyncio.sleep(0.1)
+                        continue
+                        
+                    time_diff = current_time - self.last_image_change
                     if time_diff >= 15:
                         available_images = self.image_cache[self.current_state]
                         if len(available_images) > 1:
-                            current_options = [img for img in available_images if img != self.current_image]
-                            if current_options:
-                                new_image = random.choice(current_options)
-                                self.current_image = new_image
-                                self.screen.blit(self.current_image, (0, 0))
-                                pygame.display.flip()
-                                self.last_image_change = current_time
-                                #print(f"Rotated image at {time.strftime('%H:%M:%S')}")
-                    #else:
-                        #print(f"Not time to rotate yet. Waiting {15 - time_diff:.2f} more seconds")
-                #else:
-                    #print(f"Not in rotating state. Current state: {self.current_state}")
+                            # Lock the rotation process
+                            async with self.state_lock:
+                                current_options = [img for img in available_images 
+                                                if img != self.current_image]
+                                if current_options:
+                                    new_image = random.choice(current_options)
+                                    self.current_image = new_image
+                                    self.screen.blit(self.current_image, (0, 0))
+                                    pygame.display.flip()
+                                    self.last_image_change = current_time
+                
+                await asyncio.sleep(0.5)
                 
             except Exception as e:
                 print(f"Error in rotate_background: {e}")
-                traceback.print_exc()
-        
-            # Instead of a long sleep, do shorter sleeps
-            for _ in range(15):  # 15 one-second sleeps
                 await asyncio.sleep(1)
-                # Add a check to see if we're still running
-                print(".", end="", flush=True)
             
     def cleanup(self):
         pygame.quit()
