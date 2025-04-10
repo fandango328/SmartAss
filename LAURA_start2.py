@@ -494,12 +494,14 @@ try:
                 
                 with open("token.json", "w") as token:
                     token.write(creds.to_json())
-                
-                # Close any remaining Chromium windows from auth
-                try:
-                    os.system("pkill chromium")
-                except Exception as browser_error:
-                    print(f"Note: Could not close browser window: {browser_error}")
+                    
+                    
+                # Quick cleanup for stray browser windows after authentication
+                # Uncomment if browser windows aren't closing properly during auth
+                #try:
+                #    os.system("pkill chromium")
+                #except Exception as browser_error:
+                #    print(f"Note: Could not close browser window: {browser_error}")
                     
             except Exception as e:
                 print(f"Error during Google authentication: {e}")
@@ -2810,8 +2812,12 @@ async def capture_speech(is_follow_up=False):
                     # Reduced CPU usage
                     await asyncio.sleep(0.01)
 
-                # Check if we actually detected voice
+                # Update display state based on context
                 if not voice_detected:
+                    if is_follow_up:
+                        await display_manager.update_display('idle')
+                    else:
+                        await display_manager.update_display('sleep')
                     return None
 
                 # Get final transcription
