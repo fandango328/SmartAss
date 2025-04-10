@@ -2680,6 +2680,19 @@ async def handle_conversation_loop(initial_response):
             await display_manager.update_display('idle')
             break
 
+async def check_manual_stop():
+    if keyboard_device:
+        try:
+            r, w, x = select.select([keyboard_device.fd], [], [], 0)
+            if r:
+                events = read_keyboard_events(keyboard_device)
+                for event in events:
+                    if event.type == ecodes.EV_KEY and event.code == 125 and event.value == 1:
+                        print(f"{Fore.GREEN}Manual recording termination via LEFTMETA{Fore.WHITE}")
+                        return True
+        except Exception as e:
+            print(f"Keyboard check error in recording: {e}")
+    return False
 
 async def capture_speech(is_follow_up=False):
     """
@@ -2731,7 +2744,10 @@ async def capture_speech(is_follow_up=False):
                 silence_duration = VAD_SETTINGS["silence_duration"]
                 min_speech_duration = VAD_SETTINGS["min_speech_duration"]
                 speech_buffer_time = VAD_SETTINGS["speech_buffer_time"]
-
+                
+                # Manual stop tracking
+                manual_stop = False
+                
                 # Calculate frames needed for silence duration
                 max_silence_frames = int(silence_duration * 16000 / audio_manager.frame_length)
 
@@ -2755,6 +2771,19 @@ async def capture_speech(is_follow_up=False):
                     if not pcm_bytes:
                         await asyncio.sleep(0.01)
                         continue
+
+                    # Check for manual stop if voice was detected
+                    if voice_detected:
+                        manual_stop = await check_manual_stop()
+                        if manual_stop:
+                            speech_duration = time.time() - speech_start_time
+                            if speech_duration > min_speech_duration:
+                                print(f"{Fore.MAGENTA}Manual stop triggered after {speech_duration:.1f}s{Fore.WHITE}")
+                                await asyncio.sleep(speech_buffer_time)
+                                break
+                            else:
+                                print(f"{Fore.YELLOW}Recording too short for manual stop ({speech_duration:.1f}s < {min_speech_duration}s){Fore.WHITE}")
+                                manual_stop = False
 
                     # Process with Vosk
                     is_end, is_speech, partial_text = transcriber.process_frame(pcm_bytes)
