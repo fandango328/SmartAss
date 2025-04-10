@@ -4079,7 +4079,7 @@ async def main():
 
         print(f"{Fore.GREEN}VOSK resources released{Fore.WHITE}")
 
-async def run_main_loop():   #line 4082
+async def run_main_loop(): 
     """
     Core interaction loop managing LAURA's conversation flow.
     """
@@ -4242,10 +4242,7 @@ async def run_main_loop():   #line 4082
                         if formatted_response == "[CONTINUE]":
                             print("DEBUG - Detected control signal, skipping voice generation")
                             continue
-                        
-                        print(f"\n{Style.BRIGHT}Laura:{Style.NORMAL}")
-                        print(formatted_response)
-                        
+                                               
                         await display_manager.update_display('speaking')
                         await generate_voice(formatted_response) #line 4250
                         
@@ -4255,7 +4252,11 @@ async def run_main_loop():   #line 4082
                             await handle_conversation_loop(formatted_response)
                         else:
                             await audio_manager.wait_for_audio_completion()
-                            await display_manager.update_display('sleep')
+                            now = datetime.now()
+                            if (now - last_interaction).total_seconds() > CONVERSATION_END_SECONDS:
+                                await display_manager.update_display('sleep')
+                            else:
+                                await display_manager.update_display('idle')
                     except Exception as voice_error:
                         print(f"Error during voice generation: {voice_error}")
                         await display_manager.update_display('sleep')
@@ -4263,16 +4264,24 @@ async def run_main_loop():   #line 4082
                         
             else:
                 print(f"Warning: Unexpected state transition from {current_state}")
-                await display_manager.update_display('sleep')
+                now = datetime.now()
+                if (now - last_interaction).total_seconds() > CONVERSATION_END_SECONDS:
+                    await display_manager.update_display('sleep')
+                else:
+                    await display_manager.update_display('idle')
                 await asyncio.sleep(0.1)
                 continue
 
         except Exception as e:
             print(f"Error in main loop: {e}")
             traceback.print_exc()
-            await display_manager.update_display('sleep')
+            now = datetime.now()
+            if (now - last_interaction).total_seconds() > CONVERSATION_END_SECONDS:
+                await display_manager.update_display('sleep')
+            else:
+                await display_manager.update_display('idle')
             await asyncio.sleep(0.1)
-            continue  #line 4275
+            continue
             
 if __name__ == "__main__":
     try:
