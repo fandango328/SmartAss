@@ -464,12 +464,11 @@ system_manager_lock = asyncio.Lock()
 # =============================================================================
 # Google Integration Setup
 # =============================================================================
+creds = None  # Global declaration
 try:
     webbrowser.register('chromium', None, webbrowser.Chrome('/usr/bin/chromium'))
     
-    creds = None
     if USE_GOOGLE:
-        # Load or create credentials
         if os.path.exists("token.json"):
             try:
                 creds = Credentials.from_authorized_user_file("token.json", SCOPES)
@@ -477,50 +476,33 @@ try:
                 print(f"Error loading credentials: {e}")
                 if os.path.exists("token.json"):
                     os.remove("token.json")
-                creds = None
-
-        # Handle credential refresh or new authentication
+        
         if not creds or not creds.valid:
-            if creds and creds.expired and hasattr(creds, 'refresh_token') and creds.refresh_token:
-                try:
+            try:
+                if creds and creds.expired and creds.refresh_token:
                     creds.refresh(Request())
-                except Exception as refresh_error:
-                    print(f"Error refreshing token: {refresh_error}")
-                    if os.path.exists("token.json"):
-                        os.remove("token.json")
-                    creds = None
-
-            # If still no valid credentials, start new flow
-            if not creds:
-                try:
+                else:
                     flow = InstalledAppFlow.from_client_secrets_file(
-                        "credentials.json",
+                        "credentials.json", 
                         SCOPES
                     )
                     creds = flow.run_local_server(
                         port=8080,
                         host='localhost',
                         open_browser=True,
-                        browser_path='/usr/bin/chromium',
-                        access_type='offline'
+                        browser_path='/usr/bin/chromium'
                     )
-
-                    # Save the credentials
-                    if creds and hasattr(creds, 'refresh_token'):
-                        with open("token.json", "w") as token:
-                            token.write(creds.to_json())
-                    else:
-                        print("Warning: No refresh token received")
-                        
-                except Exception as auth_error:
-                    print(f"Error during authentication: {auth_error}")
-                    if os.path.exists("token.json"):
-                        os.remove("token.json")
-                    raise
-
+                
+                with open("token.json", "w") as token:
+                    token.write(creds.to_json())
+                    
+            except Exception as e:
+                print(f"Error during Google authentication: {e}")
+                if os.path.exists("token.json"):
+                    os.remove("token.json")
+                raise
 except Exception as e:
     print(f"Error setting up Google integration: {e}")
-    raise
 
 
 # =============================================================================
@@ -2438,9 +2420,9 @@ async def generate_response(query):
 
 async def wake_word():
     """Non-blocking wake word detection with resource management"""
-    global last_interaction_check, last_interaction, wake_word_state
+    global last_interaction_check, last_interaction
 
-    # Initialize static state if not exists
+    # Initialize detector only if needed
     if not hasattr(wake_word, 'state'):
         wake_word.state = {
             'snowboy': None,
@@ -2452,7 +2434,7 @@ async def wake_word():
         }
 
     try:
-        # Initialize detector if needed
+        # Initialize only if not already done
         if not wake_word.state['snowboy']:
             model_paths = [
                 Path("GD_Laura.pmdl"),
@@ -2466,72 +2448,51 @@ async def wake_word():
                     print(f"ERROR: File not found at {path.absolute()}")
                     return None
 
-            try:
-                wake_word.state['snowboy'] = snowboydetect.SnowboyDetect(
-                    resource_filename=str(wake_word.state['resource_path'].absolute()).encode(),
-                    model_str=",".join(str(p.absolute()) for p in model_paths).encode()
+            wake_word.state['snowboy'] = snowboydetect.SnowboyDetect(
+                resource_filename=str(wake_word.state['resource_path'].absolute()).encode(),
+                model_str=",".join(str(p.absolute()) for p in model_paths).encode()
+            )
+            wake_word.state['snowboy'].SetSensitivity(b"0.5,0.5,0.45")
+            wake_word.state['model_paths'] = model_paths
+
+            # Initialize audio only if needed
+            if not wake_word.state['pa']:
+                wake_word.state['pa'] = pyaudio.PyAudio()
+                wake_word.state['stream'] = wake_word.state['pa'].open(
+                    rate=16000,
+                    channels=1,
+                    format=pyaudio.paInt16,
+                    input=True,
+                    frames_per_buffer=2048,
+                    stream_callback=None
                 )
-                wake_word.state['snowboy'].SetSensitivity(b"0.5,0.5,0.45")
-                wake_word.state['model_paths'] = model_paths
 
-                # Initialize audio if needed
-                if not wake_word.state['pa']:
-                    wake_word.state['pa'] = pyaudio.PyAudio()
-                    wake_word.state['stream'] = wake_word.state['pa'].open(
-                        rate=16000,
-                        channels=1,
-                        format=pyaudio.paInt16,
-                        input=True,
-                        frames_per_buffer=2048,
-                        stream_callback=None
-                    )
-
-            except Exception as e:
-                current_time = time.time()
-                if current_time - wake_word.state['last_error_time'] > 300:  # Log every 5 minutes
-                    print(f"Error initializing wake word detection: {e}")
-                    wake_word.state['last_error_time'] = current_time
-                return None
-
-        # Non-blocking read with error handling
+        # Simple error handling for stream read
         try:
-            if wake_word.state['stream'].is_active():
-                data = wake_word.state['stream'].read(2048, exception_on_overflow=False)
-                if len(data) > 0:
-                    result = wake_word.state['snowboy'].RunDetection(data)
-                    if result > 0:
-                        print(f"{Fore.GREEN}Wake word detected! (Model {result}){Fore.WHITE}")
-                        last_interaction = datetime.now()
-                        last_interaction_check = datetime.now()
-                        
-                        model_name = None
-                        if result <= len(wake_word.state['model_paths']):
-                            model_name = wake_word.state['model_paths'][result-1].name
-                        return model_name
+            data = wake_word.state['stream'].read(2048, exception_on_overflow=False)
+            if len(data) > 0:
+                result = wake_word.state['snowboy'].RunDetection(data)
+                if result > 0:
+                    print(f"{Fore.GREEN}Wake word detected! (Model {result}){Fore.WHITE}")
+                    last_interaction = datetime.now()
+                    last_interaction_check = datetime.now()
+                    
+                    model_name = None
+                    if result <= len(wake_word.state['model_paths']):
+                        model_name = wake_word.state['model_paths'][result-1].name
+                    return model_name
 
         except (IOError, BlockingIOError) as e:
-            # Handle stream errors by resetting
+            # Only cleanup and reinitialize on actual errors
             print(f"Audio stream error: {e}")
             await cleanup_wake_word()
             return None
 
-        # Quick state check without blocking
-        now = datetime.now()
-        if (now - last_interaction_check).total_seconds() > CONVERSATION_END_SECONDS:
-            last_interaction_check = now
-            if display_manager.current_state != 'sleep':
-                await display_manager.update_display('sleep')
-
-        # Allow other tasks to run
         await asyncio.sleep(0.01)
         return None
 
     except Exception as e:
-        current_time = time.time()
-        if current_time - wake_word.state['last_error_time'] > 300:
-            print(f"Error in wake word detection: {e}")
-            traceback.print_exc()
-            wake_word.state['last_error_time'] = current_time
+        print(f"Error in wake word detection: {e}")
         return None
 
 
