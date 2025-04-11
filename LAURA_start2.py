@@ -469,6 +469,7 @@ try:
     
     creds = None
     if USE_GOOGLE:
+        # Load or create credentials
         if os.path.exists("token.json"):
             try:
                 creds = Credentials.from_authorized_user_file("token.json", SCOPES)
@@ -476,41 +477,51 @@ try:
                 print(f"Error loading credentials: {e}")
                 if os.path.exists("token.json"):
                     os.remove("token.json")
-        
+                creds = None
+
+        # Handle credential refresh or new authentication
         if not creds or not creds.valid:
-            try:
-                if creds and creds.expired and creds.refresh_token:
+            if creds and creds.expired and hasattr(creds, 'refresh_token') and creds.refresh_token:
+                try:
                     creds.refresh(Request())
-                else:
+                except Exception as refresh_error:
+                    print(f"Error refreshing token: {refresh_error}")
+                    if os.path.exists("token.json"):
+                        os.remove("token.json")
+                    creds = None
+
+            # If still no valid credentials, start new flow
+            if not creds:
+                try:
                     flow = InstalledAppFlow.from_client_secrets_file(
-                        "credentials.json", 
+                        "credentials.json",
                         SCOPES
                     )
                     creds = flow.run_local_server(
                         port=8080,
                         host='localhost',
                         open_browser=True,
-                        browser_path='/usr/bin/chromium'
+                        browser_path='/usr/bin/chromium',
+                        access_type='offline'
                     )
-                
-                with open("token.json", "w") as token:
-                    token.write(creds.to_json())
-                    
-                    
-                # Quick cleanup for stray browser windows after authentication
-                # Uncomment if browser windows aren't closing properly during auth
-                #try:
-                #    os.system("pkill chromium")
-                #except Exception as browser_error:
-                #    print(f"Note: Could not close browser window: {browser_error}")
-                    
-            except Exception as e:
-                print(f"Error during Google authentication: {e}")
-                if os.path.exists("token.json"):
-                    os.remove("token.json")
-                raise
+
+                    # Save the credentials
+                    if creds and hasattr(creds, 'refresh_token'):
+                        with open("token.json", "w") as token:
+                            token.write(creds.to_json())
+                    else:
+                        print("Warning: No refresh token received")
+                        
+                except Exception as auth_error:
+                    print(f"Error during authentication: {auth_error}")
+                    if os.path.exists("token.json"):
+                        os.remove("token.json")
+                    raise
+
 except Exception as e:
     print(f"Error setting up Google integration: {e}")
+    raise
+
 
 # =============================================================================
 # Core Component Initialization
@@ -3904,11 +3915,11 @@ async def main():
             print(f"{Fore.GREEN}Using keyboard without exclusive access to allow normal typing{Fore.WHITE}")
             
             # Debug: Print capabilities
-            print("\nKeyboard capabilities:")
-            caps = keyboard_device.capabilities(verbose=True)
-            if ecodes.EV_KEY in caps:
-                for key_info in caps[ecodes.EV_KEY]:
-                    print(f"Key: {key_info[0]}, Code: {key_info[1]}")
+            #print("\nKeyboard capabilities:")
+            #caps = keyboard_device.capabilities(verbose=True)
+            #if ecodes.EV_KEY in caps:
+                #for key_info in caps[ecodes.EV_KEY]:
+                    #print(f"Key: {key_info[0]}, Code: {key_info[1]}")
             
             # Keep other devices in case we need them
             keyboard_device_alternates = keyboard_devices[1:]
@@ -3918,12 +3929,12 @@ async def main():
             keyboard_device_alternates = []
 
         # Debug: Print key mapping information
-        if keyboard_device:
-            print(f"{Fore.CYAN}Keyboard capabilities:{Fore.WHITE}")
-            for event_type, event_codes in keyboard_device.capabilities(verbose=True).items():
-                if event_type[0] == 'EV_KEY':
-                    for code in event_codes:
-                        print(f"Key: {code[0]}, Code: {code[1]}")
+        #if keyboard_device:
+        #    print(f"{Fore.CYAN}Keyboard capabilities:{Fore.WHITE}")
+        #    for event_type, event_codes in keyboard_device.capabilities(verbose=True).items():
+        #        if event_type[0] == 'EV_KEY':
+        #            for code in event_codes:
+        #                print(f"Key: {code[0]}, Code: {code[1]}")
 
         # INITIALIZATION PHASE
         # Google services should already be initialized in global scope
