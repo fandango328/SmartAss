@@ -462,7 +462,7 @@ system_manager_lock = asyncio.Lock()
 
 
 # =============================================================================
-# Google Integration Setup
+# Google Integration Setup  - DO NOT FUCK WITH THIS AT ALL
 # =============================================================================
 creds = None  # Global declaration
 try:
@@ -472,37 +472,88 @@ try:
         if os.path.exists("token.json"):
             try:
                 creds = Credentials.from_authorized_user_file("token.json", SCOPES)
+                print("Loaded existing credentials from token.json")
             except Exception as e:
                 print(f"Error loading credentials: {e}")
                 if os.path.exists("token.json"):
                     os.remove("token.json")
+                creds = None
         
         if not creds or not creds.valid:
             try:
                 if creds and creds.expired and creds.refresh_token:
+                    print("Refreshing expired credentials")
                     creds.refresh(Request())
                 else:
+                    print("Initiating new OAuth2 flow")
+                    # Create a new InstalledAppFlow with custom OAuth2 session
+                    from google_auth_oauthlib.flow import InstalledAppFlow
+                    from requests_oauthlib import OAuth2Session
+
                     flow = InstalledAppFlow.from_client_secrets_file(
                         "credentials.json", 
-                        SCOPES
+                        scopes=SCOPES,
                     )
+                    
+                    # Configure the session with offline access
+                    session = OAuth2Session(
+                        client_id=flow.client_config['client_id'],
+                        scope=SCOPES,
+                        redirect_uri='http://localhost:8080/'
+                    )
+                    
+                    # Update flow's session with our configured one
+                    flow.oauth2session = session
+                    
+                    # Generate authorization URL with offline access
+                    auth_url, _ = flow.authorization_url(
+                        access_type='offline',
+                        include_granted_scopes='true',
+                        prompt='consent'  # Force consent screen
+                    )
+                    
+                    print("Opening browser for authentication...")
                     creds = flow.run_local_server(
-                        port=8080,
                         host='localhost',
-                        open_browser=True,
-                        browser_path='/usr/bin/chromium'
+                        port=8080,
+                        access_type='offline',
+                        prompt='consent',
+                        authorization_prompt_message="Please complete authentication in the opened browser window",
+                        success_message="Authentication completed successfully. You may close this window."
                     )
+                    
+                    print("\nDetailed Token Information:")
+                    print(f"Valid: {creds.valid}")
+                    print(f"Expired: {creds.expired}")
+                    print(f"Has refresh_token attribute: {hasattr(creds, 'refresh_token')}")
+                    if hasattr(creds, 'refresh_token'):
+                        print(f"Refresh token value present: {bool(creds.refresh_token)}")
+                        print(f"Token expiry: {creds.expiry}")
                 
-                with open("token.json", "w") as token:
-                    token.write(creds.to_json())
+                if creds and creds.valid:
+                    if not hasattr(creds, 'refresh_token') or not creds.refresh_token:
+                        print("\nWARNING: No refresh token received!")
+                        print("This might require re-authentication on next run.")
+                        print("Try revoking access at https://myaccount.google.com/permissions")
+                        print("Then delete token.json and run again.")
+                    else:
+                        print("\nSaving credentials with refresh token to token.json")
+                        with open("token.json", "w") as token:
+                            token.write(creds.to_json())
+                        print("Credentials saved successfully")
+                else:
+                    print("Warning: Invalid credentials state")
                     
             except Exception as e:
                 print(f"Error during Google authentication: {e}")
+                traceback.print_exc()
                 if os.path.exists("token.json"):
                     os.remove("token.json")
-                raise
+                creds = None
 except Exception as e:
     print(f"Error setting up Google integration: {e}")
+    traceback.print_exc()
+    USE_GOOGLE = False
 
 
 # =============================================================================
