@@ -539,6 +539,7 @@ last_interaction = datetime.now()
 last_interaction_check = datetime.now()
 initial_startup = True
 calendar_notified_events = set()
+notification_queue = asyncio.Queue()  # Queue for pending notifications during conversation
 
 # =============================================================================
 # Session Management
@@ -2561,35 +2562,10 @@ def has_conversation_hook(response):
 
 async def handle_conversation_loop(initial_response):
     """Handle ongoing conversation with calendar notification interrupts"""
-    global chat_log, pending_notifications
+    global chat_log
     
     res = initial_response
     while has_conversation_hook(res):
-        # Check for pending notifications before entering listening state
-        if pending_notifications:
-            previous_state = display_manager.current_state
-            previous_mood = display_manager.current_mood
-            
-            while pending_notifications:
-                notification_text = pending_notifications.pop(0)
-                try:
-                    await audio_manager.wait_for_audio_completion()
-                    await display_manager.update_display('speaking', mood='casual')
-                    
-                    audio = tts_handler.generate_audio(notification_text)
-                    with open("notification.mp3", "wb") as f:
-                        f.write(audio)
-                    
-                    await audio_manager.play_audio("notification.mp3")
-                    await audio_manager.wait_for_audio_completion()
-                    
-                except Exception as e:
-                    print(f"Error during calendar notification: {e}")
-                    pending_notifications.insert(0, notification_text)
-                    break
-                finally:
-                    await display_manager.update_display(previous_state, mood=previous_mood)
-        
         # Now enter listening state for follow-up
         await display_manager.update_display('listening')
         
@@ -2611,6 +2587,7 @@ async def handle_conversation_loop(initial_response):
                     continue
                 else:
                     await display_manager.update_display('idle')
+                    print(f"{Fore.MAGENTA}Listening for wake word...{Fore.WHITE}")
                     break
                         
             # Generate response for follow-up
@@ -2627,6 +2604,7 @@ async def handle_conversation_loop(initial_response):
             if not has_conversation_hook(res):
                 await audio_manager.wait_for_audio_completion()
                 await display_manager.update_display('idle')
+                print(f"{Fore.MAGENTA}Listening for wake word...{Fore.WHITE}")
                 break
             
             await audio_manager.wait_for_audio_completion()
@@ -2638,8 +2616,8 @@ async def handle_conversation_loop(initial_response):
             else:
                 await generate_voice("No input detected. Feel free to ask for assistance when needed")
             await audio_manager.wait_for_audio_completion()
-            # Return to idle state which will trigger wake word detection in main loop
             await display_manager.update_display('idle')
+            print(f"{Fore.MAGENTA}Listening for wake word...{Fore.WHITE}")
             break
 
 async def check_manual_stop():
@@ -3205,15 +3183,36 @@ def get_calendar_service():
             print(f"DEBUG: Error building calendar service: {e}")
         return None
 
+async def play_queued_notifications():
+    """Play any queued notifications before resuming conversation"""
+    if notification_queue.empty():
+        return
+
+    previous_state = display_manager.current_state
+    previous_mood = display_manager.current_mood
+
+    while not notification_queue.empty():
+        notification = await notification_queue.get()
+        try:
+            await audio_manager.wait_for_audio_completion()
+            await display_manager.update_display('speaking', mood='casual')
+            
+            audio = tts_handler.generate_audio(notification)
+            with open("notification.mp3", "wb") as f:
+                f.write(audio)
+            
+            await audio_manager.play_audio("notification.mp3")
+            await audio_manager.wait_for_audio_completion()
+            
+        except Exception as e:
+            print(f"Error playing queued notification: {e}")
+        finally:
+            await display_manager.update_display(previous_state, mood=previous_mood)
+
 async def check_upcoming_events():
     """Calendar notification system that can interrupt conversation flow"""
-    global calendar_notified_events, pending_notifications
-    
-    # Make pending_notifications global so handle_conversation_loop can access it
-    if 'pending_notifications' not in globals():
-        global pending_notifications
-        pending_notifications = []
-    
+    global calendar_notified_events, notification_queue
+
     while True:
         try:
             service = get_calendar_service()
@@ -3262,8 +3261,9 @@ async def check_upcoming_events():
                             event=summary
                         )
                         
-                        # Add to pending notifications
-                        pending_notifications.append(notification_text)
+                        # Add to notification queue instead of pending_notifications list
+                        await notification_queue.put(notification_text)
+                        print(f"DEBUG: Added calendar notification to queue: {notification_text[:50]}...")
 
                 # Cleanup old notifications
                 if minutes_until < 0:
@@ -4241,12 +4241,19 @@ async def run_main_loop():
                             # Ensure audio completes before state change
                             await audio_manager.wait_for_audio_completion()
                             await asyncio.sleep(0.1)  # Buffer for state transition
+                            
+                            # Play any pending notifications before continuing conversation
+                            await play_queued_notifications()
+                            
                             await display_manager.update_display('listening')
                             await handle_conversation_loop(formatted_response)
                         else:
                             await audio_manager.wait_for_audio_completion()
-                            now = datetime.now()
                             
+                            # Play any pending notifications before going idle/sleep
+                            await play_queued_notifications()
+                            
+                            now = datetime.now()
                             # Coordinated state transition with buffer
                             await asyncio.sleep(0.1)
                             next_state = 'sleep' if (now - last_interaction).total_seconds() > CONVERSATION_END_SECONDS else 'idle'
