@@ -97,6 +97,7 @@ from config_cl import (
     VAD_SETTINGS,
     VOICE,
     MOODS,
+    MOOD_MAPPINGS,
     USE_GOOGLE,
     CONVERSATION_END_SECONDS,
     ELEVENLABS_MODEL,
@@ -552,64 +553,6 @@ LAST_TASKS_RESULT = {
     "timestamp": None
 }
 
-# =============================================================================
-# Global Variables - Moods Mapping
-# =============================================================================
-MOOD_MAPPINGS = {
-    # Base moods mapping to themselves
-    "annoyed": "annoyed",
-    "caring": "caring",
-    "casual": "casual",
-    "cheerful": "cheerful",
-    "concerned": "concerned",
-    "confused": "confused",
-    "curious": "curious",
-    "disappointed": "disappointed",
-    "embarrassed": "embarrassed",
-    "sassy": "sassy",
-    "scared": "scared",
-    "surprised": "surprised",
-    "suspicious": "suspicious",
-    "thoughtful": "thoughtful",
-    
-    # Existing mood variations
-    "understanding": "caring",
-    "helpful": "caring",
-    "warm": "caring",
-    "empathetic": "caring",
-    "sympathetic": "caring",
-    "compassionate": "caring",
-    "deeply empathetic": "caring",
-    "friendly": "casual",
-    "comfortable": "casual",
-    "practical": "casual",
-    "excited": "cheerful",
-    "pleased": "cheerful",
-    "approving": "cheerful",
-    "appreciative": "cheerful",
-    "concerned": "concerned",
-    "slightly confused": "confused",
-    "curious": "curious",
-    "interested": "curious",
-    "intrigued": "curious",
-    "engaged": "curious",
-    "attentive": "curious",
-    "apologetic": "disappointed",
-    "sheepish": "embarrassed",
-    "embarrassed": "embarrassed",
-    "playful": "sassy",
-    "amused": "sassy",
-    "laughing": "sassy",
-    "impressed": "surprised",
-    "anticipatory": "surprised",
-    "direct": "suspicious",
-    "thoughtful": "thoughtful",
-    "reflective": "thoughtful",
-    "focused": "thoughtful",
-    "pensive": "thoughtful",
-    "deeply reflective": "thoughtful",
-    "informative": "thoughtful"
-}
 
 # =============================================================================
 # Functions
@@ -2005,25 +1948,9 @@ async def process_response_content(content):
     
     print(f"DEBUG - Full response text:\n{text}\n")
     
-    # Step 2: Parse mood and preserve complete message
-    # Using [\s\S]* instead of .* to capture ALL content including newlines
-    # This ensures we don't truncate the message after the first line
-    original_message = text  # Store original message before any processing
-    mood_match = re.match(r'^\[(.*?)\]([\s\S]*)', text, re.IGNORECASE)
-    if mood_match:
-        raw_mood = mood_match.group(1)         # Extract mood from [mood]
-        clean_message = mood_match.group(2)     # Get complete message content
-        mapped_mood = map_mood(raw_mood)
-        if mapped_mood:
-            await display_manager.update_display('speaking', mood=mapped_mood)
-            print(f"DEBUG - Mood detected: {mapped_mood}")
-    else:
-        clean_message = text
-        print("DEBUG - No mood detected in message")
-
-    # Step 3: Format message for voice generation
+    # Step 2: Format message for voice generation BEFORE mood extraction
     # Convert all formatting to natural speech patterns
-    formatted_message = clean_message
+    formatted_message = text
     
     # Convert all newlines to spaces for continuous speech
     formatted_message = formatted_message.replace('\n', ' ')
@@ -2038,24 +1965,44 @@ async def process_response_content(content):
     # Add natural pauses after sentences
     formatted_message = re.sub(r'(?<=[.!?])\s+(?=[A-Z])', '. ', formatted_message)
     
-    # Remove any trailing/leading whitespace
+    # Step 3: Parse mood from the formatted message
+    # Using [\s\S]* to capture ALL content including newlines
+    mood_match = re.match(r'^\[(.*?)\]([\s\S]*)', formatted_message, re.IGNORECASE)
+    if mood_match:
+        raw_mood = mood_match.group(1)         # Extract mood from [mood]
+        clean_message = mood_match.group(2)     # Get complete message content
+        mapped_mood = map_mood(raw_mood)
+        if mapped_mood:
+            await display_manager.update_display('speaking', mood=mapped_mood)
+            print(f"DEBUG - Mood detected: {mapped_mood}")
+            
+        # Save the formatted message with mood to logs
+        assistant_message = {"role": "assistant", "content": formatted_message}
+        chat_log.append(assistant_message)
+        
+        # Save to persistent storage with mood intact
+        print(f"DEBUG ASSISTANT MESSAGE: {type(assistant_message)} - {assistant_message}")
+        print(f"DEBUG ASSISTANT CONTENT: {type(assistant_message['content'])} - {formatted_message[:100]}")
+        save_to_log_file(assistant_message)
+        
+        # Now strip mood for voice generation
+        formatted_message = clean_message
+    else:
+        clean_message = formatted_message
+        print("DEBUG - No mood detected in message")
+        
+        # Save the formatted message to logs
+        assistant_message = {"role": "assistant", "content": formatted_message}
+        chat_log.append(assistant_message)
+        save_to_log_file(assistant_message)
+    
+    # Final cleanup for voice generation
     formatted_message = formatted_message.strip()
     
     print(f"DEBUG - Formatted message for voice (full):\n{formatted_message}\n")
-    
-    # Step 4: Add complete original response to chat_log
-    assistant_message = {"role": "assistant", "content": original_message}
-    chat_log.append(assistant_message)
-    
-    # Step 5: Save to persistent storage
-    print(f"DEBUG ASSISTANT MESSAGE: {type(assistant_message)} - {assistant_message}")
-    print(f"DEBUG ASSISTANT CONTENT: {type(assistant_message['content'])} - {original_message[:100]}")
-    save_to_log_file(assistant_message)
-    
     print(f"DEBUG - Assistant response added to chat_log and saved to file")
     print(f"DEBUG - Chat_log now has {len(chat_log)} messages")
     
-    # Step 6: Return formatted message for voice generation
     return formatted_message
 
 async def generate_response(query):
@@ -2613,47 +2560,62 @@ def has_conversation_hook(response):
     return any(phrase in response.lower() for phrase in continuation_phrases)
 
 async def handle_conversation_loop(initial_response):
-    """
-    Handle the ongoing conversation loop after an initial response with conversation hooks.
-    
-    Args:
-        initial_response (str): The initial response that triggered the conversation loop
-    """
-    global chat_log
+    """Handle ongoing conversation with calendar notification interrupts"""
+    global chat_log, pending_notifications
     
     res = initial_response
     while has_conversation_hook(res):
+        # Check for pending notifications before entering listening state
+        if pending_notifications:
+            previous_state = display_manager.current_state
+            previous_mood = display_manager.current_mood
+            
+            while pending_notifications:
+                notification_text = pending_notifications.pop(0)
+                try:
+                    await audio_manager.wait_for_audio_completion()
+                    await display_manager.update_display('speaking', mood='casual')
+                    
+                    audio = tts_handler.generate_audio(notification_text)
+                    with open("notification.mp3", "wb") as f:
+                        f.write(audio)
+                    
+                    await audio_manager.play_audio("notification.mp3")
+                    await audio_manager.wait_for_audio_completion()
+                    
+                except Exception as e:
+                    print(f"Error during calendar notification: {e}")
+                    pending_notifications.insert(0, notification_text)
+                    break
+                finally:
+                    await display_manager.update_display(previous_state, mood=previous_mood)
+        
+        # Now enter listening state for follow-up
+        await display_manager.update_display('listening')
+        
         # Capture the follow-up speech
         follow_up = await capture_speech(is_follow_up=True)
         
         if follow_up == "[CONTINUE]":
-            # This is a special control signal - just continue listening
-            # without modifying the response or conversation state
-            await display_manager.update_display('listening')
             continue
             
         elif follow_up:
-            # First check if this is a system command
+            # Check if this is a system command
             cmd_result = system_manager.detect_command(follow_up)
-            if cmd_result and cmd_result[0]:  # is_command is True
-                # Handle the system command directly
+            if cmd_result and cmd_result[0]:
                 is_cmd, cmd_type, action = cmd_result
                 success = await system_manager.handle_command(cmd_type, action)
                 
                 if success:
-                    # Re-enter conversation loop after system command
                     await display_manager.update_display('listening')
                     continue
                 else:
-                    # Exit loop if command failed
                     await display_manager.update_display('idle')
                     break
                         
-            # Now proceed with response generation
+            # Generate response for follow-up
             await display_manager.update_display('thinking')
             res = await generate_response(follow_up)
-            print(f"\n{Style.BRIGHT}Response:{Style.NORMAL}")
-            print(f"Full message: {res[:200]}..." if len(res) > 200 else res)
             
             if res == "[CONTINUE]":
                 print("DEBUG - Detected [CONTINUE] control signal, skipping voice generation")
@@ -2668,7 +2630,6 @@ async def handle_conversation_loop(initial_response):
                 break
             
             await audio_manager.wait_for_audio_completion()
-            await display_manager.update_display('listening')
         else:
             # No follow-up detected, play timeout message
             timeout_audio = get_random_audio("timeout")
@@ -2677,6 +2638,7 @@ async def handle_conversation_loop(initial_response):
             else:
                 await generate_voice("No input detected. Feel free to ask for assistance when needed")
             await audio_manager.wait_for_audio_completion()
+            # Return to idle state which will trigger wake word detection in main loop
             await display_manager.update_display('idle')
             break
 
@@ -3244,21 +3206,23 @@ def get_calendar_service():
         return None
 
 async def check_upcoming_events():
-    """Improved notification system with cleaner output"""
-    global calendar_notified_events
+    """Calendar notification system that can interrupt conversation flow"""
+    global calendar_notified_events, pending_notifications
+    
+    # Make pending_notifications global so handle_conversation_loop can access it
+    if 'pending_notifications' not in globals():
+        global pending_notifications
+        pending_notifications = []
     
     while True:
         try:
-            if audio_manager.is_speaking:
-                await audio_manager.wait_for_audio_completion()
-            
             service = get_calendar_service()
             if not service:
                 await asyncio.sleep(30)
                 continue
                 
             now = datetime.now(timezone.utc)
-            max_minutes = max(CALENDAR_NOTIFICATION_INTERVALS) + 5
+            max_minutes = max(CALENDAR_NOTIFICATION_INTERVALS) + 1
             timeMin = now.isoformat()
             timeMax = (now + timedelta(minutes=max_minutes)).isoformat()
 
@@ -3272,6 +3236,7 @@ async def check_upcoming_events():
 
             events = events_result.get('items', [])
 
+            # Check for notifications regardless of state
             for event in events:
                 event_id = event['id']
                 summary = event.get('summary', 'Unnamed event')
@@ -3283,12 +3248,13 @@ async def check_upcoming_events():
                     start_time = datetime.strptime(start, '%Y-%m-%d').replace(tzinfo=timezone.utc)
 
                 seconds_until = (start_time - now).total_seconds()
-                minutes_until = round(seconds_until / 60)
+                minutes_until = int(seconds_until / 60)
 
                 for interval in CALENDAR_NOTIFICATION_INTERVALS:
                     notification_key = f"{event_id}_{interval}"
                     
-                    if abs(minutes_until - interval) <= 2 and notification_key not in calendar_notified_events:
+                    if (abs(minutes_until * 60 - interval * 60) <= 15 and 
+                        notification_key not in calendar_notified_events):
                         calendar_notified_events.add(notification_key)
                         
                         notification_text = random.choice(CALENDAR_NOTIFICATION_SENTENCES).format(
@@ -3296,34 +3262,19 @@ async def check_upcoming_events():
                             event=summary
                         )
                         
-                        previous_state = display_manager.current_state
-                        previous_mood = display_manager.current_mood
-                        
-                        try:
-                            await audio_manager.wait_for_audio_completion()
-                            await display_manager.update_display('speaking')
-                            
-                            audio = tts_handler.generate_audio(notification_text)
-                            with open("notification.mp3", "wb") as f:
-                                f.write(audio)
-                            
-                            await audio_manager.play_audio("notification.mp3")
-                            await audio_manager.wait_for_audio_completion()
-                            await display_manager.update_display(previous_state, mood=previous_mood)
-                            
-                        except Exception as e:
-                            print(f"Error during notification: {e}")
-                            await display_manager.update_display(previous_state, mood=previous_mood)
+                        # Add to pending notifications
+                        pending_notifications.append(notification_text)
 
-                if minutes_until < -5:
-                    for interval in CALENDAR_NOTIFICATION_INTERVALS:
-                        calendar_notified_events.discard(f"{event_id}_{interval}")
+                # Cleanup old notifications
+                if minutes_until < 0:
+                    for cleanup_interval in CALENDAR_NOTIFICATION_INTERVALS:
+                        calendar_notified_events.discard(f"{event_id}_{cleanup_interval}")
 
-            await asyncio.sleep(5)
+            await asyncio.sleep(30)
 
         except Exception as e:
             print(f"Error in calendar check: {e}")
-            await asyncio.sleep(5)
+            await asyncio.sleep(30)
 
 def get_day_schedule() -> str:
     """Get all events for today"""
