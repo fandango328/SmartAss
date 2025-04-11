@@ -2470,80 +2470,51 @@ async def generate_response(query):
 
 
 async def wake_word():
-    """Non-blocking wake word detection with resource management"""
+    """Simple, direct wake word detection"""
     global last_interaction_check, last_interaction
 
-    # Initialize detector only if needed
-    if not hasattr(wake_word, 'state'):
-        wake_word.state = {
-            'snowboy': None,
-            'pa': None,
-            'stream': None,
-            'model_paths': None,
-            'resource_path': Path("resources/common.res"),
-            'last_error_time': 0
-        }
+    # One-time initialization
+    if not hasattr(wake_word, 'detector'):
+        resource_path = Path("resources/common.res")
+        model_paths = [
+            Path("GD_Laura.pmdl"),
+            Path("Wake_up_Laura.pmdl"),
+            Path("Laura.pmdl")
+        ]
+
+        wake_word.detector = snowboydetect.SnowboyDetect(
+            resource_filename=str(resource_path.absolute()).encode(),
+            model_str=",".join(str(p.absolute()) for p in model_paths).encode()
+        )
+        wake_word.detector.SetSensitivity(b"0.5,0.5,0.45")
+        wake_word.model_names = [p.name for p in model_paths]
+        wake_word.pa = pyaudio.PyAudio()
 
     try:
-        # Initialize only if not already done
-        if not wake_word.state['snowboy']:
-            model_paths = [
-                Path("GD_Laura.pmdl"),
-                Path("Wake_up_Laura.pmdl"),
-                Path("Laura.pmdl")
-            ]
-            
-            # Validate paths
-            for path in [wake_word.state['resource_path']] + model_paths:
-                if not path.exists():
-                    print(f"ERROR: File not found at {path.absolute()}")
-                    return None
-
-            wake_word.state['snowboy'] = snowboydetect.SnowboyDetect(
-                resource_filename=str(wake_word.state['resource_path'].absolute()).encode(),
-                model_str=",".join(str(p.absolute()) for p in model_paths).encode()
-            )
-            wake_word.state['snowboy'].SetSensitivity(b"0.5,0.5,0.45")
-            wake_word.state['model_paths'] = model_paths
-
-            # Initialize audio only if needed
-            if not wake_word.state['pa']:
-                wake_word.state['pa'] = pyaudio.PyAudio()
-                wake_word.state['stream'] = wake_word.state['pa'].open(
-                    rate=16000,
-                    channels=1,
-                    format=pyaudio.paInt16,
-                    input=True,
-                    frames_per_buffer=2048,
-                    stream_callback=None
-                )
-
-        # Simple error handling for stream read
-        try:
-            data = wake_word.state['stream'].read(2048, exception_on_overflow=False)
-            if len(data) > 0:
-                result = wake_word.state['snowboy'].RunDetection(data)
-                if result > 0:
-                    print(f"{Fore.GREEN}Wake word detected! (Model {result}){Fore.WHITE}")
-                    last_interaction = datetime.now()
-                    last_interaction_check = datetime.now()
-                    
-                    model_name = None
-                    if result <= len(wake_word.state['model_paths']):
-                        model_name = wake_word.state['model_paths'][result-1].name
-                    return model_name
-
-        except (IOError, BlockingIOError) as e:
-            # Only cleanup and reinitialize on actual errors
-            print(f"Audio stream error: {e}")
-            await cleanup_wake_word()
-            return None
-
-        await asyncio.sleep(0.01)
+        # Simple audio read
+        stream = wake_word.pa.open(
+            rate=16000,
+            channels=1,
+            format=pyaudio.paInt16,
+            input=True,
+            frames_per_buffer=1024
+        )
+        
+        data = stream.read(1024, exception_on_overflow=False)
+        stream.close()
+        
+        if data:
+            result = wake_word.detector.RunDetection(data)
+            if result > 0:
+                print(f"{Fore.GREEN}Wake word detected! (Model {result}){Fore.WHITE}")
+                last_interaction = datetime.now()
+                last_interaction_check = datetime.now()
+                return wake_word.model_names[result-1] if result <= len(wake_word.model_names) else None
+        
         return None
 
     except Exception as e:
-        print(f"Error in wake word detection: {e}")
+        print(f"Wake word detection error: {e}")
         return None
 
 
@@ -3741,20 +3712,6 @@ def get_random_audio(category, context=None):
         print(f"Error in get_random_audio: {str(e)}")
         return None
 
-async def cleanup_wake_word():
-    """Clean up wake word detection resources"""
-    if hasattr(wake_word, 'state'):
-        try:
-            if wake_word.state['stream']:
-                wake_word.state['stream'].stop_stream()
-                wake_word.state['stream'].close()
-                wake_word.state['stream'] = None
-            if wake_word.state['pa']:
-                wake_word.state['pa'].terminate()
-                wake_word.state['pa'] = None
-            wake_word.state['snowboy'] = None
-        except Exception as e:
-            print(f"Error during wake word cleanup: {e}")
 
 def sanitize_tool_interactions(chat_history):
     """
