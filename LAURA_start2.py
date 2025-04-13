@@ -4368,13 +4368,9 @@ async def run_main_loop():
                         if await notification_manager.has_pending_notifications():
                             await notification_manager.process_pending_notifications()
                         
-                        if isinstance(formatted_response, str) and has_conversation_hook(formatted_response):
-                            await display_manager.update_display('listening')
-                            await handle_conversation_loop(formatted_response)
-                        else:
-                            now = datetime.now()
-                            next_state = 'sleep' if (now - last_interaction).total_seconds() > CONVERSATION_END_SECONDS else 'idle'
-                            await display_manager.update_display(next_state)
+                        # Always transition to listening and continue conversation unless explicitly ended
+                        await display_manager.update_display('listening')
+                        await handle_conversation_loop(formatted_response)
                             
                     except Exception as voice_error:
                         print(f"Error during voice generation: {voice_error}")
