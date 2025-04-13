@@ -76,6 +76,7 @@ from audio_manager_vosk import AudioManager
 from whisper_transcriber import WhisperCppTranscriber
 from vosk_transcriber import VoskTranscriber
 from system_manager import SystemManager
+from email_manager import EmailManager
 from secret import (
     GOOGLE_MAPS_API_KEY,
     OPENROUTER_API_KEY,
@@ -429,6 +430,7 @@ tts_handler: Optional[TTSHandler] = None
 anthropic_client: Optional[Anthropic] = None
 token_tracker: Optional[TokenManager] = None
 system_manager: Optional[SystemManager] = None
+email_manager: Optional[EmailManager] = None  # Add this line
 snowboy = None  # Type hint not added as snowboydetect types aren't standard
 system_manager_lock = asyncio.Lock()
 
@@ -2675,34 +2677,6 @@ async def capture_speech(is_follow_up=False):
     finally:
         await audio_manager.stop_listening()
 
-
-
-def draft_email(subject: str, content: str, recipient: str = "") -> str:
-    global creds
-    if not USE_GOOGLE:
-        return "Please let the user know that Google is turned off in the script."
-    try:
-        service = build("gmail", "v1", credentials=creds)
-        message = EmailMessage()
-        message.set_content(content)
-        if recipient:
-            message["To"] = recipient
-        message["Subject"] = subject
-        encoded_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
-        create_message = {"message": {"raw": encoded_message}}
-        draft = (
-            service.users()
-            .drafts()
-            .create(userId="me", body=create_message)
-            .execute()
-        )
-        if not draft or "message" not in draft:
-            print(draft)
-            raise ValueError("The request returned an invalid response. Check the console logs.")
-        return "Please let the user know that the email has been drafted successfully."
-    except HttpError as error:
-        print(traceback.format_exc())
-        return f"Please let the user know that there was an error trying to draft an email. The error is: {error}"
 
 async def print_response(chat):
     """Print response before voice generation"""
