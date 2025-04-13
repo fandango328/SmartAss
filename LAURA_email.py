@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 
 # =============================================================================
 # Standard Library Imports - Core
@@ -144,35 +144,6 @@ config = {
 }
 # Email importance configuration - update this with information about people you care about
 
-EMAIL_IMPORTANCE_CONFIG = {
-    # Important senders (exact matches or domains)
-    "important_senders": [
-        "boss@company.com",  # Replace with actual emails
-        "vp@company.com",
-        "@executive-team.company.com",  # Anyone from this domain
-    ],
-    
-    # Keywords that indicate action items or urgency
-    "action_keywords": [
-        "urgent",
-        "action required", 
-        "action item",
-        "please review",
-        "deadline",
-        "asap",
-        "by tomorrow",
-        "by eod",
-        "assigned to you",
-    ],
-    
-    # Project or topic importance (customize based on your priorities)
-    "important_topics": [
-        "quarterly review",
-        "performance review",
-        "key project",
-        "budget approval",
-    ]
-}
 
 class CommandType(Enum):
     SYSTEM_STATE = "system_state"     # enable tools, load files, calibrate
@@ -551,12 +522,15 @@ try:
                 if os.path.exists("token.json"):
                     os.remove("token.json")
                 creds = None
+
+email_manager = EmailManager(creds)  # Where creds is your Google credentials
+
 except Exception as e:
     print(f"Error setting up Google integration: {e}")
     traceback.print_exc()
     USE_GOOGLE = False
 
-email_manager = EmailManager(creds)  # Where creds is your Google credentials
+
 
 # =============================================================================
 # Core Component Initialization
@@ -611,11 +585,6 @@ notification_queue = asyncio.Queue()  # Queue for pending notifications during c
 # =============================================================================
 # Session Management
 # =============================================================================
-LAST_EMAIL_RESULTS = {
-    "emails": [],
-    "timestamp": None
-}
-
 LAST_TASKS_RESULT = {
     "tasks": [],
     "timestamp": None
@@ -671,322 +640,6 @@ def verify_token_tracker_setup():
     print(f"Token Tracker Status: {'Defined' if 'token_tracker' in globals() else 'Missing'}")
     print(f"Anthropic Client Status: {'Initialized' if anthropic_client else 'Missing'}")
     print(f"System Prompt Status: {'Defined' if SYSTEM_PROMPT else 'Missing'}{Fore.WHITE}\n")
-
-def determine_email_importance(email, config=EMAIL_IMPORTANCE_CONFIG):
-    """
-    Analyzes an email and determines its importance level with explanation.
-    
-    Returns:
-        tuple: (importance_level, explanation)
-            importance_level: int (0-5, where 5 is highest importance)
-            explanation: str (reason why this email is important)
-    """
-    importance_score = 0
-    reasons = []
-    
-    # 1. Check sender importance
-    sender_email = email.get('sender_email', '').lower()
-    
-    # Direct match for specific important people
-    if any(important_sender.lower() == sender_email for important_sender in config["important_senders"] 
-           if not important_sender.startswith('@')):
-        importance_score += 3
-        sender_name = email.get('sender_name', sender_email)
-        reasons.append(f"From important person: {sender_name}")
-    
-    # Domain match for important groups
-    elif any(domain.lower() in sender_email for domain in config["important_senders"] if domain.startswith('@')):
-        importance_score += 2
-        reasons.append(f"From important team")
-    
-    # 2. Check for action items/urgency in subject and body
-    email_text = (email.get('subject', '') + ' ' + email.get('snippet', '')).lower()
-    
-    action_matches = [keyword for keyword in config["action_keywords"] 
-                     if keyword.lower() in email_text]
-    if action_matches:
-        importance_score += 2
-        reasons.append(f"Contains action keywords: {', '.join(action_matches[:2])}")
-    
-    # 3. Check for important projects/topics
-    topic_matches = [topic for topic in config["important_topics"] 
-                    if topic.lower() in email_text]
-    if topic_matches:
-        importance_score += 1
-        reasons.append(f"Related to important topic: {', '.join(topic_matches[:2])}")
-    
-    # Normalize score to 0-5 range
-    final_score = min(5, importance_score)
-    
-    # Compile explanation if there are reasons
-    explanation = "; ".join(reasons) if reasons else "No special importance detected"
-    
-    return (final_score, explanation)
-
-def read_emails(max_results=5, unread_only=False, query=None, include_content=False, mark_as_read=False):
-    """
-    Retrieve and read emails from Gmail with importance detection
-    """
-    global LAST_EMAIL_RESULTS
-    
-    try:
-        service = build("gmail", "v1", credentials=creds)
-        
-        # Build query string
-        query_parts = []
-        if unread_only:
-            query_parts.append("is:unread")
-        if query:
-            query_parts.append(query)
-        
-        final_query = " ".join(query_parts) if query_parts else None
-        
-        # Get messages
-        messages_result = service.users().messages().list(
-            userId="me",
-            q=final_query,
-            maxResults=max_results
-        ).execute()
-        
-        messages = messages_result.get("messages", [])
-        
-        if not messages:
-            return "No emails found matching your criteria."
-        
-        # Process each email
-        emails = []
-        important_emails = []
-        regular_emails = []
-        
-        for message in messages:
-            msg = service.users().messages().get(
-                userId="me", 
-                id=message["id"],
-                format="full" if include_content else "metadata"
-            ).execute()
-            
-            # Extract headers
-            headers = {header["name"].lower(): header["value"] 
-                      for header in msg["payload"]["headers"]}
-            
-            # Extract key information
-            email_data = {
-                "id": msg["id"],
-                "thread_id": msg["threadId"],
-                "subject": headers.get("subject", "(No subject)"),
-                "sender_name": headers.get("from", "").split("<")[0].strip(),
-                "sender_email": headers.get("from", ""),
-                "date": headers.get("date", ""),
-                "to": headers.get("to", ""),
-                "cc": headers.get("cc", ""),
-                "labels": msg["labelIds"],
-                "snippet": msg.get("snippet", ""),
-                "unread": "UNREAD" in msg["labelIds"]
-            }
-            
-            # Extract sender email from format "Name <email>"
-            if "<" in email_data["sender_email"] and ">" in email_data["sender_email"]:
-                email_data["sender_email"] = email_data["sender_email"].split("<")[1].split(">")[0]
-            
-            # Extract full content if requested
-            if include_content:
-                email_data["body"] = extract_email_body(msg["payload"])
-            
-            # Determine importance
-            importance_score, importance_reason = determine_email_importance(email_data)
-            email_data["importance"] = importance_score
-            email_data["importance_reason"] = importance_reason
-            
-            emails.append(email_data)
-            
-            # Categorize by importance
-            if importance_score >= 3:
-                important_emails.append(email_data)
-            else:
-                regular_emails.append(email_data)
-        
-        # Mark as read if requested
-        if mark_as_read:
-            email_ids_to_mark = [email["id"] for email in emails if email["unread"]]
-            if email_ids_to_mark:
-                service.users().messages().batchModify(
-                    userId="me",
-                    body={
-                        "ids": email_ids_to_mark,
-                        "removeLabelIds": ["UNREAD"]
-                    }
-                ).execute()
-                
-                # Update our local status too
-                for email in emails:
-                    if email["id"] in email_ids_to_mark:
-                        email["unread"] = False
-                        if "UNREAD" in email["labels"]:
-                            email["labels"].remove("UNREAD")
-        
-        # Store results for future reference
-        LAST_EMAIL_RESULTS = {
-            "emails": emails,
-            "timestamp": datetime.now(),
-            "important": important_emails,
-            "regular": regular_emails
-        }
-        
-        # Build response for the assistant
-        response = ""
-        
-        # Summarize important emails
-        if important_emails:
-            response += f"You have {len(important_emails)} important email{'s' if len(important_emails) > 1 else ''}:\n\n"
-            
-            for i, email in enumerate(important_emails, 1):
-                response += f"{i}. From: {email['sender_name']} - {email['subject']}\n"
-                response += f"   {email['importance_reason']}\n"
-                response += f"   {email['snippet'][:100]}...\n\n"
-        
-        # Summarize other emails
-        if regular_emails:
-            if important_emails:
-                response += f"You also have {len(regular_emails)} other email{'s' if len(regular_emails) > 1 else ''}:\n\n"
-            else:
-                response += f"You have {len(regular_emails)} email{'s' if len(regular_emails) > 1 else ''}:\n\n"
-                
-            for i, email in enumerate(regular_emails, 1):
-                response += f"{i}. From: {email['sender_name']} - {email['subject']}\n"
-                response += f"   {email['snippet'][:50]}...\n\n"
-        
-        # Add navigation hint
-        response += "You can ask me to read any specific email in full or take actions like marking them as read or archiving."
-        
-        return response
-        
-    except Exception as e:
-        print(f"Error reading emails: {e}")
-        traceback.print_exc()
-        return f"Sorry, I encountered an error while trying to read your emails: {str(e)}"
-
-def extract_email_body(payload):
-    """Helper function to extract email body content from the Gmail API response"""
-    body = ""
-    
-    if "body" in payload and payload["body"].get("data"):
-        # Base64 decode the email body
-        body = base64.urlsafe_b64decode(payload["body"]["data"].encode("ASCII")).decode("utf-8")
-    
-    # If this is a multipart message, check the parts
-    elif "parts" in payload:
-        for part in payload["parts"]:
-            if part["mimeType"] == "text/plain" and part["body"].get("data"):
-                body = base64.urlsafe_b64decode(part["body"]["data"].encode("ASCII")).decode("utf-8")
-                break
-            # Handle nested multipart messages
-            elif "parts" in part:
-                body = extract_email_body(part)
-                if body:
-                    break
-    
-    return body
-
-def email_action(email_id, action):
-    """
-    Perform an action on a specific email
-    """
-    try:
-        service = build("gmail", "v1", credentials=creds)
-        
-        if action == "archive":
-            # Remove INBOX label
-            service.users().messages().modify(
-                userId="me",
-                id=email_id,
-                body={"removeLabelIds": ["INBOX"]}
-            ).execute()
-            return "Email archived successfully."
-            
-        elif action == "trash":
-            # Move to trash
-            service.users().messages().trash(
-                userId="me",
-                id=email_id
-            ).execute()
-            return "Email moved to trash."
-            
-        elif action == "mark_read":
-            # Remove UNREAD label
-            service.users().messages().modify(
-                userId="me",
-                id=email_id,
-                body={"removeLabelIds": ["UNREAD"]}
-            ).execute()
-            return "Email marked as read."
-            
-        elif action == "mark_unread":
-            # Add UNREAD label
-            service.users().messages().modify(
-                userId="me",
-                id=email_id,
-                body={"addLabelIds": ["UNREAD"]}
-            ).execute()
-            return "Email marked as unread."
-            
-        elif action == "star":
-            # Add STARRED label
-            service.users().messages().modify(
-                userId="me",
-                id=email_id,
-                body={"addLabelIds": ["STARRED"]}
-            ).execute()
-            return "Email starred."
-            
-        elif action == "unstar":
-            # Remove STARRED label
-            service.users().messages().modify(
-                userId="me",
-                id=email_id,
-                body={"removeLabelIds": ["STARRED"]}
-            ).execute()
-            return "Email unstarred."
-            
-        else:
-            return f"Unknown action: {action}"
-            
-    except Exception as e:
-        print(f"Error performing email action: {e}")
-        traceback.print_exc()
-        return f"Sorry, I encountered an error while trying to {action} the email: {str(e)}"
-
-def draft_email(subject: str, content: str, recipient: str = "") -> str:
-    global creds
-    if not USE_GOOGLE:
-        return "Please let the user know that Google is turned off in the script."
-    try:
-        # Ensure credentials are available
-        if not creds:
-            creds = initialize_google_services()
-            if not creds:
-                return "Failed to initialize Google credentials. Please check your authentication."
-        
-        service = build("gmail", "v1", credentials=creds)
-        message = EmailMessage()
-        message.set_content(content)
-        if recipient:
-            message["To"] = recipient
-        message["Subject"] = subject
-        encoded_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
-        create_message = {"message": {"raw": encoded_message}}
-        draft = (
-            service.users()
-            .drafts()
-            .create(userId="me", body=create_message)
-            .execute()
-        )
-        if not draft or "message" not in draft:
-            print(draft)
-            raise ValueError("The request returned an invalid response. Check the console logs.")
-        return "Please let the user know that the email has been drafted successfully."
-    except HttpError as error:
-        print(traceback.format_exc())
-        return f"Please let the user know that there was an error trying to draft an email. The error is: {error}"
 
 
 def manage_tasks(action, title=None, notes=None, due_date=None, task_id=None, 
@@ -1177,10 +830,8 @@ def create_task_from_email(email_id, title=None, due_date=None, priority="medium
     Create a task based on an email
     """
     try:
-        # Get email details
-        gmail_service = build("gmail", "v1", credentials=creds)
-        
-        msg = gmail_service.users().messages().get(
+        # Get email details using email_manager
+        msg = email_manager.service.users().messages().get(
             userId="me", 
             id=email_id,
             format="metadata"
@@ -1233,7 +884,7 @@ def create_task_from_email(email_id, title=None, due_date=None, priority="medium
         
         # Mark the email as read and add a label if possible
         try:
-            gmail_service.users().messages().modify(
+            email_manager.service.users().messages().modify(
                 userId="me",
                 id=email_id,
                 body={"removeLabelIds": ["UNREAD"], "addLabelIds": ["STARRED"]}
@@ -1247,7 +898,7 @@ def create_task_from_email(email_id, title=None, due_date=None, priority="medium
         print(f"Error creating task from email: {e}")
         traceback.print_exc()
         return f"Sorry, I encountered an error while trying to create a task from the email: {str(e)}"
-
+        
 def create_task_for_event(event_id, task_type="both", days_before=1, days_after=1, custom_titles=None):
     """
     Create preparation or follow-up tasks for a calendar event
@@ -2296,13 +1947,13 @@ async def generate_response(query):
                     tool_response = None
                     
                     try:
-                        # Execute the appropriate tool function based on the tool name
-                        if tool_call.name == "draft_email":
-                            tool_response = draft_email(**tool_args)
-                        elif tool_call.name == "read_emails":
-                            tool_response = read_emails(**tool_args)
-                        elif tool_call.name == "email_action":
-                            tool_response = email_action(**tool_args)
+						# Execute the appropriate tool function based on the tool name
+						if tool_call.name == "draft_email":
+								tool_response = email_manager.draft_email(**tool_args)
+						elif tool_call.name == "read_emails":
+								tool_response = email_manager.read_emails(**tool_args)
+						elif tool_call.name == "email_action":
+								tool_response = email_manager.email_action(**tool_args)
                         elif tool_call.name == "manage_tasks":
                             tool_response = manage_tasks(**tool_args)
                         elif tool_call.name == "create_task_from_email":
