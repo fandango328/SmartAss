@@ -87,6 +87,7 @@ from tool_analyzer import get_tools_for_query
 from tool_context import TOOL_CONTEXTS
 from token_manager import TokenManager
 from document_manager import DocumentManager
+from notification_manager import NotificationManager
 
 from config_cl import (
     TRANSCRIPTION_SERVER,
@@ -2491,51 +2492,96 @@ async def generate_response(query):
 
 
 async def wake_word():
-    """Simple, direct wake word detection"""
+    """Wake word detection with notification-aware breaks"""
     global last_interaction_check, last_interaction
-
+    
     # One-time initialization
     if not hasattr(wake_word, 'detector'):
-        resource_path = Path("resources/common.res")
-        model_paths = [
-            Path("GD_Laura.pmdl"),
-            Path("Wake_up_Laura.pmdl"),
-            Path("Laura.pmdl")
-        ]
-
-        wake_word.detector = snowboydetect.SnowboyDetect(
-            resource_filename=str(resource_path.absolute()).encode(),
-            model_str=",".join(str(p.absolute()) for p in model_paths).encode()
-        )
-        wake_word.detector.SetSensitivity(b"0.5,0.5,0.45")
-        wake_word.model_names = [p.name for p in model_paths]
-        wake_word.pa = pyaudio.PyAudio()
+        try:
+            print(f"{Fore.YELLOW}Initializing wake word detector...{Fore.WHITE}")
+            
+            resource_path = Path("resources/common.res")
+            model_paths = [
+                Path("GD_Laura.pmdl"),
+                Path("Wake_up_Laura.pmdl"),
+                Path("Laura.pmdl")
+            ]
+            
+            for path in [resource_path] + model_paths:
+                if not path.exists():
+                    print(f"ERROR: File not found at {path.absolute()}")
+                    return None
+            
+            wake_word.detector = snowboydetect.SnowboyDetect(
+                resource_filename=str(resource_path.absolute()).encode(),
+                model_str=",".join(str(p.absolute()) for p in model_paths).encode()
+            )
+            wake_word.detector.SetSensitivity(b"0.5,0.5,0.45")
+            wake_word.model_names = [p.name for p in model_paths]
+            wake_word.pa = pyaudio.PyAudio()
+            wake_word.stream = None
+            wake_word.last_break = time.time()
+            print(f"{Fore.GREEN}Wake word detector initialized{Fore.WHITE}")
+        except Exception as e:
+            print(f"Error initializing wake word detection: {e}")
+            return None
 
     try:
-        # Simple audio read
-        stream = wake_word.pa.open(
-            rate=16000,
-            channels=1,
-            format=pyaudio.paInt16,
-            input=True,
-            frames_per_buffer=1024
-        )
-        
-        data = stream.read(1024, exception_on_overflow=False)
-        stream.close()
-        
-        if data:
-            result = wake_word.detector.RunDetection(data)
-            if result > 0:
-                print(f"{Fore.GREEN}Wake word detected! (Model {result}){Fore.WHITE}")
-                last_interaction = datetime.now()
-                last_interaction_check = datetime.now()
-                return wake_word.model_names[result-1] if result <= len(wake_word.model_names) else None
+        # Create/restart stream if needed
+        if not wake_word.stream or not wake_word.stream.is_active():
+            wake_word.stream = wake_word.pa.open(
+                rate=16000,
+                channels=1,
+                format=pyaudio.paInt16,
+                input=True,
+                frames_per_buffer=2048
+            )
+            wake_word.stream.start_stream()
+
+        # Periodic breaks for notifications (every 20 seconds)
+        current_time = time.time()
+        if (current_time - wake_word.last_break) >= 20:
+            wake_word.last_break = current_time
+            if wake_word.stream:
+                wake_word.stream.stop_stream()
+                await asyncio.sleep(1)  # 1-second break
+                wake_word.stream.start_stream()
+            return None
+
+        # Read audio with error handling
+        try:
+            data = wake_word.stream.read(2048, exception_on_overflow=False)
+            if len(data) == 0:
+                print("Warning: Empty audio frame received")
+                return None
+        except (IOError, OSError) as e:
+            print(f"Stream read error: {e}")
+            if wake_word.stream:
+                wake_word.stream.stop_stream()
+                wake_word.stream.close()
+                wake_word.stream = None
+            return None
+
+        result = wake_word.detector.RunDetection(data)
+        if result > 0:
+            print(f"{Fore.GREEN}Wake word detected! (Model {result}){Fore.WHITE}")
+            last_interaction = datetime.now()
+            last_interaction_check = datetime.now()
+            return wake_word.model_names[result-1] if result <= len(wake_word.model_names) else None
+
+        # Occasionally yield to event loop (much less frequently)
+        if random.random() < 0.01:
+            await asyncio.sleep(0)
         
         return None
 
     except Exception as e:
-        print(f"Wake word detection error: {e}")
+        print(f"Error in wake word detection: {e}")
+        traceback.print_exc()
+        if hasattr(wake_word, 'stream') and wake_word.stream:
+            wake_word.stream.stop_stream()
+            wake_word.stream.close()
+            wake_word.stream = None
         return None
 
 
@@ -2577,7 +2623,7 @@ def has_conversation_hook(response):
 
 async def handle_conversation_loop(initial_response):
     """Handle ongoing conversation with calendar notification interrupts"""
-    global chat_log
+    global chat_log, last_interaction
     
     res = initial_response
     while has_conversation_hook(res):
@@ -2591,6 +2637,9 @@ async def handle_conversation_loop(initial_response):
             continue
             
         elif follow_up:
+            # Update last interaction time
+            last_interaction = datetime.now()
+            
             # Check if this is a system command
             cmd_result = system_manager.detect_command(follow_up)
             if cmd_result and cmd_result[0]:
@@ -2601,10 +2650,12 @@ async def handle_conversation_loop(initial_response):
                     await display_manager.update_display('listening')
                     continue
                 else:
+                    # Clear conversation hook by setting res to empty
+                    res = ""
                     await display_manager.update_display('idle')
-                    print(f"{Fore.MAGENTA}Listening for wake word...{Fore.WHITE}")
+                    print(f"{Fore.MAGENTA}Conversation ended, returning to idle state...{Fore.WHITE}")
                     break
-                        
+            
             # Generate response for follow-up
             await display_manager.update_display('thinking')
             res = await generate_response(follow_up)
@@ -2619,12 +2670,13 @@ async def handle_conversation_loop(initial_response):
             if not has_conversation_hook(res):
                 await audio_manager.wait_for_audio_completion()
                 await display_manager.update_display('idle')
-                print(f"{Fore.MAGENTA}Listening for wake word...{Fore.WHITE}")
+                print(f"{Fore.MAGENTA}Conversation ended, returning to idle state...{Fore.WHITE}")
                 break
             
             await audio_manager.wait_for_audio_completion()
         else:
-            # No follow-up detected, play timeout message
+            # No follow-up detected or manual stop, clear conversation hook
+            res = ""  # Clear the conversation hook
             timeout_audio = get_random_audio("timeout")
             if timeout_audio:
                 await audio_manager.play_audio(timeout_audio)
@@ -2632,7 +2684,7 @@ async def handle_conversation_loop(initial_response):
                 await generate_voice("No input detected. Feel free to ask for assistance when needed")
             await audio_manager.wait_for_audio_completion()
             await display_manager.update_display('idle')
-            print(f"{Fore.MAGENTA}Listening for wake word...{Fore.WHITE}")
+            print(f"{Fore.MAGENTA}Conversation ended due to timeout or manual stop, returning to idle state...{Fore.WHITE}")
             break
 
 async def check_manual_stop():
@@ -4125,11 +4177,11 @@ async def main():
 
         print(f"{Fore.GREEN}VOSK resources released{Fore.WHITE}")
 
-async def run_main_loop(): 
+async def run_main_loop():
     """
     Core interaction loop managing LAURA's conversation flow.
     """
-    global document_manager, chat_log, system_manager, keyboard_device
+    global document_manager, chat_log, system_manager, keyboard_device, notification_manager
     iteration_count = 0
     
     # Initialize SystemManager if not already initialized
@@ -4149,6 +4201,18 @@ async def run_main_loop():
                 print(f"Error initializing SystemManager: {e}")
                 print("SystemManager initialization failed")
                 return
+                
+    # Initialize NotificationManager if not already initialized
+    if 'notification_manager' not in globals():
+        try:
+            print("Initializing NotificationManager...")
+            notification_manager = NotificationManager(audio_manager)
+            await notification_manager.start()
+            print("NotificationManager initialized successfully")
+        except Exception as e:
+            print(f"Error initializing NotificationManager: {e}")
+            print("NotificationManager initialization failed")
+            return               
             
     while True:
         # Start of iteration - clear variables
@@ -4160,8 +4224,12 @@ async def run_main_loop():
         try:
             current_state = display_manager.current_state
             
-            # Sleep state - only check for wake events
-            if current_state == 'sleep':
+            # Sleep/Idle states - check for wake events and notifications
+            if current_state in ['sleep', 'idle']:
+                # Process any pending notifications during idle periods
+                if await notification_manager.has_pending_notifications():
+                    await notification_manager.process_pending_notifications()
+                    
                 # Quick non-blocking keyboard check
                 if keyboard_device:
                     try:
@@ -4194,7 +4262,7 @@ async def run_main_loop():
                     # Only play wake audio if wake word was used (not keyboard)
                     if detected_model:
                         wake_audio = get_random_audio('wake', detected_model)
-                        await display_manager.update_display('wake') #line 4150
+                        await display_manager.update_display('wake')
                         if wake_audio:
                             await audio_manager.play_audio(wake_audio)
                             await audio_manager.wait_for_audio_completion()
@@ -4244,7 +4312,7 @@ async def run_main_loop():
                                         if success:
                                             await display_manager.update_display('listening')
                                             follow_up = await capture_speech(is_follow_up=True)
-                                            continue  #line 4200
+                                            continue
                                         else:
                                             break
                                     
@@ -4262,6 +4330,10 @@ async def run_main_loop():
                                     try:
                                         await display_manager.update_display('speaking')
                                         await generate_voice(formatted_response)
+                                        
+                                        # Check notifications before state transition
+                                        if await notification_manager.has_pending_notifications():
+                                            await notification_manager.process_pending_notifications()
                                         
                                         if isinstance(formatted_response, str) and has_conversation_hook(formatted_response):
                                             await audio_manager.wait_for_audio_completion()
@@ -4297,48 +4369,38 @@ async def run_main_loop():
                         await display_manager.update_display('speaking')
                         await generate_voice(formatted_response)
                         
+                        # Wait for speech to complete
+                        await audio_manager.wait_for_audio_completion()
+                        
+                        # Check and process any pending notifications
+                        if await notification_manager.has_pending_notifications():
+                            await notification_manager.process_pending_notifications()
+                        
                         if isinstance(formatted_response, str) and has_conversation_hook(formatted_response):
-                            # Ensure audio completes before state change
-                            await audio_manager.wait_for_audio_completion()
-                            await asyncio.sleep(0.1)  # Buffer for state transition
-                            
-                            # Play any pending notifications before continuing conversation
-                            await play_queued_notifications()
-                            
                             await display_manager.update_display('listening')
                             await handle_conversation_loop(formatted_response)
                         else:
-                            await audio_manager.wait_for_audio_completion()
-                            
-                            # Play any pending notifications before going idle/sleep
-                            await play_queued_notifications()
-                            
                             now = datetime.now()
-                            # Coordinated state transition with buffer
-                            await asyncio.sleep(0.1)
                             next_state = 'sleep' if (now - last_interaction).total_seconds() > CONVERSATION_END_SECONDS else 'idle'
                             await display_manager.update_display(next_state)
                             
                     except Exception as voice_error:
                         print(f"Error during voice generation: {voice_error}")
-                        await asyncio.sleep(0.1)  # Buffer before error state transition
                         await display_manager.update_display('sleep')
                         continue
                         
             else:
-                # If we're in idle state, just wait for timeout
+                # If we're in idle state, check for timeout to sleep
                 if current_state == 'idle':
                     now = datetime.now()
                     if (now - last_interaction).total_seconds() > CONVERSATION_END_SECONDS:
+                        print(f"{Fore.CYAN}Conversation timeout reached ({CONVERSATION_END_SECONDS} seconds), transitioning to sleep state...{Fore.WHITE}")
                         await display_manager.update_display('sleep')
                     await asyncio.sleep(0.1)
                     continue
-                else:
-                    # Only log unexpected states
-                    print(f"Warning: Unexpected state transition from {current_state}")
-                    await display_manager.update_display('sleep')
-                    await asyncio.sleep(0.1)
-                    continue
+                # If in any other state (besides sleep), ensure we're tracking last_interaction
+                elif current_state not in ['sleep']:
+                    last_interaction = datetime.now()
 
         except Exception as e:
             print(f"Error in main loop: {e}")
