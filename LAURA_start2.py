@@ -2588,38 +2588,30 @@ async def wake_word():
 
 def has_conversation_hook(response):
     """
-    Detects various conversation continuation signals beyond just question marks.
-    Returns True if the response contains any indicator that the conversation should continue.
+    Default to True for conversation continuation unless explicitly ended.
+    Only returns False if specific end-conversation phrases are detected.
     """
-    # Original method - look for question marks
     if response is None:
         print("Warning: Received None response in has_conversation_hook")
         return False
 
-    # Check for [CONTINUE] tag first
-    if isinstance(response, str) and response.startswith("[CONTINUE]"):
-        return True
-
-    if "?" in response:
-        return True
-    
-    # Add additional conversation hooks
-    continuation_phrases = [
-        "let me know",
-        "tell me",
-        "share your thoughts",
-        "I'm listening",
-        "go ahead",
-        "I'm genuinely",
-        "feel free to elaborate",
-        "I'd like to hear more",
-        "please continue",
-        ".", #this should pretty much ensure that the conversation_hook is almost always engaged
-        "That sounds",
-        "your input would be valuable"
-    ]
-    
-    return any(phrase in response.lower() for phrase in continuation_phrases)
+    if isinstance(response, str):
+        # Check for control signals first
+        if response.startswith("[CONTINUE]"):
+            return True
+            
+        # End conversation phrases
+        end_phrases = [
+            "no need for follow up",
+            "i'm done for now",
+            "that will be all",
+            "no further questions needed",
+            "end of conversation"
+        ]
+        
+        return not any(phrase in response.lower() for phrase in end_phrases)
+        
+    return True
 
 async def handle_conversation_loop(initial_response):
     """Handle ongoing conversation with calendar notification interrupts"""
