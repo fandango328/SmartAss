@@ -436,7 +436,7 @@ system_manager_lock = asyncio.Lock()
 
 
 # =============================================================================
-# Google Integration Setup  - DO NOT FUCK WITH THIS AT ALL
+# Google Integration Setup  - DO NOT FUCK WITH THIS AT ALL!!!  THIS SETS UP THE CHROMIUM BROWSER TO PROVIDE WITH A REFREST TOKEN AFTER YOU LOG IN, YOU SHOULD NOT HAVE A BROWSER POP-UP WHEN RELOGGING IN.
 # =============================================================================
 creds = None  # Global declaration
 try:
