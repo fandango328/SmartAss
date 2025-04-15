@@ -9,17 +9,55 @@ import random
 import os
 
 class NotificationManager:
-    def __init__(self, audio_manager):
+    def __init__(self, audio_manager, config_path="config/notifications.json"):
         self.audio_manager = audio_manager
         self.last_calendar_check = datetime.now()
         self.notification_queue = asyncio.Queue()
-        self.calendar_check_interval = 60  # seconds
-        self.notification_sounds_dir = Path("notification_sounds")
+        self.active_reminders = {}
+        self.pending_notifications = {}
+        
+        # Load notification configuration
+        self.config = self._load_notification_config(config_path)
+        
+        # Set up notification paths
+        self.notification_base_dir = Path("sounds/notifications")
         self.is_processing = False
         
-        # Ensure notification sounds directory exists
-        if not self.notification_sounds_dir.exists():
-            os.makedirs(self.notification_sounds_dir)
+    def _load_notification_config(self, config_path):
+        """Load notification configuration from JSON file"""
+        default_config = {
+            "notification_types": {
+                "daily_medicine": {
+                    "intervals": [10, 20, 30],
+                    "over30_interval": 15,
+                    "requires_clear": True,
+                    "audio_path": "daily_medicine",
+                    "default_schedule": {
+                        "time": "07:30",
+                        "days": "all"
+                    }
+                },
+                "calendar": {
+                    "intervals": [5, 15, 30],
+                    "requires_clear": False,
+                    "audio_path": "calendar",
+                    "max_reminders": 3
+                }
+            },
+            "default_settings": {
+                "check_interval": 60,
+                "reminder_check_interval": 30
+            }
+        }
+        
+        try:
+            if Path(config_path).exists():
+                with open(config_path, 'r') as f:
+                    return json.load(f)
+            return default_config
+        except Exception as e:
+            print(f"Error loading notification config: {e}")
+            return default_config
             
     async def start(self):
         """Start the notification manager background tasks"""
