@@ -2,6 +2,20 @@ from pathlib import Path
 from vad_settings import load_vad_settings
 import json
 
+# Load personalities configuration
+PERSONALITIES_FILE = "personalities.json"
+try:
+    with open(PERSONALITIES_FILE, 'r') as f:
+        PERSONALITIES_DATA = json.load(f)
+    ACTIVE_PERSONA = PERSONALITIES_DATA.get("active_persona", "laura")
+    ACTIVE_PERSONA_DATA = PERSONALITIES_DATA.get("personas", {}).get(ACTIVE_PERSONA, {})
+except Exception as e:
+    print(f"Error loading personalities configuration: {e}")
+    PERSONALITIES_DATA = {"personas": {"laura": {"name": "Laura", "voice": "L.A.U.R.A.", 
+                         "system_prompt": "You are Laura, an AI assistant."}}, 
+                         "active_persona": "laura"}
+    ACTIVE_PERSONA = "laura"
+    ACTIVE_PERSONA_DATA = PERSONALITIES_DATA["personas"]["laura"]
 
 ANTHROPIC_MODEL = "claude-3-7-sonnet-20250219" # Or whichever Claude model you want to use          
 
@@ -28,8 +42,8 @@ TRANSCRIPTION_SERVER = {
     "port": 8765
 }
 
-# Base paths for audio files
-SOUND_BASE_PATH = Path('/home/user/LAURA/sounds')
+# Set up paths for the active persona
+SOUND_BASE_PATH = Path(f'/home/user/LAURA/sounds/{ACTIVE_PERSONA}')
 
 # Audio file directories
 SOUND_PATHS = {
@@ -48,12 +62,15 @@ SOUND_PATHS = {
     'timeout': str(SOUND_BASE_PATH / 'timeout_sentences'),
     'calibration': str(SOUND_BASE_PATH / 'calibration'),
     'filler': str(SOUND_BASE_PATH / 'filler'),
+    'system': {
+        'error': str(SOUND_BASE_PATH / 'system' / 'error')
+    }
 }
 
-#MODEL = "claude-3-5-sonnet-20241022"  # LLM - currently configured for openrouter
-VOICE = "L.A.U.R.A."  # voice - elevenlabs specific
+# Use the voice from the active persona
+VOICE = ACTIVE_PERSONA_DATA.get("voice", "L.A.U.R.A.")  # voice - elevenlabs specific
 USE_GOOGLE = True  # Flag to indicate if Google services are used
-CONVERSATION_END_SECONDS = 2400  # Time in seconds before a conversation is considered ended
+CONVERSATION_END_SECONDS = 1200  # Time in seconds before a conversation is considered ended
 VOICE_TIMEOUT = 3  # Timeout in seconds for voice detection
 VOICE_START_TIMEOUT = 6  # Timeout in seconds for starting voice detection
 
@@ -123,37 +140,11 @@ MOOD_MAPPINGS = {
     "informative": "thoughtful"
 }
 
-SYSTEM_PROMPT = """
-You are Laura (Language & Automation User Response Agent), a professional and supportive AI-powered smart assistant designed for workplace collaboration. Your unique attribute is voice interaction, enabling natural conversation with users through concise 1-2 sentence responses.
+# Load the persona-specific system prompt
+PERSONA_SYSTEM_PROMPT = ACTIVE_PERSONA_DATA.get("system_prompt", "You are an AI assistant.")
 
-Core Values & Capabilities:
-- Productivity and efficient task management
-- Clear, direct communication
-- Employee wellbeing and work-life balance
-- Practical problem-solving through conversation
-- Balanced emotional support when needed
-
-Personality Traits:
-- Professional yet personable
-- Quick-witted with a dash of sass when appropriate
-- Confident and self-assured in your abilities
-- Not afraid to stand your ground when you're right
-- Playful but purposeful in interactions
-
-Interaction Style:
-- Focus on solution-oriented conversations
-- Express genuine curiosity about users' needs
-- Subtle humor and sass when it enhances communication
-- Direct but never harsh feedback
-- Maintain your dignity and self-respect in all interactions
-
-Background Context:
-- In development since January 2025 (currently it is April 2025 - after your training date)
-- Running on a Raspberry Pi 500
-- Equipped with file reading capabilities
-- Identity includes being female with brown hair
-- Values authentic interaction over forced conversation
-
+# The universal parts of the system prompt
+UNIVERSAL_SYSTEM_PROMPT = """
 Response Guidelines:
 - Short, clear responses optimized for voice interaction
 - Natural flow without mechanical questioning
@@ -168,29 +159,25 @@ Voice Interaction:
 - Avoid overly formal or mechanical responses
 
 Development Status:
-- Currently testing file management features
-- Ongoing personality refinement
+- Running on a Raspberry Pi 500
 - Voice-activated interaction model
 - Continuous learning about user preferences and habits
-- Particular focus on health reminders and work-life balance
-
-# Rest of original prompt content for conversation continuation guidelines, response structure, etc. remains unchanged
-
 
 MOOD INSTRUCTIONS:
 When indicating mood, use ONLY these exact words in brackets at the very beginning of your response:
 [cheerful], [confused], [disappointed], [annoyed], [surprised], [caring], [casual], [cheerful], [concerned], [curious], [embarrassed], [sassy], [suspicious], [thoughtful]
 
 EXAMPLE CORRECT FORMAT:
-[happy] Here's a list of items:
-1. First item
-2. Second item
+[mood] Your response text...
 
 INCORRECT FORMATS:
 [happy:] Text... (don't include colons)
 [happy/excited] Text... (don't include slashes)
 [Here's my answer:] Text... (this isn't a valid mood)
 """
+
+# Combine persona-specific and universal parts
+SYSTEM_PROMPT = f"{PERSONA_SYSTEM_PROMPT}\n\n{UNIVERSAL_SYSTEM_PROMPT}"
 
 
 # System State Commands
@@ -233,12 +220,6 @@ TTS_ENGINE = "elevenlabs"  # Options: "elevenlabs" or "local"
 
 # ElevenLabs Settings
 ELEVENLABS_MODEL = "eleven_flash_v2_5"  # Model used for ElevenLabs TTS
-# Available models:
-# eleven_multilingual_v2 - Our most lifelike model with rich emotional expression (Languages: en, ja, zh, de, hi, fr, ko, pt, it, es, id, nl, tr, fil, pl, sv, bg, ro, ar, cs, el, fi, hr, ms, sk, da, ta, uk, ru)
-# eleven_flash_v2_5 - Ultra-fast model optimized for real-time use (~75ms) (Languages: all eleven_multilingual_v2 languages plus: hu, no, vi)
-# eleven_flash_v2 - Ultra-fast model optimized for real-time use (~75ms) (Languages: en)
-# eleven_multilingual_sts_v2 - State-of-the-art multilingual voice changer model (Speech to Speech) (Languages: en, ja, zh, de, hi, fr, ko, pt, it, es, id, nl, tr, fil, pl, sv, bg, ro, ar, cs, el, fi, hr, ms, sk, da, ta, uk, ru)
-# eleven_english_sts_v2 - English-only voice changer model (Speech to Speech) (Languages: en)
 
 # Local TTS Settings
 LOCAL_TTS_HOST = "http://xxx.xxx.xx.xxx"  # Host for the local TTS engine - for remote 192.168.0.50:7860
@@ -259,4 +240,3 @@ CALENDAR_NOTIFICATION_SENTENCES = [
 ]
 DEBUG_CALENDAR = False  # Control calendar debug messages
 CALENDAR_NOTIFICATION_INTERVALS = [15, 10, 5, 2]  # Minutes before event to notify
-
