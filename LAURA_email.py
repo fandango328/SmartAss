@@ -13,7 +13,7 @@ import json
 import time
 import base64
 import struct
-import random 
+import random
 import asyncio
 import textwrap
 import threading
@@ -107,7 +107,7 @@ from config_cl import (
     VOICE_START_TIMEOUT,
     SYSTEM_PROMPT,
     SOUND_PATHS,
-    WAKE_WORDS, 
+    WAKE_WORDS,
     CALENDAR_NOTIFICATION_INTERVALS,
     DEBUG_CALENDAR,
     CHAT_LOG_MAX_TOKENS,
@@ -122,7 +122,7 @@ from config_cl import (
 #BASE_URL = "https://openrouter.ai/api/v1/chat/completions"  # This is for using openrouter, right now i have it configured to use anthropic for handling query
 AUDIO_FILE = "speech.mp3" #gets saved-to/overwritten by elevenlabs after each completed voice generation and delivery
 
-SCOPES = [  
+SCOPES = [
     "https://www.googleapis.com/auth/gmail.compose",
     "https://www.googleapis.com/auth/gmail.send",
     "https://www.googleapis.com/auth/gmail.labels",
@@ -134,14 +134,14 @@ SCOPES = [
     "https://www.googleapis.com/auth/calendar",
     "https://www.googleapis.com/auth/calendar.events",
     "https://www.googleapis.com/auth/calendar.readonly",
-    "https://www.googleapis.com/auth/tasks" 
+    "https://www.googleapis.com/auth/tasks"
 ]
 
 config = {
     "TTS_ENGINE": TTS_ENGINE,
     "ELEVENLABS_KEY": ELEVENLABS_KEY,
     "VOICE": VOICE,
-    "ELEVENLABS_MODEL": ELEVENLABS_MODEL, 
+    "ELEVENLABS_MODEL": ELEVENLABS_MODEL,
 }
 # Email importance configuration - update this with information about people you care about
 
@@ -156,7 +156,7 @@ class WhisperTranscriber:
         print(f"{Fore.YELLOW}Loading Whisper {model_size} model...{Fore.WHITE}")
         self.model = whisper.load_model(model_size)
         print(f"{Fore.GREEN}Whisper model loaded!{Fore.WHITE}")
-    
+
     def transcribe(self, audio_data, sample_rate=16000):
         """
         Transcribe audio data to text.
@@ -171,7 +171,7 @@ class WhisperTranscriber:
                 wav_file.setsampwidth(2)  # 16-bit
                 wav_file.setframerate(sample_rate)
                 wav_file.writeframes(np.array(audio_data).tobytes())
-            
+
             # Transcribe
             result = self.model.transcribe(
                 temp_file,
@@ -179,13 +179,13 @@ class WhisperTranscriber:
                 fp16=True,
                 initial_prompt="This is a voice command for a smart assistant"
             )
-            
+
             return result["text"].strip()
-        
+
         finally:
             if os.path.exists(temp_file):
                 os.remove(temp_file)
-    
+
     def cleanup(self):
         # Add any cleanup code here if needed
         pass
@@ -241,35 +241,35 @@ class RemoteTranscriber:
 
             # Get audio length
             audio_length = len(audio_data) / 160001
-        
+
             # NEW: For long audio, process immediately in chunks
             if audio_length > 15.0:
                 print(f"Processing {audio_length:.2f}s audio in parallel chunks")
                 chunk_size = 16000 * 10  # 10 second chunks
                 overlap = 16000 * 1      # 1 second overlap
-            
+
                 # Create tasks for all chunks
                 tasks = []
                 chunk_id = 0
-            
+
                 for start in range(0, len(audio_data), chunk_size - overlap):
                     chunk_id += 1
                     end = min(start + chunk_size, len(audio_data))
                     chunk = audio_data[start:end]
-                
+
                     # Skip chunks that are too short
                     if len(chunk) < 16000 * 2:  # At least 2 seconds
                         continue
-                
+
                     # Process each chunk as a separate task
                     task = asyncio.create_task(
                         self._process_chunk(chunk, chunk_id, chunk_id == 1)
                     )
                     tasks.append(task)
-            
+
                 # Wait for all chunks to complete
                 results = await asyncio.gather(*tasks)
-            
+
                 # Filter out None results and combine
                 valid_results = [r for r in results if r]
                 if valid_results:
@@ -278,11 +278,11 @@ class RemoteTranscriber:
                     return combined_text
                 else:
                     return None
-                
+
             else:
                 # For shorter audio, process normally
                 return await self._process_chunk(audio_data, 1, True)
-            
+
         except websockets.exceptions.ConnectionClosed as e:
             print(f"Connection closed unexpectedly: {e}")
             self.websocket = None
@@ -298,7 +298,7 @@ class RemoteTranscriber:
         try:
             chunk_length = len(audio_chunk) / 16000
             print(f"Processing chunk {chunk_id}: {chunk_length:.2f}s")
-        
+
             # Send chunk with timeout
             await asyncio.wait_for(
                 self.websocket.send(json.dumps({
@@ -309,22 +309,22 @@ class RemoteTranscriber:
                 })),
                 timeout=self.send_timeout
             )
-        
+
             # Get response with timeout
             response = await asyncio.wait_for(
                 self.websocket.recv(),
                 timeout=self.receive_timeout
             )
-        
+
             result = json.loads(response)
             if "error" in result:
                 print(f"Server error: {result['error']}")
                 return None
-            
+
             transcript = result["transcript"]
-        
+
             # Check for end phrases
-            if transcript: 
+            if transcript:
                 normalized_text = transcript.lower().strip()
                 end_phrases = [
                     "thank you for watching",
@@ -332,17 +332,17 @@ class RemoteTranscriber:
                     "thank you watching",
                     "thanks watching",
                 ]
-            
+
                 for phrase in end_phrases:
                     if phrase in normalized_text.replace('!', '').replace('.', '').replace(',', ''):
                         print(f"End phrase detected: {transcript}")
                         return None
-        
+
             if transcript and transcript.strip():
                 print(f"Chunk {chunk_id} result: {transcript}")
                 return transcript
             return None
-        
+
         except Exception as e:
             print(f"Error processing chunk {chunk_id}: {e}")
             return None
@@ -373,13 +373,13 @@ class TTSHandler:
         self.eleven = None
         if self.tts_engine == "elevenlabs":
             self.eleven = ElevenLabs(api_key=config["ELEVENLABS_KEY"])
-    
+
     def generate_audio(self, text):
         if self.tts_engine == "elevenlabs":
             return self._generate_elevenlabs(text)
         else:
             return self._generate_alltalk(text)
-    
+
     def _generate_elevenlabs(self, text):
         audio = b"".join(self.eleven.generate(
             text=text,
@@ -388,7 +388,7 @@ class TTSHandler:
             output_format="mp3_44100_128"  # Optional: specify output format
         ))
         return audio
-    
+
     def _generate_alltalk(self, text): #this function is needing to be redone and be api compliant.  Put this on my to-do list for later
         try:
             response = requests.post( #ignore for now
@@ -401,12 +401,12 @@ class TTSHandler:
                 timeout=30
             )
             response.raise_for_status()
-            
+
             if response.status_code == 200:
                 return response.content
             else:
                 raise Exception(f"AllTalk API error: {response.status_code} - {response.text}")
-                
+
         except requests.exceptions.RequestException as e:
             print(f"AllTalk API request failed: {str(e)}")
             if self.eleven:
@@ -441,7 +441,7 @@ system_manager_lock = asyncio.Lock()
 creds = None  # Global declaration
 try:
     webbrowser.register('chromium', None, webbrowser.Chrome('/usr/bin/chromium'))
-    
+
     if USE_GOOGLE:
         if os.path.exists("token.json"):
             try:
@@ -452,7 +452,7 @@ try:
                 if os.path.exists("token.json"):
                     os.remove("token.json")
                 creds = None
-        
+
         if not creds or not creds.valid:
             try:
                 if creds and creds.expired and creds.refresh_token:
@@ -465,27 +465,27 @@ try:
                     from requests_oauthlib import OAuth2Session
 
                     flow = InstalledAppFlow.from_client_secrets_file(
-                        "credentials.json", 
+                        "credentials.json",
                         scopes=SCOPES,
                     )
-                    
+
                     # Configure the session with offline access
                     session = OAuth2Session(
                         client_id=flow.client_config['client_id'],
                         scope=SCOPES,
                         redirect_uri='http://localhost:8080/'
                     )
-                    
+
                     # Update flow's session with our configured one
                     flow.oauth2session = session
-                    
+
                     # Generate authorization URL with offline access
                     auth_url, _ = flow.authorization_url(
                         access_type='offline',
                         include_granted_scopes='true',
                         prompt='consent'  # Force consent screen
                     )
-                    
+
                     print("Opening browser for authentication...")
                     creds = flow.run_local_server(
                         host='localhost',
@@ -495,7 +495,7 @@ try:
                         authorization_prompt_message="Please complete authentication in the opened browser window",
                         success_message="Authentication completed successfully. You may close this window."
                     )
-                    
+
                     print("\nDetailed Token Information:")
                     print(f"Valid: {creds.valid}")
                     print(f"Expired: {creds.expired}")
@@ -503,7 +503,7 @@ try:
                     if hasattr(creds, 'refresh_token'):
                         print(f"Refresh token value present: {bool(creds.refresh_token)}")
                         print(f"Token expiry: {creds.expiry}")
-                
+
                 if creds and creds.valid:
                     if not hasattr(creds, 'refresh_token') or not creds.refresh_token:
                         print("\nWARNING: No refresh token received!")
@@ -517,7 +517,7 @@ try:
                         print("Credentials saved successfully")
                 else:
                     print("Warning: Invalid credentials state")
-                    
+
             except Exception as e:
                 print(f"Error during Google authentication: {e}")
                 traceback.print_exc()
@@ -525,14 +525,12 @@ try:
                     os.remove("token.json")
                 creds = None
 
-email_manager = EmailManager(creds)  # Where creds is your Google credentials
-
 except Exception as e:
     print(f"Error setting up Google integration: {e}")
     traceback.print_exc()
     USE_GOOGLE = False
 
-
+email_manager = EmailManager(creds)  # Where creds is your Google credentials
 
 # =============================================================================
 # Core Component Initialization
@@ -545,7 +543,7 @@ try:
             transcriber = WhisperCppTranscriber(WHISPER_MODEL_PATH, VAD_SETTINGS)
     else:
         remote_transcriber = RemoteTranscriber()
-        
+
     audio_manager = AudioManager(PV_ACCESS_KEY if TRANSCRIPTION_MODE == "remote" else None)
     tts_handler = TTSHandler(config)
     anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY)
@@ -600,25 +598,25 @@ LAST_TASKS_RESULT = {
 def read_keyboard_events(device, max_events=5):
     """
     Read keyboard events in a non-blocking way with proper error handling.
-    
+
     Args:
         device: InputDevice instance
         max_events: Maximum number of events to read at once
-        
+
     Returns:
         list: Events read from device or empty list if none/error
     """
     if not device:
         return []
-        
+
     events = []
     try:
         # Use select with a very short timeout for non-blocking reads
         r, w, x = select.select([device.fd], [], [], 0)
-        
+
         if not r:
             return []  # No data available
-            
+
         # Read available events (up to max_events)
         for i in range(max_events):
             try:
@@ -628,10 +626,10 @@ def read_keyboard_events(device, max_events=5):
                 events.append(event)
             except BlockingIOError:
                 break  # No more events available
-                
+
     except (OSError, IOError) as e:
         print(f"Error reading keyboard: {e}")
-        
+
     return events
 def map_mood(mood):
     return MOOD_MAPPINGS.get(mood.lower(), "casual")
@@ -644,110 +642,110 @@ def verify_token_tracker_setup():
     print(f"System Prompt Status: {'Defined' if SYSTEM_PROMPT else 'Missing'}{Fore.WHITE}\n")
 
 
-def manage_tasks(action, title=None, notes=None, due_date=None, task_id=None, 
+def manage_tasks(action, title=None, notes=None, due_date=None, task_id=None,
                 status=None, max_results=10, list_id=None):
     """
     Manage Google Tasks - create, update, list, complete, or delete tasks
     """
     global LAST_TASKS_RESULT
-    
+
     try:
         # Build the Tasks API service
         service = build('tasks', 'v1', credentials=creds)
-        
+
         # Get default task list if not specified
         if not list_id:
             lists = service.tasklists().list().execute()
             list_id = lists['items'][0]['id'] if 'items' in lists else None
             if not list_id:
                 return "No task lists found. Please create a task list first."
-        
+
         # HANDLE DIFFERENT ACTIONS
-        
+
         # CREATE a new task
         if action == "create":
             if not title:
                 return "Task title is required for creating a task."
-                
+
             # Prepare the task data
             task_data = {
                 'title': title,
             }
-            
+
             if notes:
                 task_data['notes'] = notes
-                
+
             if due_date:
                 # Convert natural language dates to ISO format
                 parsed_date = parse_natural_date(due_date)
                 if parsed_date:
                     # Google Tasks API expects RFC 3339 timestamp
                     task_data['due'] = parsed_date.isoformat() + 'Z'  # UTC time
-            
+
             # Create the task
             result = service.tasks().insert(tasklist=list_id, body=task_data).execute()
-            
+
             return f"Task '{title}' has been created successfully."
-            
+
         # UPDATE an existing task
         elif action == "update":
             if not task_id:
                 return "Task ID is required for updating a task."
-                
+
             # Get the current task data
             task = service.tasks().get(tasklist=list_id, task=task_id).execute()
-            
+
             # Update the fields if provided
             if title:
                 task['title'] = title
-                
+
             if notes:
                 task['notes'] = notes
-                
+
             if due_date:
                 # Convert natural language dates to ISO format
                 parsed_date = parse_natural_date(due_date)
                 if parsed_date:
                     task['due'] = parsed_date.isoformat() + 'Z'  # UTC time
-            
+
             if status:
                 task['status'] = status
-                
+
             # Update the task
             result = service.tasks().update(tasklist=list_id, task=task_id, body=task).execute()
-            
+
             return f"Task '{task['title']}' has been updated successfully."
-            
+
         # COMPLETE a task
         elif action == "complete":
             if not task_id:
                 return "Task ID is required for completing a task."
-                
+
             # Get the current task data
             task = service.tasks().get(tasklist=list_id, task=task_id).execute()
-            
+
             # Mark as completed
             task['status'] = 'completed'
-            
+
             # Update the task
             result = service.tasks().update(tasklist=list_id, task=task_id, body=task).execute()
-            
+
             return f"Task '{task['title']}' has been marked as completed."
-            
+
         # DELETE a task
         elif action == "delete":
             if not task_id:
                 return "Task ID is required for deleting a task."
-                
+
             # Get the task title first for confirmation
             task = service.tasks().get(tasklist=list_id, task=task_id).execute()
             task_title = task.get('title', 'Unnamed task')
-            
+
             # Delete the task
             service.tasks().delete(tasklist=list_id, task=task_id).execute()
-            
+
             return f"Task '{task_title}' has been deleted."
-            
+
         # LIST tasks
         elif action == "list":
             # Get tasks
@@ -757,17 +755,17 @@ def manage_tasks(action, title=None, notes=None, due_date=None, task_id=None,
                 showCompleted=True,
                 showHidden=False
             ).execute()
-            
+
             tasks = tasks_result.get('items', [])
-            
+
             if not tasks:
                 return "No tasks found in this list."
-                
+
             # Store tasks for later reference
             processed_tasks = []
             upcoming_tasks = []
             completed_tasks = []
-            
+
             for task in tasks:
                 task_info = {
                     'id': task['id'],
@@ -775,32 +773,32 @@ def manage_tasks(action, title=None, notes=None, due_date=None, task_id=None,
                     'status': task.get('status', 'needsAction'),
                     'notes': task.get('notes', ''),
                 }
-                
+
                 # Parse due date if available
                 if 'due' in task:
                     due_date = datetime.fromisoformat(task['due'].replace('Z', '+00:00'))
                     task_info['due_date'] = due_date.strftime('%B %d, %Y')
                 else:
                     task_info['due_date'] = None
-                
+
                 processed_tasks.append(task_info)
-                
+
                 # Separate upcoming and completed tasks
                 if task_info['status'] == 'completed':
                     completed_tasks.append(task_info)
                 else:
                     upcoming_tasks.append(task_info)
-            
+
             # Store in global variable for future reference
             LAST_TASKS_RESULT = {
                 "tasks": processed_tasks,
                 "timestamp": datetime.now(),
                 "list_id": list_id
             }
-            
+
             # Format response for voice
             response = ""
-            
+
             if upcoming_tasks:
                 response += f"You have {len(upcoming_tasks)} upcoming tasks:\n\n"
                 for i, task in enumerate(upcoming_tasks, 1):
@@ -811,17 +809,17 @@ def manage_tasks(action, title=None, notes=None, due_date=None, task_id=None,
                         notes_preview = task['notes'][:50] + "..." if len(task['notes']) > 50 else task['notes']
                         response += f"   Note: {notes_preview}\n"
                 response += "\n"
-            
+
             if completed_tasks:
                 response += f"You also have {len(completed_tasks)} completed tasks.\n\n"
-            
+
             response += "You can ask me to create, update, complete, or delete specific tasks."
-            
+
             return response
-        
+
         else:
             return f"Unknown action: {action}. Please specify 'create', 'update', 'list', 'complete', or 'delete'."
-            
+
     except Exception as e:
         print(f"Error managing tasks: {e}")
         traceback.print_exc()
@@ -834,56 +832,56 @@ def create_task_from_email(email_id, title=None, due_date=None, priority="medium
     try:
         # Get email details using email_manager
         msg = email_manager.service.users().messages().get(
-            userId="me", 
+            userId="me",
             id=email_id,
             format="metadata"
         ).execute()
-        
+
         # Extract headers
-        headers = {header["name"].lower(): header["value"] 
+        headers = {header["name"].lower(): header["value"]
                   for header in msg["payload"]["headers"]}
-        
+
         # Get email subject and sender
         subject = headers.get("subject", "(No subject)")
         sender = headers.get("from", "").split("<")[0].strip()
-        
+
         # Create task title if not provided
         if not title:
             title = f"Email: {subject}"
-        
+
         # Create notes with email details
         notes = f"From: {sender}\nSubject: {subject}\nEmail ID: {email_id}\n\n"
         notes += f"Snippet: {msg.get('snippet', '')}\n\n"
-        
+
         # Add priority to notes
         if priority:
             notes += f"Priority: {priority.upper()}\n"
-        
+
         # Create the task
         tasks_service = build('tasks', 'v1', credentials=creds)
-        
+
         # Get default task list
         lists = tasks_service.tasklists().list().execute()
         list_id = lists['items'][0]['id'] if 'items' in lists else None
-        
+
         if not list_id:
             return "No task lists found. Please create a task list first."
-        
+
         # Prepare the task data
         task_data = {
             'title': title,
             'notes': notes
         }
-        
+
         if due_date:
             # Convert natural language dates to ISO format
             parsed_date = parse_natural_date(due_date)
             if parsed_date:
                 task_data['due'] = parsed_date.isoformat() + 'Z'  # UTC time
-        
+
         # Create the task
         result = tasks_service.tasks().insert(tasklist=list_id, body=task_data).execute()
-        
+
         # Mark the email as read and add a label if possible
         try:
             email_manager.service.users().messages().modify(
@@ -893,14 +891,14 @@ def create_task_from_email(email_id, title=None, due_date=None, priority="medium
             ).execute()
         except Exception as label_error:
             print(f"Warning: Could not modify email labels: {label_error}")
-        
+
         return f"Task '{title}' has been created from the email. The email has been marked as read and starred."
-        
+
     except Exception as e:
         print(f"Error creating task from email: {e}")
         traceback.print_exc()
         return f"Sorry, I encountered an error while trying to create a task from the email: {str(e)}"
-        
+
 def create_task_for_event(event_id, task_type="both", days_before=1, days_after=1, custom_titles=None):
     """
     Create preparation or follow-up tasks for a calendar event
@@ -908,104 +906,104 @@ def create_task_for_event(event_id, task_type="both", days_before=1, days_after=
     try:
         # Get event details
         calendar_service = build("calendar", "v3", credentials=creds)
-        
+
         event = calendar_service.events().get(calendarId='primary', eventId=event_id).execute()
-        
+
         event_title = event.get('summary', 'Unnamed event')
-        
+
         # Parse event start time
         if 'dateTime' in event['start']:
             start_time = datetime.fromisoformat(event['start']['dateTime'].replace('Z', '+00:00'))
         else:
             # All-day event
             start_time = datetime.fromisoformat(event['start']['date'])
-        
+
         # Get tasks service
         tasks_service = build('tasks', 'v1', credentials=creds)
-        
+
         # Get default task list
         lists = tasks_service.tasklists().list().execute()
         list_id = lists['items'][0]['id'] if 'items' in lists else None
-        
+
         if not list_id:
             return "No task lists found. Please create a task list first."
-        
+
         tasks_created = []
-        
+
         # Create preparation tasks
         if task_type in ["preparation", "both"]:
             prep_due_date = start_time - timedelta(days=days_before)
-            
+
             if custom_titles and len(custom_titles) > 0:
                 prep_title = custom_titles[0]
             else:
                 prep_title = f"Prepare for: {event_title}"
-            
+
             # Create notes with event details
             notes = f"Event: {event_title}\n"
             notes += f"Date: {start_time.strftime('%B %d, %Y at %I:%M %p')}\n"
             notes += f"Calendar Event ID: {event_id}\n\n"
-            
+
             if 'description' in event and event['description']:
                 notes += f"Event Description: {event['description'][:200]}...\n\n"
-                
+
             if 'location' in event and event['location']:
                 notes += f"Location: {event['location']}\n"
-                
+
             if 'attendees' in event and event['attendees']:
                 attendees = ", ".join([attendee.get('email', '') for attendee in event['attendees'][:5]])
                 notes += f"Attendees: {attendees}"
                 if len(event['attendees']) > 5:
                     notes += f" and {len(event['attendees']) - 5} more"
-            
+
             # Prepare the task data
             task_data = {
                 'title': prep_title,
                 'notes': notes,
                 'due': prep_due_date.isoformat() + 'Z'  # UTC time
             }
-            
+
             # Create the task
             prep_task = tasks_service.tasks().insert(tasklist=list_id, body=task_data).execute()
             tasks_created.append(prep_task['title'])
-        
+
         # Create follow-up tasks
         if task_type in ["follow_up", "both"]:
             followup_due_date = start_time + timedelta(days=days_after)
-            
+
             if custom_titles and len(custom_titles) > 1:
                 followup_title = custom_titles[1]
             else:
                 followup_title = f"Follow up on: {event_title}"
-            
+
             # Create notes with event details
             notes = f"Follow-up for event: {event_title}\n"
             notes += f"Original Date: {start_time.strftime('%B %d, %Y at %I:%M %p')}\n"
             notes += f"Calendar Event ID: {event_id}\n\n"
-            
+
             if 'attendees' in event and event['attendees']:
                 attendees = ", ".join([attendee.get('email', '') for attendee in event['attendees'][:5]])
                 notes += f"Attendees: {attendees}"
                 if len(event['attendees']) > 5:
                     notes += f" and {len(event['attendees']) - 5} more"
-            
+
             # Prepare the task data
             task_data = {
                 'title': followup_title,
                 'notes': notes,
                 'due': followup_due_date.isoformat() + 'Z'  # UTC time
             }
-            
+
             # Create the task
             followup_task = tasks_service.tasks().insert(tasklist=list_id, body=task_data).execute()
             tasks_created.append(followup_task['title'])
-        
+
         # Return success message
         if len(tasks_created) == 1:
             return f"Task '{tasks_created[0]}' has been created for the event."
         else:
             return f"Tasks have been created for the event: {', '.join(tasks_created)}."
-        
+
     except Exception as e:
         print(f"Error creating tasks for event: {e}")
         traceback.print_exc()
@@ -1018,18 +1016,18 @@ def parse_natural_date(date_str):
     try:
         # Try simple cases first
         now = datetime.now()
-        
+
         if date_str.lower() == "today":
             return datetime.combine(now.date(), datetime.min.time())
-            
+
         elif date_str.lower() == "tomorrow":
             return datetime.combine(now.date() + timedelta(days=1), datetime.min.time())
-            
+
         elif date_str.lower() == "next week":
             # Next Monday
             days_ahead = 7 - now.weekday()
             return datetime.combine(now.date() + timedelta(days=days_ahead), datetime.min.time())
-            
+
         # Try to parse as ISO format or other common formats
         try:
             if "T" in date_str:
@@ -1044,7 +1042,7 @@ def parse_natural_date(date_str):
                     "%d %B %Y",
                     "%d %b %Y"
                 ]
-                
+
                 for fmt in formats:
                     try:
                         return datetime.strptime(date_str, fmt)
@@ -1052,18 +1050,18 @@ def parse_natural_date(date_str):
                         continue
         except:
             pass
-        
+
         # Fall back to more sophisticated parsing if needed
         # In a production environment, you might use libraries like dateparser
         # For this implementation, we'll just handle the most common cases
-        
+
         return None
-        
+
     except Exception as e:
         print(f"Error parsing date '{date_str}': {e}")
         return None
 
-def manage_contacts(action, name=None, email=None, phone=None, company=None, 
+def manage_contacts(action, name=None, email=None, phone=None, company=None,
                    relationship=None, importance=None, query=None):
     """
     Manage contacts using Google People API with enhanced metadata
@@ -1071,30 +1069,30 @@ def manage_contacts(action, name=None, email=None, phone=None, company=None,
     try:
         # Build the People API service
         service = build('people', 'v1', credentials=creds)
-        
+
         # Load custom metadata
         metadata = load_contact_metadata()
-        
+
         if action == "create":
             if not name or not email:
                 return "Name and email are required to create a contact."
-                
+
             # Create the contact in Google
             contact_body = {
                 "names": [{"givenName": name}],
                 "emailAddresses": [{"value": email}]
             }
-            
+
             if phone:
                 contact_body["phoneNumbers"] = [{"value": phone}]
-                
+
             if company:
                 contact_body["organizations"] = [{"name": company}]
-            
+
             result = service.people().createContact(
                 body=contact_body
             ).execute()
-            
+
             # Store custom metadata
             if relationship or importance:
                 metadata[email] = {
@@ -1102,47 +1100,47 @@ def manage_contacts(action, name=None, email=None, phone=None, company=None,
                     "importance": importance
                 }
                 save_contact_metadata(metadata)
-            
+
             return f"Contact for {name} ({email}) has been created successfully."
-            
+
         elif action == "search":
             if not query:
                 return "Search query is required."
-                
+
             # Search Google Contacts
             results = service.people().searchContacts(
                 query=query,
                 readMask="names,emailAddresses,phoneNumbers,organizations"
             ).execute()
-            
+
             connections = results.get("results", [])
-            
+
             if not connections:
                 return f"No contacts found matching '{query}'."
-                
+
             # Format results for voice response
             response = f"I found {len(connections)} contacts matching '{query}':\n\n"
-            
+
             for i, person in enumerate(connections, 1):
                 person_data = person.get("person", {})
-                
+
                 # Extract name
                 names = person_data.get("names", [])
                 name = names[0].get("displayName", "Unnamed") if names else "Unnamed"
-                
+
                 # Extract email
                 emails = person_data.get("emailAddresses", [])
                 email = emails[0].get("value", "No email") if emails else "No email"
-                
+
                 # Extract company
                 orgs = person_data.get("organizations", [])
                 company = orgs[0].get("name", "") if orgs else ""
-                
+
                 # Get custom metadata
                 meta = metadata.get(email, {})
                 importance = meta.get("importance", "")
                 relationship = meta.get("relationship", "")
-                
+
                 # Format entry
                 response += f"{i}. {name} - {email}\n"
                 if company:
@@ -1152,9 +1150,9 @@ def manage_contacts(action, name=None, email=None, phone=None, company=None,
                 if importance:
                     response += f"   Importance: {importance}\n"
                 response += "\n"
-            
+
             return response
-            
+
         elif action == "list":
             # List contacts from Google
             results = service.people().connections().list(
@@ -1162,95 +1160,95 @@ def manage_contacts(action, name=None, email=None, phone=None, company=None,
                 pageSize=100,
                 personFields='names,emailAddresses,organizations'
             ).execute()
-            
+
             connections = results.get('connections', [])
-            
+
             if not connections:
                 return "You don't have any contacts saved."
-                
+
             # Group by importance if available
             important_contacts = []
             regular_contacts = []
-            
+
             for person in connections:
                 # Extract name
                 names = person.get("names", [])
                 name = names[0].get("displayName", "Unnamed") if names else "Unnamed"
-                
+
                 # Extract email
                 emails = person.get("emailAddresses", [])
                 email = emails[0].get("value", "") if emails else ""
-                
+
                 if not email:
                     continue
-                
+
                 # Get metadata
                 meta = metadata.get(email, {})
                 importance = meta.get("importance", "")
-                
+
                 contact_info = {
                     "name": name,
                     "email": email,
                     "importance": importance
                 }
-                
+
                 if importance == "high":
                     important_contacts.append(contact_info)
                 else:
                     regular_contacts.append(contact_info)
-            
+
             # Format response
             response = ""
-            
+
             if important_contacts:
                 response += f"You have {len(important_contacts)} important contacts:\n\n"
                 for contact in important_contacts:
                     response += f"- {contact['name']} ({contact['email']})\n"
                 response += "\n"
-                
+
             response += f"You have {len(regular_contacts)} other contacts."
-            
+
             if len(connections) > 10:
                 response += " You can ask me to search for specific contacts if needed."
-            
+
             return response
-            
+
         elif action == "get":
             if not email:
                 return "Email address is required to get contact details."
-                
+
             # Search for the contact
             results = service.people().searchContacts(
                 query=email,
                 readMask="names,emailAddresses,phoneNumbers,organizations,addresses"
             ).execute()
-            
+
             connections = results.get("results", [])
-            
+
             if not connections:
                 return f"No contact found with email '{email}'."
-                
+
             person_data = connections[0].get("person", {})
-            
+
             # Extract details
             names = person_data.get("names", [])
             name = names[0].get("displayName", "Unnamed") if names else "Unnamed"
-            
+
             phones = person_data.get("phoneNumbers", [])
             phone = phones[0].get("value", "No phone") if phones else "No phone"
-            
+
             orgs = person_data.get("organizations", [])
             company = orgs[0].get("name", "No company") if orgs else "No company"
             title = orgs[0].get("title", "") if orgs else ""
-            
+
             addresses = person_data.get("addresses", [])
             address = addresses[0].get("formattedValue", "No address") if addresses else "No address"
-            
+
             # Get metadata
             meta = metadata.get(email, {})
             importance = meta.get("importance", "")
             relationship = meta.get("relationship", "")
-            
+
             # Format response
             response = f"Contact details for {name}:\n\n"
             response += f"Email: {email}\n"
@@ -1265,43 +1263,43 @@ def manage_contacts(action, name=None, email=None, phone=None, company=None,
                 response += f"Importance: {importance}\n"
             if address != "No address":
                 response += f"Address: {address}\n"
-            
+
             return response
-            
+
         elif action == "update":
             if not email:
                 return "Email address is required to update a contact."
-                
+
             # Search for the contact first
             results = service.people().searchContacts(
                 query=email,
                 readMask="names,emailAddresses,phoneNumbers,organizations,addresses"
             ).execute()
-            
+
             connections = results.get("results", [])
-            
+
             if not connections:
                 return f"No contact found with email '{email}'."
-                
+
             person_data = connections[0].get("person", {})
             resource_name = person_data.get("resourceName")
-            
+
             # Prepare fields to update
             update_person_fields = []
             contact_body = {}
-            
+
             if name:
                 contact_body["names"] = [{"givenName": name}]
                 update_person_fields.append("names")
-                
+
             if phone:
                 contact_body["phoneNumbers"] = [{"value": phone}]
                 update_person_fields.append("phoneNumbers")
-                
+
             if company:
                 contact_body["organizations"] = [{"name": company}]
                 update_person_fields.append("organizations")
-            
+
             # Update Google contact if we have standard fields
             if update_person_fields:
                 result = service.people().updateContact(
@@ -1309,28 +1307,28 @@ def manage_contacts(action, name=None, email=None, phone=None, company=None,
                     updatePersonFields=','.join(update_person_fields),
                     body=contact_body
                 ).execute()
-            
+
             # Update metadata
             updated_meta = False
             if email not in metadata:
                 metadata[email] = {}
-                
+
             if relationship:
                 metadata[email]["relationship"] = relationship
                 updated_meta = True
-                
+
             if importance:
                 metadata[email]["importance"] = importance
                 updated_meta = True
-                
+
             if updated_meta:
                 save_contact_metadata(metadata)
-            
+
             return f"Contact information for {name or email} has been updated successfully."
-        
+
         else:
             return f"Unknown action: {action}. Please specify 'get', 'create', 'update', 'list', or 'search'."
-            
+
     except Exception as e:
         print(f"Error managing contacts: {e}")
         traceback.print_exc()
@@ -1345,13 +1343,13 @@ def load_contact_metadata():
             with open(metadata_file, "w") as f:
                 json.dump({}, f)
             return {}
-            
+
         with open(metadata_file, "r") as f:
             return json.load(f)
     except Exception as e:
         print(f"Error loading contact metadata: {e}")
         return {}
-        
+
 def save_contact_metadata(metadata):
     """Save custom contact metadata to JSON file"""
     try:
@@ -1364,13 +1362,13 @@ def estimate_tokens(message):
     """
     Quickly estimate token count for chat log management without API calls.
     Used for log trimming and context loading operations.
-    
+
     Args:
         message: Either a message dictionary or string content
-        
+
     Returns:
         int: Estimated token count
-        
+
     Note:
         - This is an estimation function for internal log management
         - Uses character-based approximation (4 chars ≈ 1 token)
@@ -1380,23 +1378,23 @@ def estimate_tokens(message):
         # Handle dictionary messages (typical chat format)
         if isinstance(message, dict):
             content = message.get("content", "")
-            
+
             # Handle tool messages with multiple content blocks
             if isinstance(content, list):
                 # Sum up the length of each content block
                 total_chars = sum(len(str(block)) for block in content)
                 return total_chars // 4
-            
+
             # Regular message content
             return len(str(content)) // 4
-            
+
         # Handle direct string input
         if isinstance(message, str):
             return len(message) // 4
-            
+
         # Handle any other type by converting to string
         return len(str(message)) // 4
-        
+
     except Exception as e:
         print(f"Warning: Error in token estimation: {e}")
         return 0  # Safe fallback
@@ -1404,15 +1402,15 @@ def estimate_tokens(message):
 def trim_chat_log(log, max_tokens=None):
     if not max_tokens:
         max_tokens = CHAT_LOG_MAX_TOKENS
-        
+
     if len(log) < 2:  # Need at least one pair
         return []
-        
+
     # Verify we start and end with complete pairs
     if len(log) % 2 != 0:
         print("WARNING: Odd number of messages in chat_log, trimming unpaired message")
         log = log[:-1] if log[-1]["role"] == "user" else log[1:]
-    
+
     # Verify first and last messages are correct roles
     if log[0]["role"] != "user" or log[-1]["role"] != "assistant":
         print("WARNING: Chat log does not have correct role sequence")
@@ -1421,19 +1419,19 @@ def trim_chat_log(log, max_tokens=None):
             if log[i]["role"] == "user" and log[i+1]["role"] == "assistant":
                 log = log[i:]
                 break
-    
+
     # Now process complete pairs from newest to oldest
     result = []
     current_size = 0
-    
+
     # Work backwards in pairs
     for i in range(len(log)-2, -1, -2):
         assistant_msg = log[i+1]
         user_msg = log[i]
-        
+
         # Calculate tokens for this pair
         pair_tokens = token_tracker.count_message_tokens([user_msg, assistant_msg])
-        
+
         if current_size + pair_tokens <= max_tokens:
             # Insert pair at start (maintaining order)
             result.insert(0, assistant_msg)
@@ -1441,16 +1439,16 @@ def trim_chat_log(log, max_tokens=None):
             current_size += pair_tokens
         else:
             break
-    
+
     return result
 
 def save_to_log_file(message: Dict[str, Any]) -> None:
     """
     Save a message to the daily chat log JSON file.
-    
+
     This function takes a message dictionary with 'role' and 'content',
     adds a timestamp, and appends it to the daily chat log JSON file.
-    
+
     Args:
         message (dict): The message to save, containing 'role' and 'content' keys
     """
@@ -1459,17 +1457,17 @@ def save_to_log_file(message: Dict[str, Any]) -> None:
     # Create the filename based on today's date (YYYY-MM-DD format)
     today = datetime.now().strftime("%Y-%m-%d")
     log_file = os.path.join(CHAT_LOG_DIR, f"chat_log_{today}.json")
-    
+
     # Create the directory if it doesn't exist
     os.makedirs(CHAT_LOG_DIR, exist_ok=True)
-    
+
     # Create the log entry by copying the message and adding a timestamp
     log_entry = {
         "role": message["role"],
         "content": message["content"],
         "timestamp": datetime.now().isoformat()
     }
-    
+
     # Read existing logs from the file
     logs = []
     if os.path.exists(log_file):
@@ -1485,18 +1483,18 @@ def save_to_log_file(message: Dict[str, Any]) -> None:
                 print(f"Corrupted file backed up to: {backup_file}")
             except Exception as e:
                 print(f"Failed to backup corrupted file: {e}")
-    
+
     # Append the new log entry to the existing logs
     logs.append(log_entry)
-    
+
     # Create a temporary file to write to (for atomic write)
     tmp_file = f"{log_file}.tmp"
-    
+
     try:
         # Write the updated logs to the temporary file
         with open(tmp_file, "w") as f:
             json.dump(logs, f, indent=2)
-        
+
         # Rename the temporary file to the actual log file (atomic operation)
         os.replace(tmp_file, log_file)
     except Exception as e:
@@ -1508,11 +1506,11 @@ def save_to_log_file(message: Dict[str, Any]) -> None:
             except Exception as cleanup_error:
                 print(f"Failed to cleanup temp file: {cleanup_error}")
         raise
-        
+
 def get_chat_messages_for_api():
     """
     Retrieve clean message history for API calls
-    
+
     Returns:
         list: Messages formatted for API use
     """
@@ -1520,7 +1518,7 @@ def get_chat_messages_for_api():
     log_dir = os.path.join(CHAT_LOG_DIR, "conversation")
     today = datetime.now().strftime("%Y-%m-%d")
     log_file = f"{log_dir}/chat_log_{today}.json"
-    
+
     if os.path.exists(log_file):
         try:
             with open(log_file, "r") as f:
@@ -1528,8 +1526,8 @@ def get_chat_messages_for_api():
                 messages = [entry["api_message"] for entry in logs]
         except Exception as e:
             print(f"Error reading chat log: {e}")
-    
-    return messages        
+
+    return messages
 
 def load_recent_context(token_limit=None):
     """Load recent conversation context from log files, filtering out system commands"""
@@ -1543,13 +1541,13 @@ def load_recent_context(token_limit=None):
     files = sorted(glob.glob(f"{log_dir}/chat_log_*.json"), reverse=True)[:2]
     filtered_messages = []
     current_tokens = 0
-    
+
     # Process from newest to oldest
     for file in files:
         try:
             with open(file, "r") as f:
                 logs = json.load(f)
-            
+
             # Process messages from newest to oldest
             for log_entry in reversed(logs):
                 # Handle both old and new format
@@ -1568,40 +1566,40 @@ def load_recent_context(token_limit=None):
                 # Ensure message has required fields and non-empty content
                 content = message.get("content", "").strip()
                 role = message.get("role")
-                
+
                 if not content or not role:  # Skip empty messages
                     continue
-                
+
                 formatted_message = {
                     "role": role,
                     "content": content
                 }
-                
+
                 # Skip system commands by checking content
                 content_lower = content.lower()
-                
+
                 # Skip if it's a system command
                 is_system_command = False
-                
+
                 # Check document commands
                 for action in SYSTEM_STATE_COMMANDS["document"]:
-                    if any(cmd.lower() in content_lower 
+                    if any(cmd.lower() in content_lower
                           for cmd in SYSTEM_STATE_COMMANDS["document"][action]):
                         is_system_command = True
                         break
-                
+
                 # Check tool commands
                 for action in SYSTEM_STATE_COMMANDS["tool"]:
-                    if any(cmd.lower() in content_lower 
+                    if any(cmd.lower() in content_lower
                           for cmd in SYSTEM_STATE_COMMANDS["tool"][action]):
                         is_system_command = True
                         break
-                
+
                 # Check voice calibration
                 if ("voice" in content_lower or "boys" in content_lower) and \
                    any(word in content_lower for word in ["calibrat", "detect"]):
                     is_system_command = True
-                
+
                 if not is_system_command:
                     # Count tokens using properly formatted message
                     msg_tokens = token_tracker.count_message_tokens([formatted_message])
@@ -1610,7 +1608,7 @@ def load_recent_context(token_limit=None):
                         current_tokens += msg_tokens
                     else:
                         break
-                        
+
         except Exception as e:
             print(f"Error loading from {file}: {e}")
             continue
@@ -1626,14 +1624,14 @@ async def handle_system_command(transcript):
     try:
         # Check if command matches any system patterns
         is_command, command_type, action = system_manager.detect_command(transcript)
-        
+
         if is_command:
             # Execute the command through system manager
             success = await system_manager.handle_command(command_type, action)
             return success
-            
+
         return False
-        
+
     except Exception as e:
         print(f"Error handling system command: {e}")
         print(f"Traceback: {traceback.format_exc()}")
@@ -1643,16 +1641,16 @@ async def process_response_content(content):
     """
     Process API response content for voice generation and chat log storage.
     Handles mood detection, content formatting, and ensures complete message processing.
-    
+
     Args:
         content: Raw response from API (can be str or structured content blocks)
     Returns:
         str: Formatted message ready for voice generation
     """
     global chat_log
-    
+
     print("DEBUG - Starting response content processing")
-    
+
     # Step 1: Parse content into usable text
     if isinstance(content, str):
         text = content
@@ -1662,30 +1660,30 @@ async def process_response_content(content):
         for content_block in content:
             if hasattr(content_block, 'type') and content_block.type == "text":
                 text += content_block.text
-        
+
         if not text:
             print("DEBUG - No valid text content found")
             return "No valid response content"
-    
+
     print(f"DEBUG - Full response text:\n{text}\n")
-    
+
     # Step 2: Format message for voice generation BEFORE mood extraction
     # Convert all formatting to natural speech patterns
     formatted_message = text
-    
+
     # Convert all newlines to spaces for continuous speech
     formatted_message = formatted_message.replace('\n', ' ')
-    
+
     # Convert list markers to natural speech transitions
     formatted_message = re.sub(r'(\d+)\.\s*', r'Number \1: ', formatted_message)
     formatted_message = re.sub(r'^\s*-\s*', 'Also, ', formatted_message)
-    
+
     # Clean up any multiple spaces from formatting
     formatted_message = re.sub(r'\s+', ' ', formatted_message)
-    
+
     # Add natural pauses after sentences
     formatted_message = re.sub(r'(?<=[.!?])\s+(?=[A-Z])', '. ', formatted_message)
-    
+
     # Step 3: Parse mood from the formatted message
     # Using [\s\S]* to capture ALL content including newlines
     mood_match = re.match(r'^\[(.*?)\]([\s\S]*)', formatted_message, re.IGNORECASE)
@@ -1696,46 +1694,46 @@ async def process_response_content(content):
         if mapped_mood:
             await display_manager.update_display('speaking', mood=mapped_mood)
             print(f"DEBUG - Mood detected: {mapped_mood}")
-            
+
         # Save the formatted message with mood to logs
         assistant_message = {"role": "assistant", "content": formatted_message}
         chat_log.append(assistant_message)
-        
+
         # Save to persistent storage with mood intact
         print(f"DEBUG ASSISTANT MESSAGE: {type(assistant_message)} - {assistant_message}")
         print(f"DEBUG ASSISTANT CONTENT: {type(assistant_message['content'])} - {formatted_message[:100]}")
         save_to_log_file(assistant_message)
-        
+
         # Now strip mood for voice generation
         formatted_message = clean_message
     else:
         clean_message = formatted_message
         print("DEBUG - No mood detected in message")
-        
+
         # Save the formatted message to logs
         assistant_message = {"role": "assistant", "content": formatted_message}
         chat_log.append(assistant_message)
         save_to_log_file(assistant_message)
-    
+
     # Final cleanup for voice generation
     formatted_message = formatted_message.strip()
-    
+
     print(f"DEBUG - Formatted message for voice (full):\n{formatted_message}\n")
     print(f"DEBUG - Assistant response added to chat_log and saved to file")
     print(f"DEBUG - Chat_log now has {len(chat_log)} messages")
-    
+
     return formatted_message
 
 async def generate_response(query):
     global chat_log, last_interaction, last_interaction_check, token_tracker
-    
-    now = datetime.now()    
+
+    now = datetime.now()
     last_interaction = now
     last_interaction_check = now
     token_tracker.start_interaction()
-    
+
     query_lower = query.lower().strip()
-    
+
     # In generate_response, modify the tool command section:
     try:
         was_command, command_response = token_tracker.handle_tool_command(query)
@@ -1743,7 +1741,7 @@ async def generate_response(query):
             success = command_response.get('success', False)
             mood = command_response.get('mood', 'casual')
             await display_manager.update_display('speaking', mood=mood if success else 'disappointed')
-            
+
             # Add this block for tool status audio
             if command_response.get('state') in ['enabled', 'disabled']:
                 # Play appropriate audio based on state
@@ -1753,7 +1751,7 @@ async def generate_response(query):
                     await audio_manager.play_audio(audio_file)
                     await audio_manager.wait_for_audio_completion()  # Wait for audio to complete
                     await display_manager.update_display('listening')  # EXPLICITLY set to listening
-                
+
             return "[CONTINUE]"  # Still return [CONTINUE] but audio will play first
     except Exception as e:
         print(f"Error handling tool command: {e}")
@@ -1763,18 +1761,18 @@ async def generate_response(query):
         "role": "user",
         "content": query
     }
-    
+
     # ALWAYS save to log file, regardless of duplication status
     save_to_log_file(storage_message)
     print(f"DEBUG - ALWAYS saving user message to log file: {query[:30]}...")
-    
+
     # Only add to chat_log if not already there
     already_added = (
-        len(chat_log) > 0 and 
-        chat_log[-1]["role"] == "user" and 
+        len(chat_log) > 0 and
+        chat_log[-1]["role"] == "user" and
         chat_log[-1]["content"] == query
     )
-    
+
     if not already_added:
         chat_log.append(storage_message)
         print(f"DEBUG - Added user message to chat_log: {query[:30]}...")
@@ -1785,7 +1783,7 @@ async def generate_response(query):
         # Check if tools are enabled and get relevant tools
         use_tools = token_tracker.tools_are_active()
         relevant_tools = []
-        
+
         if use_tools:
             tools_needed, relevant_tools = token_tracker.get_tools_for_query(query)
             print(f"DEBUG: Tools needed: {tools_needed}, Found {len(relevant_tools)} relevant tools")
@@ -1795,7 +1793,7 @@ async def generate_response(query):
 
         # Prepare system content with documents
         system_content = SYSTEM_PROMPT
-        
+
         # Add document content to system prompt if available
         if document_manager and document_manager.files_loaded:
             loaded_content = document_manager.get_loaded_content()
@@ -1813,7 +1811,7 @@ async def generate_response(query):
                 print("\nDEBUG - Including images in API call")
                 api_message_content = loaded_content["image_content"]
                 api_message_content.append({"type": "text", "text": query})
-                
+
                 # Update or append the message
                 if sanitized_messages and sanitized_messages[-1]["role"] == "user":
                     sanitized_messages[-1]["content"] = api_message_content
@@ -1873,11 +1871,11 @@ async def generate_response(query):
         response = None
         try:
             response = anthropic_client.messages.create(**api_params)
-            
+
             try:
                 # Get input token count from the API response itself
                 input_count = response.usage.input_tokens if hasattr(response, 'usage') else token_tracker.count_message_tokens(chat_log)
-                
+
                 # Get the response text with better error handling
                 response_text = ""
                 if not response.content:  # Check for empty content first
@@ -1886,31 +1884,31 @@ async def generate_response(query):
                     response = anthropic_client.messages.create(**api_params)
                     if not response.content:
                         raise Exception("API returned empty content list even after retry")
-                
+
                 if isinstance(response.content, list):
                     for block in response.content:
                         if hasattr(block, 'text'):
                             response_text += block.text
                 else:
                     response_text = response.content.text if hasattr(response.content, 'text') else str(response.content)
-                
+
                 # Let token_tracker handle output token counting just once
                 token_tracker.update_session_costs(
-                    input_count, 
-                    response_text,  
+                    input_count,
+                    response_text,
                     use_tools and len(relevant_tools) > 0
                 )
-                
+
                 print(f"DEBUG: Input tokens from API: {input_count}")
 
             except Exception as token_err:
                 print(f"Token counting error: {token_err}")
                 raise  # Re-raise to ensure proper error handling
-                
+
         except Exception as api_err:
             print(f"API call error: {api_err}")
             raise  # Re-raise to be caught by outer exception handler
-            
+
         # Make sure response was obtained
         if not response:
             raise Exception("Failed to get API response")
@@ -1919,23 +1917,23 @@ async def generate_response(query):
         if response.stop_reason == "tool_use":
             print(f"DEBUG: Tool use detected! Tools active: {token_tracker.tools_are_active()}")
             await display_manager.update_display('tools')
-            
+
             # Use context-aware tool audio
             tool_audio = get_random_audio('tool', 'use')
             if tool_audio:
                 await audio_manager.play_audio(tool_audio)
             else:
                 print("WARNING: No tool audio files found, skipping audio")
-        
+
             print("DEBUG: Adding assistant response to chat log with content types:")
             for block in response.content:
                 print(f"  - Block type: {block.type}, ID: {getattr(block, 'id', 'no id')}")
-            
+
             chat_log.append({
                 "role": "assistant",
                 "content": [block.model_dump() for block in response.content],
             })
-            
+
             # Tool execution section
             tool_results = []
             for content_block in response.content:
@@ -1944,18 +1942,18 @@ async def generate_response(query):
                     print(f"Processing tool call: {tool_call.name}")
                     print(f"DEBUG: Processing tool call: {tool_call.name} with ID: {tool_call.id}")
                     print(f"DEBUG: Tool args: {tool_call.input}")
-        
+
                     tool_args = tool_call.input
                     tool_response = None
-                    
+
                     try:
-						# Execute the appropriate tool function based on the tool name
-						if tool_call.name == "draft_email":
-								tool_response = email_manager.draft_email(**tool_args)
-						elif tool_call.name == "read_emails":
-								tool_response = email_manager.read_emails(**tool_args)
-						elif tool_call.name == "email_action":
-								tool_response = email_manager.email_action(**tool_args)
+                        # Execute the appropriate tool function based on the tool name
+                        if tool_call.name == "draft_email":
+                            tool_response = email_manager.draft_email(**tool_args)
+                        elif tool_call.name == "read_emails":
+                            tool_response = email_manager.read_emails(**tool_args)
+                        elif tool_call.name == "email_action":
+                            tool_response = email_manager.email_action(**tool_args)
                         elif tool_call.name == "manage_tasks":
                             tool_response = manage_tasks(**tool_args)
                         elif tool_call.name == "create_task_from_email":
@@ -1973,8 +1971,8 @@ async def generate_response(query):
                                         tool_response = update_calendar_event(**tool_args)
                                     else:
                                         event_list = "\n".join([
-                                            f"{i+1}. {event['summary']} ({event['start_formatted']})"
-                                            for i, event in enumerate(matching_events)
+                                                f"{i+1}. {event['summary']} ({event['start_formatted']})"
+                                                for i, event in enumerate(matching_events)
                                         ])
                                         tool_response = f"I found multiple matching events:\n\n{event_list}\n\nPlease specify which event you'd like to update."
                                 else:
@@ -1991,8 +1989,8 @@ async def generate_response(query):
                                         tool_response = cancel_calendar_event(**tool_args)
                                     else:
                                         event_list = "\n".join([
-                                            f"{i+1}. {event['summary']} ({event['start_formatted']})"
-                                            for i, event in enumerate(matching_events)
+                                                f"{i+1}. {event['summary']} ({event['start_formatted']})"
+                                                for i, event in enumerate(matching_events)
                                         ])
                                         tool_response = f"I found multiple matching events:\n\n{event_list}\n\nPlease specify which event you'd like to cancel."
                                 else:
@@ -2008,7 +2006,7 @@ async def generate_response(query):
                                 tool_response = "Unsupported query type"
                         elif tool_call.name == "calibrate_voice_detection":
                             calibration_success = await run_vad_calibration()
-                            
+
                             if calibration_success:
                                 tool_response = "Voice detection calibration completed successfully. Your microphone settings have been optimized."
                             else:
@@ -2021,22 +2019,22 @@ async def generate_response(query):
                             tool_response = get_current_time(**tool_args)
                         else:
                             tool_response = "Unsupported tool called"
-                            
+
                         # Record successful tool usage
                         token_tracker.record_tool_usage(tool_call.name)
-                        
+
                     except Exception as e:
                         print(f"DEBUG: Tool execution error: {e}")
                         tool_response = f"Error executing tool: {str(e)}"
-                    
+
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": tool_call.id,
                         "content": tool_response
                     })
-                    
+
                     print(f"\nFinished tool call: {tool_call.name}")
-            
+
             # Process tool results
             if tool_results:
                 print("DEBUG: Adding tool results to chat log:")
@@ -2046,7 +2044,7 @@ async def generate_response(query):
                     "role": "user",
                     "content": tool_results
                 })
-                
+
                 try:
                     print("\nDEBUG: Chat log structure before final API call:")
                     for i, message in enumerate(chat_log[-3:]):  # Just show last 3 messages
@@ -2067,12 +2065,12 @@ async def generate_response(query):
                         max_tokens=1024,
                         temperature=0.7
                     )
-                    
+
                     # Token tracking for tool response - separate try block to isolate errors
                     try:
                         tool_messages = chat_log[-2:] if len(chat_log) >= 2 else chat_log
                         tool_input_count = token_tracker.count_message_tokens(tool_messages)
-                        
+
                         # Extract text from final response TextBlock
                         final_response_text = ""
                         if isinstance(final_response.content, list):
@@ -2081,7 +2079,7 @@ async def generate_response(query):
                                     final_response_text += block.text
                         else:
                             final_response_text = final_response.content.text if hasattr(final_response.content, 'text') else str(final_response.content)
-                        
+
                         token_tracker.update_session_costs(
                             tool_input_count,
                             final_response_text,  # Changed to pass actual text
@@ -2090,42 +2088,42 @@ async def generate_response(query):
                         # Can use these values if needed, or just ignore them with _ variables
                     except Exception as token_err:
                         print(f"Token tracking error in tool response: {token_err}")
-                
+
                     # Process the final response content
                     if hasattr(final_response, 'error'):
                         error_msg = f"Sorry, there was an error processing the tool response: {final_response.error}"
                         print(f"API Error in tool response: {final_response.error}")
                         await display_manager.update_display('speaking', mood='casual')
                         return error_msg
-                
+
                     return await process_response_content(final_response.content)
                 except Exception as final_api_err:
                     print(f"Error in final response after tool use: {final_api_err}")
                     await display_manager.update_display('speaking', mood='casual')
                     return f"Sorry, there was an error after using tools: {str(final_api_err)}"
-        
+
         else:
             print(f"DEBUG: Returning response. Tools active: {token_tracker.tools_are_active()}, Tools used in session: {token_tracker.tools_used_in_session}")
-            
+
             try:
                 # Process the response content
                 formatted_response = await process_response_content(response.content)
-                
+
                 # Debug logging
                 print(f"DEBUG - Response processed:")
                 print(f"  Type: {type(formatted_response)}")
                 print(f"  Length: {len(formatted_response) if isinstance(formatted_response, str) else 'N/A'}")
                 print(f"  Preview: {formatted_response[:100] if isinstance(formatted_response, str) else formatted_response}")
-                
+
                 return formatted_response
-                
+
             except Exception as process_error:
                 print(f"Error processing response content: {process_error}")
                 traceback.print_exc()
-                return "Sorry, there was an error processing the response"    
-            
+                return "Sorry, there was an error processing the response"
+
     except (APIError, APIConnectionError, BadRequestError, InternalServerError) as e:
-        error_msg = ("I apologize, but the service is temporarily overloaded. Please try again in a moment." 
+        error_msg = ("I apologize, but the service is temporarily overloaded. Please try again in a moment."
                     if "overloaded" in str(e).lower() else f"Sorry, there was a server error: {str(e)}")
         print(f"Anthropic API Error: {e}")
         if "tool_use_id" in str(e) and "tool_result" in str(e):
@@ -2133,7 +2131,7 @@ async def generate_response(query):
             chat_log = sanitize_tool_interactions(chat_log)
             token_tracker.disable_tools()  # Force disable tools
             error_msg = "I encountered an issue with a previous tool operation. I've resolved it and disabled tools temporarily. You can re-enable them when needed."
-            
+
         await display_manager.update_display('speaking', mood='casual')
         return error_msg
 
@@ -2148,24 +2146,24 @@ async def generate_response(query):
 async def wake_word():
     """Wake word detection with notification-aware breaks"""
     global last_interaction_check, last_interaction
-    
+
     # One-time initialization
     if not hasattr(wake_word, 'detector'):
         try:
             print(f"{Fore.YELLOW}Initializing wake word detector...{Fore.WHITE}")
-            
+
             resource_path = Path("resources/common.res")
             model_paths = [
                 Path("GD_Laura.pmdl"),
                 Path("Wake_up_Laura.pmdl"),
                 Path("Laura.pmdl")
             ]
-            
+
             for path in [resource_path] + model_paths:
                 if not path.exists():
                     print(f"ERROR: File not found at {path.absolute()}")
                     return None
-            
+
             wake_word.detector = snowboydetect.SnowboyDetect(
                 resource_filename=str(resource_path.absolute()).encode(),
                 model_str=",".join(str(p.absolute()) for p in model_paths).encode()
@@ -2226,7 +2224,7 @@ async def wake_word():
         # Occasionally yield to event loop (much less frequently)
         if random.random() < 0.01:
             await asyncio.sleep(0)
-        
+
         return None
 
     except Exception as e:
@@ -2253,7 +2251,7 @@ def has_conversation_hook(response):
         # Check for control signals first
         if response.startswith("[CONTINUE]"):
             return True
-            
+
         # End conversation phrases
         end_phrases = [
             "no need for follow up",
@@ -2262,36 +2260,36 @@ def has_conversation_hook(response):
             "no further questions needed",
             "end of conversation"
         ]
-        
+
         return not any(phrase in response.lower() for phrase in end_phrases)
-        
+
     return True
 
 async def handle_conversation_loop(initial_response):
     """Handle ongoing conversation with calendar notification interrupts"""
     global chat_log, last_interaction
-    
+
     res = initial_response
     while has_conversation_hook(res):
         # Now enter listening state for follow-up
         await display_manager.update_display('listening')
-        
+
         # Capture the follow-up speech
         follow_up = await capture_speech(is_follow_up=True)
-        
+
         if follow_up == "[CONTINUE]":
             continue
-            
+
         elif follow_up:
             # Update last interaction time
             last_interaction = datetime.now()
-            
+
             # Check if this is a system command
             cmd_result = system_manager.detect_command(follow_up)
             if cmd_result and cmd_result[0]:
                 is_cmd, cmd_type, action = cmd_result
                 success = await system_manager.handle_command(cmd_type, action)
-                
+
                 if success:
                     await display_manager.update_display('listening')
                     continue
@@ -2301,24 +2299,24 @@ async def handle_conversation_loop(initial_response):
                     await display_manager.update_display('idle')
                     print(f"{Fore.MAGENTA}Conversation ended, returning to idle state...{Fore.WHITE}")
                     break
-            
+
             # Generate response for follow-up
             await display_manager.update_display('thinking')
             res = await generate_response(follow_up)
-            
+
             if res == "[CONTINUE]":
                 print("DEBUG - Detected [CONTINUE] control signal, skipping voice generation")
                 continue
-            
+
             await display_manager.update_display('speaking')
             await generate_voice(res)
-            
+
             if not has_conversation_hook(res):
                 await audio_manager.wait_for_audio_completion()
                 await display_manager.update_display('idle')
                 print(f"{Fore.MAGENTA}Conversation ended, returning to idle state...{Fore.WHITE}")
                 break
-            
+
             await audio_manager.wait_for_audio_completion()
         else:
             # No follow-up detected or manual stop, clear conversation hook
@@ -2349,12 +2347,12 @@ async def check_manual_stop():
 
 async def capture_speech(is_follow_up=False):
     """
-    Unified function to capture and transcribe speech, replacing both 
+    Unified function to capture and transcribe speech, replacing both
     handle_voice_query and conversation_mode.
-    
+
     Args:
         is_follow_up (bool): Whether this is a follow-up question (affects timeout)
-        
+
     Returns:
         str or None: Transcribed text if speech was detected, None otherwise
     """
@@ -2368,27 +2366,27 @@ async def capture_speech(is_follow_up=False):
             # For initial queries, use the primary configuration values
             initial_timeout = VOICE_START_TIMEOUT
             max_recording_time = VAD_SETTINGS["max_recording_time"]
-        
+
         waiting_message = f"\n{Fore.MAGENTA}Waiting for response...{Fore.WHITE}" if is_follow_up else f"{Fore.BLUE}Listening...{Fore.WHITE}"
         print(waiting_message)
-        
+
         # Ensure audio playback is complete before starting listening (for follow-ups)
         if is_follow_up:
             await audio_manager.wait_for_audio_completion()
             await asyncio.sleep(0.5)  # Small buffer delay
-        
+
         # Start listening
         if TRANSCRIPTION_MODE == "local":
             # Reset the transcriber state
             transcriber.reset()
-            
+
             audio_stream, _ = await audio_manager.start_listening()
             voice_detected = False
-            
+
             # Keep processing audio frames until we detect end of speech
             print(f"{Fore.MAGENTA}Waiting for voice...{Fore.WHITE}")
             start_time = time.time()
-            
+
             # For Vosk, we need a different approach
             if TRANSCRIPTION_ENGINE == "vosk":
                 # Get VAD settings
@@ -2397,10 +2395,10 @@ async def capture_speech(is_follow_up=False):
                 silence_duration = VAD_SETTINGS["silence_duration"]
                 min_speech_duration = VAD_SETTINGS["min_speech_duration"]
                 speech_buffer_time = VAD_SETTINGS["speech_buffer_time"]
-                
+
                 # Manual stop tracking
                 manual_stop = False
-                
+
                 # Calculate frames needed for silence duration
                 max_silence_frames = int(silence_duration * 16000 / audio_manager.frame_length)
 
@@ -2418,7 +2416,7 @@ async def capture_speech(is_follow_up=False):
                             print(f"DEBUG: Voice not detected - energy threshold: {energy_threshold:.6f}")
                         print(f"{Fore.YELLOW}{'No response detected' if is_follow_up else 'Voice start timeout'}{Fore.WHITE}")
                         break
-    
+
                     # Read audio frame
                     pcm_bytes = audio_manager.read_audio_frame()
                     if not pcm_bytes:
@@ -2449,7 +2447,7 @@ async def capture_speech(is_follow_up=False):
                     frame_history.append(energy)
                     if len(frame_history) > 10:
                         frame_history.pop(0)
-    
+
                     # Calculate average energy
                     avg_energy = sum(frame_history) / len(frame_history) if frame_history else 0
 
@@ -2472,7 +2470,7 @@ async def capture_speech(is_follow_up=False):
 
                     elif is_speaking:
                         speech_duration = time.time() - speech_start_time
-                        
+
                         # Check if energy is above the continued threshold
                         if avg_energy > (energy_threshold * continued_ratio):
                             silence_frames = 0
@@ -2480,7 +2478,7 @@ async def capture_speech(is_follow_up=False):
                             silence_frames += 1
 
                         # Check for end conditions
-                        if (silence_frames >= max_silence_frames and 
+                        if (silence_frames >= max_silence_frames and
                             speech_duration > min_speech_duration):
                             print(f"{Fore.MAGENTA}End of {'response' if is_follow_up else 'speech'} detected{Fore.WHITE}")
                             await asyncio.sleep(speech_buffer_time)
@@ -2517,58 +2515,58 @@ async def capture_speech(is_follow_up=False):
                     if len(transcript.split()) <= 1 and len(transcript) < min_word_length:
                         print(f"Discarding too-short transcript: '{transcript}'")
                         return None
-                
+
             else:
                 # Handle Whisper transcription
                 recording_complete = False
                 is_speech = False
-                
+
                 while not recording_complete:
                     if not voice_detected and (time.time() - start_time > initial_timeout):
                         print(f"{Fore.YELLOW}{'No response detected' if is_follow_up else 'Voice start timeout'}{Fore.WHITE}")
                         break
-                    
+
                     pcm = audio_manager.read_audio_frame()
                     if not pcm:
                         await asyncio.sleep(0.01)
                         continue
-                    
+
                     recording_complete, is_speech = transcriber.process_frame(pcm)
-                    
+
                     if is_speech and not voice_detected:
                         voice_color = Fore.GREEN if is_follow_up else Fore.BLUE
                         print(f"{voice_color}Voice detected{Fore.WHITE}")
                         voice_detected = True
                         start_time = time.time()  # Reset timeout
-                
+
                 if not voice_detected:
                     print("No voice detected")
                     return None
-                
+
                 print(f"{Fore.MAGENTA}Transcribing {'conversation' if is_follow_up else ''}...{Fore.WHITE}")
                 # Get final transcription
                 transcript = transcriber.transcribe()
                 print(f"Raw transcript: '{transcript}'")
-            
+
             if not transcript:
                 print("No transcript returned")
                 return None
-                
+
             print(f"Transcription: {transcript}")
             return transcript
-            
+
         else:  # Remote transcription
             audio_stream, _ = await audio_manager.start_listening()
-            
+
             recording = []
             start_time = time.time()
             voice_detected = False
-            
+
             # Get VAD settings
             energy_threshold = VAD_SETTINGS["energy_threshold"]
             continued_ratio = VAD_SETTINGS["continued_threshold_ratio"]
             silence_duration = VAD_SETTINGS["silence_duration"]
-            
+
             # Initial detection phase - different timeouts based on context
             print(f"{Fore.MAGENTA}Waiting for voice...{Fore.WHITE}")
             while (time.time() - start_time) < initial_timeout:
@@ -2576,14 +2574,14 @@ async def capture_speech(is_follow_up=False):
                 if not pcm_bytes:
                     await asyncio.sleep(0.01)
                     continue
-                
+
                 # Convert bytes to int16 values
                 pcm = np.frombuffer(pcm_bytes, dtype=np.int16)
-                
+
                 # Calculate energy (RMS)
                 float_data = pcm.astype(np.float32) / 32768.0
                 energy = np.sqrt(np.mean(float_data**2)) if len(float_data) > 0 else 0
-                
+
                 # Check if this is speech
                 if energy > energy_threshold:
                     color = Fore.GREEN if is_follow_up else Fore.BLUE
@@ -2591,51 +2589,51 @@ async def capture_speech(is_follow_up=False):
                     voice_detected = True
                     recording.extend(pcm)
                     break
-                
+
             # If no voice detected in initial phase, return
             if not voice_detected:
                 print(f"No voice detected in {'' if is_follow_up else 'initial '}phase")
                 return None
-            
+
             # Continuous recording phase
             print(f"{Fore.MAGENTA}Recording...{Fore.WHITE}")
             silence_frames = 0
             silence_frame_threshold = int(silence_duration * audio_manager.sample_rate / audio_manager.frame_length)
-            
+
             while True:
                 pcm_bytes = audio_manager.read_audio_frame()
                 if not pcm_bytes:
                     await asyncio.sleep(0.01)
                     continue
-                
+
                 # Convert bytes to int16 values
                 pcm = np.frombuffer(pcm_bytes, dtype=np.int16)
                 recording.extend(pcm)
-                
+
                 # Calculate energy
                 float_data = pcm.astype(np.float32) / 32768.0
                 energy = np.sqrt(np.mean(float_data**2)) if len(float_data) > 0 else 0
-                
+
                 # Check if this frame has voice
                 if energy > (energy_threshold * continued_ratio):
                     silence_frames = 0
                 else:
                     silence_frames += 1
-                
+
                 # End recording conditions
                 current_length = len(recording) / audio_manager.sample_rate
-                
+
                 if silence_frames >= silence_frame_threshold:
                     print(f"{Fore.MAGENTA}{'End of response' if is_follow_up else 'Silence'} detected, ending recording (duration: {current_length:.2f}s){Fore.WHITE}")
                     break
                 elif current_length >= max_recording_time:
                     print(f"{Fore.MAGENTA}Maximum recording time reached{Fore.WHITE}")
                     break
-    
+
             if recording:
                 audio_array = np.array(recording, dtype=np.float32) / 32768.0
                 transcript = await remote_transcriber.transcribe(audio_array)
-        
+
         # Common post-processing for both transcription methods
         end_phrases = [
             "thank you for watching",
@@ -2645,27 +2643,27 @@ async def capture_speech(is_follow_up=False):
             "thanks you for watching",
             "thanks you for watching!"
         ]
-        
+
         # Handle case where transcript might be a dictionary
         if isinstance(transcript, dict) and 'text' in transcript:
             transcript = transcript['text']
-    
+
         if not transcript:
             print("No transcript returned from transcriber")
             return None
-            
+
         if not isinstance(transcript, str):
             print(f"Invalid transcript type: {type(transcript)}")
             return None
-            
+
         if transcript.lower().strip() in end_phrases:
             print("End phrase detected, ignoring...")
             return None
-            
+
         # Output recognized speech
         if is_follow_up:
             print(f"\n{Style.BRIGHT}You said:{Style.NORMAL} {transcript}\n")
-            
+
         # Prevent rejection of valid short phrases
         if len(transcript.strip()) > 0:
             print(f"Final transcript: '{transcript}'")
@@ -2688,7 +2686,7 @@ async def print_response(chat):
 async def generate_voice(chat):
     """
     Generate voice audio from formatted text.
-    
+
     Args:
         chat (str): Pre-formatted text from process_response_content
                    Should already have newlines and spaces normalized
@@ -2697,7 +2695,7 @@ async def generate_voice(chat):
     if chat == "[CONTINUE]":
         print(f"DEBUG - GENERATE_VOICE skipping control signal: '{chat}'")
         return
-        
+
     print(f"DEBUG - GENERATE_VOICE received chat: '{chat[:50]}...'")
     try:
         print(f"DEBUG - GENERATE_VOICE RECEIVED: '{chat[:50]}...' (Length: {len(chat)})")
@@ -2711,14 +2709,14 @@ async def generate_voice(chat):
         # No need for newline handling since process_response_content already did it
         # Just add a final normalization pass for safety
         chat = ' '.join(chat.split())
-        
+
         print(f"Sending to TTS: {chat[:50]}..." if len(chat) > 50 else f"Sending to TTS: {chat}")
 
         # Generate and save audio
         audio = tts_handler.generate_audio(chat)
         with open(AUDIO_FILE, "wb") as f:
             f.write(audio)
-    
+
         # Play the generated audio
         await audio_manager.play_audio(AUDIO_FILE)
 
@@ -2729,27 +2727,27 @@ async def generate_voice(chat):
 
 def get_location(format: str) -> str:
     print("DEBUG: Entering get_location function")
-    
+
     try:
         print("DEBUG: Attempting to import requests")
         import requests
         print("DEBUG: Successfully imported requests")
-        
+
         # Get WiFi access points
         print("DEBUG: Attempting to scan WiFi networks")
         import subprocess
-        
+
         # For Linux/Raspberry Pi
         cmd = "iwlist wlan0 scan | grep -E 'Address|Signal|ESSID'"
         print(f"DEBUG: Running command: {cmd}")
         output = subprocess.check_output(cmd, shell=True).decode()
         print(f"DEBUG: Command output length: {len(output)}")
-        
+
         # Parse WiFi data
         print("DEBUG: Parsing WiFi data")
         wifi_data = []
         current_ap = {}
-        
+
         for line in output.split('\n'):
             if 'Address' in line:
                 if current_ap:
@@ -2773,12 +2771,12 @@ def get_location(format: str) -> str:
                     current_ap['signalStrength'] = -50  # Default middle value
             elif 'ESSID' in line:
                 current_ap['ssid'] = line.split('ESSID:')[1].strip('"')
-        
+
         if current_ap:
             wifi_data.append(current_ap)
-        
+
         print(f"DEBUG: Found {len(wifi_data)} WiFi access points")
-        
+
         if not wifi_data:
             return "No WiFi access points found"
 
@@ -2787,24 +2785,24 @@ def get_location(format: str) -> str:
         url = "https://www.googleapis.com/geolocation/v1/geolocate"
         params = {"key": GOOGLE_MAPS_API_KEY}  # Using key from secret.py
         data = {"wifiAccessPoints": wifi_data}
-        
+
         try:
             print("DEBUG: Making POST request to Google Geolocation API")
             response = requests.post(url, params=params, json=data)
             print(f"DEBUG: Geolocation API response status: {response.status_code}")
             response.raise_for_status()  # Raise exception for bad status codes
             location = response.json()
-            
+
             if 'error' in location:
                 return f"Google API error: {location['error']['message']}"
-                
+
             lat = location['location']['lat']
             lng = location['location']['lng']
             print(f"DEBUG: Retrieved coordinates: {lat}, {lng}")
-            
+
             if format == "coordinates":
                 return f"Current coordinates are: {lat}, {lng}"
-            
+
             # Get address if needed
             if format in ["address", "both"]:
                 print("DEBUG: Preparing Google Geocoding API request")
@@ -2813,28 +2811,28 @@ def get_location(format: str) -> str:
                     "latlng": f"{lat},{lng}",
                     "key": GOOGLE_MAPS_API_KEY
                 }
-                
+
                 print("DEBUG: Making GET request to Google Geocoding API")
                 address_response = requests.get(geocode_url, params=params)
                 print(f"DEBUG: Geocoding API response status: {address_response.status_code}")
                 address_response.raise_for_status()
                 address_data = address_response.json()
-                
+
                 if address_data['status'] == 'OK' and address_data['results']:
                     address = address_data['results'][0]['formatted_address']
                     print(f"DEBUG: Retrieved address: {address}")
-                    
+
                     if format == "address":
                         return f"Current location is: {address}"
                     else:  # both
                         return f"Current location is: {address}\nCoordinates: {lat}, {lng}"
                 else:
                     return f"Coordinates found ({lat}, {lng}) but could not determine address"
-                    
+
         except requests.exceptions.RequestException as e:
             print(f"DEBUG: Request error: {e}")
             return f"Error communicating with Google API: {str(e)}"
-                
+
     except subprocess.CalledProcessError as e:
         print(f"DEBUG: Error scanning WiFi networks: {e}")
         return f"Error scanning WiFi networks: {str(e)}"
@@ -2874,7 +2872,7 @@ async def play_queued_notifications():
     Supports both calendar events and configurable notifications.
     """
     global NOTIFICATION_STATES, PENDING_NOTIFICATIONS
-    
+
     if notification_queue.empty() and not PENDING_NOTIFICATIONS:
         return
 
@@ -2885,7 +2883,7 @@ async def play_queued_notifications():
     # First handle any immediate notifications in the queue
     while not notification_queue.empty():
         notification_data = await notification_queue.get()
-        
+
         # Expected format: dict with type, id, message, requires_clear, reminder_interval
         notification_type = notification_data.get('type', 'calendar')
         notification_id = notification_data.get('id')
@@ -2907,14 +2905,14 @@ async def play_queued_notifications():
         try:
             await audio_manager.wait_for_audio_completion()
             await display_manager.update_display('speaking', mood='casual')
-            
+
             audio = tts_handler.generate_audio(message)
             with open("notification.mp3", "wb") as f:
                 f.write(audio)
-            
+
             await audio_manager.play_audio("notification.mp3")
             await audio_manager.wait_for_audio_completion()
-            
+
         except Exception as e:
             print(f"Error playing notification: {e}")
 
@@ -2928,21 +2926,21 @@ async def play_queued_notifications():
         time_since_last = (current_time - notification_data['last_reminder']).total_seconds() / 60
         if time_since_last >= notification_data['reminder_interval']:
             reminder_message = f"Reminder: {notification_data['message']}"
-            
+
             try:
                 await audio_manager.wait_for_audio_completion()
                 await display_manager.update_display('speaking', mood='casual')
-                
+
                 audio = tts_handler.generate_audio(reminder_message)
                 with open("notification.mp3", "wb") as f:
                     f.write(audio)
-                
+
                 await audio_manager.play_audio("notification.mp3")
                 await audio_manager.wait_for_audio_completion()
-                
+
                 # Update last reminder time
                 PENDING_NOTIFICATIONS[notification_id]['last_reminder'] = current_time
-                
+
             except Exception as e:
                 print(f"Error playing reminder: {e}")
 
@@ -2963,7 +2961,7 @@ async def check_upcoming_events():
             if not service:
                 await asyncio.sleep(30)
                 continue
-                
+
             now = datetime.now(timezone.utc)
             max_minutes = max(CALENDAR_NOTIFICATION_INTERVALS) + 1
             timeMin = now.isoformat()
@@ -2995,16 +2993,16 @@ async def check_upcoming_events():
 
                 for interval in CALENDAR_NOTIFICATION_INTERVALS:
                     notification_key = f"{event_id}_{interval}"
-                    
-                    if (abs(minutes_until * 60 - interval * 60) <= 15 and 
+
+                    if (abs(minutes_until * 60 - interval * 60) <= 15 and
                         notification_key not in calendar_notified_events):
                         calendar_notified_events.add(notification_key)
-                        
+
                         notification_text = random.choice(CALENDAR_NOTIFICATION_SENTENCES).format(
                             minutes=interval,
                             event=summary
                         )
-                        
+
                         # Add to notification queue instead of pending_notifications list
                         await notification_queue.put(notification_text)
                         print(f"DEBUG: Added calendar notification to queue: {notification_text[:50]}...")
@@ -3026,11 +3024,11 @@ def get_day_schedule() -> str:
         service = get_calendar_service()
         if not service:
             return "Failed to initialize calendar service"
-            
+
         now = datetime.now(timezone.utc)
         start_of_day = now.replace(hour=0, minute=0, second=0, microsecond=0)
         end_of_day = start_of_day + timedelta(days=1)
-        
+
         events_result = service.events().list(
             calendarId="primary",
             timeMin=start_of_day.isoformat(),
@@ -3038,63 +3036,63 @@ def get_day_schedule() -> str:
             singleEvents=True,
             orderBy="startTime"
         ).execute()
-        
+
         events = events_result.get("items", [])
-        
+
         if not events:
             return "No events scheduled for today."
-            
+
         schedule = []
         for event in events:
             start = event["start"].get("dateTime", event["start"].get("date"))
             start_time = datetime.fromisoformat(start.replace('Z', '+00:00'))
             schedule.append(f"- {start_time.strftime('%I:%M %p')}: {event['summary']}")
-            
+
         return "Today's schedule:\n" + "\n".join(schedule)
-        
+
     except Exception as e:
         if DEBUG_CALENDAR:
             print(f"Error getting day schedule: {e}")
         return f"Error retrieving schedule: {str(e)}"
 
-def update_calendar_event(event_id, summary=None, start_time=None, end_time=None, 
+def update_calendar_event(event_id, summary=None, start_time=None, end_time=None,
                          description=None, location=None, attendees=None):
     """
     Update an existing calendar event
     """
     try:
         service = build("calendar", "v3", credentials=creds)
-        
+
         # Get the current event
         event = service.events().get(calendarId='primary', eventId=event_id).execute()
-        
+
         # Update fields if provided
         if summary:
             event['summary'] = summary
-            
+
         if description:
             event['description'] = description
-            
+
         if location:
             event['location'] = location
-            
+
         if start_time:
             if 'dateTime' in event['start']:
                 event['start']['dateTime'] = start_time
             else:
                 # Convert all-day event to timed event
                 event['start'] = {'dateTime': start_time, 'timeZone': 'America/Los_Angeles'}
-                
+
         if end_time:
             if 'dateTime' in event['end']:
                 event['end']['dateTime'] = end_time
             else:
                 # Convert all-day event to timed event
                 event['end'] = {'dateTime': end_time, 'timeZone': 'America/Los_Angeles'}
-                
+
         if attendees:
             event['attendees'] = [{'email': email} for email in attendees]
-            
+
         # Update the event
         updated_event = service.events().update(
             calendarId='primary',
@@ -3102,7 +3100,7 @@ def update_calendar_event(event_id, summary=None, start_time=None, end_time=None
             body=event,
             sendUpdates='all'
         ).execute()
-        
+
         # Format a nice response
         event_time = ""
         if 'dateTime' in updated_event['start']:
@@ -3112,9 +3110,9 @@ def update_calendar_event(event_id, summary=None, start_time=None, end_time=None
         else:
             start_date = datetime.fromisoformat(updated_event['start']['date'])
             event_time = f"on {start_date.strftime('%B %d, %Y')}"
-            
+
         return f"Calendar event '{updated_event['summary']}' {event_time} has been updated successfully."
-        
+
     except Exception as e:
         print(f"Error updating calendar event: {e}")
         traceback.print_exc()
@@ -3126,35 +3124,35 @@ def cancel_calendar_event(event_id, notify_attendees=True, cancellation_message=
     """
     try:
         service = build("calendar", "v3", credentials=creds)
-        
+
         # Get the event details first for a better response message
         event = service.events().get(calendarId='primary', eventId=event_id).execute()
         event_summary = event.get('summary', 'Unnamed event')
-        
+
         # Add cancellation message if provided
         if cancellation_message and notify_attendees:
             # We can't directly add a cancellation message via the API
             # So we'll update the event description first
             original_description = event.get('description', '')
             event['description'] = f"CANCELLED: {cancellation_message}\n\n{original_description}"
-            
+
             service.events().update(
                 calendarId='primary',
                 eventId=event_id,
                 body=event,
                 sendUpdates='all'
             ).execute()
-        
+
         # Delete the event
         service.events().delete(
             calendarId='primary',
             eventId=event_id,
             sendUpdates='all' if notify_attendees else 'none'
         ).execute()
-        
+
         notification_status = "Attendees have been notified" if notify_attendees else "Attendees were not notified"
         return f"Calendar event '{event_summary}' has been cancelled successfully. {notification_status}."
-        
+
     except Exception as e:
         print(f"Error cancelling calendar event: {e}")
         traceback.print_exc()
@@ -3167,7 +3165,7 @@ def sanitize_messages_for_api(chat_log):
     """
     if not chat_log:
         return []
-    
+
     # Copy all messages with valid structure
     sanitized = []
     for msg in chat_log:
@@ -3177,7 +3175,7 @@ def sanitize_messages_for_api(chat_log):
                 "role": msg["role"],
                 "content": msg["content"]
             })
-    
+
     # Debug output
     print(f"DEBUG - Sanitized message history: {len(chat_log)} messages -> {len(sanitized)} messages")
     print(f"DEBUG - First message: {sanitized[0]['role'] if sanitized else 'none'}")
@@ -3188,23 +3186,23 @@ def sanitize_messages_for_api(chat_log):
             print(f"DEBUG - Last message content preview: {last_msg['content'][:100]}")
         elif isinstance(last_msg['content'], list):
             print(f"DEBUG - Last message contains {len(last_msg['content'])} content blocks")
-    
+
     # Final check: If the last message isn't from user, we might need to handle that elsewhere
     if sanitized and sanitized[-1]["role"] != "user":
         print("WARNING: Last message is not from user - API may reject this request")
-    
+
     return sanitized
 
 def find_calendar_event(description, time_range_days=7):
     """Helper function to find calendar events matching a description"""
     try:
         service = build("calendar", "v3", credentials=creds)
-        
+
         # Set time range for search
         now = datetime.now(timezone.utc)
         time_min = now.isoformat()
         time_max = (now + timedelta(days=time_range_days)).isoformat()
-        
+
         # Get events in the time range
         events_result = service.events().list(
             calendarId='primary',
@@ -3213,26 +3211,26 @@ def find_calendar_event(description, time_range_days=7):
             singleEvents=True,
             orderBy='startTime'
         ).execute()
-        
+
         events = events_result.get('items', [])
-        
+
         # Filter events by description
         description = description.lower()
         matching_events = []
-        
+
         for event in events:
             # Check against summary, description and location
             event_summary = event.get('summary', '').lower()
             event_description = event.get('description', '').lower()
             event_location = event.get('location', '').lower()
-            
+
             # Simple fuzzy matching
-            if (description in event_summary or 
-                description in event_description or 
+            if (description in event_summary or
+                description in event_description or
                 description in event_location):
-                
+
                 start = event['start'].get('dateTime', event['start'].get('date'))
-                
+
                 # Format the start time
                 if 'T' in start:  # This is a datetime
                     start_dt = datetime.fromisoformat(start.replace('Z', '+00:00'))
@@ -3240,7 +3238,7 @@ def find_calendar_event(description, time_range_days=7):
                 else:  # This is a date
                     start_dt = datetime.fromisoformat(start)
                     start_str = start_dt.strftime('%B %d, %Y')
-                
+
                 matching_events.append({
                     'id': event['id'],
                     'summary': event.get('summary', 'Unnamed event'),
@@ -3249,15 +3247,15 @@ def find_calendar_event(description, time_range_days=7):
                     'location': event.get('location', 'No location'),
                     'attendees': [attendee.get('email') for attendee in event.get('attendees', [])]
                 })
-        
+
         return matching_events
-        
+
     except Exception as e:
         print(f"Error finding calendar events: {e}")
         traceback.print_exc()
         return []
 
-def create_calendar_event(summary: str, start_time: str, end_time: str, 
+def create_calendar_event(summary: str, start_time: str, end_time: str,
                         description: str = "", attendees: list = None) -> str:
     """Create a calendar event and send invites"""
     print("DEBUG: Starting create_calendar_event")
@@ -3281,19 +3279,19 @@ def create_calendar_event(summary: str, start_time: str, end_time: str,
                 "timeZone": local_timezone
             }
         }
-        
+
         if attendees:
             event_body["attendees"] = [{"email": email} for email in attendees]
             event_body["sendUpdates"] = "all"
 
         print(f"DEBUG: Attempting to create event with body: {event_body}")
-        
+
         event = service.events().insert(
             calendarId="primary",
             body=event_body,
             sendUpdates="all"
         ).execute()
-        
+
         return f"Event created successfully: {event.get('htmlLink')}"
     except Exception as e:
         print(f"DEBUG: Error in create_calendar_event: {e}")
@@ -3321,17 +3319,17 @@ async def run_vad_calibration():
         # Debug info
         print(f"CWD: {os.getcwd()}")
         print(f"Script path: {os.path.abspath('vad_calib.py')}")
-        
+
         # First, wait for any current audio to finish
         await audio_manager.wait_for_audio_completion()
-        
+
         # Path to the calibration script
         calibration_script = os.path.join(os.path.dirname(__file__), "vad_calib.py")
-        
+
         # Print current settings
         print(f"Starting VAD calibration...")
         print(f"Current VAD settings before calibration: {VAD_SETTINGS}")
-        
+
         # Run the calibration script
         print("About to run calibration subprocess")
         process = await asyncio.create_subprocess_exec(
@@ -3339,31 +3337,31 @@ async def run_vad_calibration():
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
-        
+
         stdout, stderr = await process.communicate()
         stdout_text = stdout.decode()
         print("Calibration subprocess completed")
-        
+
         if "CALIBRATION_COMPLETE" in stdout_text:
             # Import reload function and use it
             from vad_settings import reload_vad_settings
             VAD_SETTINGS = reload_vad_settings()
-            
+
             # Print new settings
             print(f"Calibration successful!")
             print(f"Updated VAD settings after calibration: {VAD_SETTINGS}")
-            
+
             # Update the transcriber settings
             if "transcriber" in globals() and transcriber and hasattr(transcriber, "vad_settings"):
                 transcriber.vad_settings = VAD_SETTINGS
                 print("Updated transcriber VAD settings")
-            
+
             print("Calibration successful, returning confirmation")
             return True
         else:
             print(f"Calibration error: {stderr.decode()}")
             return False
-            
+
     except Exception as e:
         print(f"Failed to run calibration: {e}")
         traceback.print_exc()
@@ -3386,25 +3384,25 @@ async def get_random_audio_async(category, context=None):
 def get_random_audio(category, context=None):
     """
     Get random audio file from specified category directory with context awareness
-    
+
     Args:
         category: Main audio category (wake, tool, timeout, etc.)
         context: Optional subcategory or specific context (e.g., 'loaded', 'use')
                 Can also be the wake word model filename
-    
+
     Returns:
         Path to selected audio file or None if not found
     """
     try:
         # Base directory containing all sound categories
         base_sound_dir = "/home/user/LAURA/sounds"
-        
+
         # Determine the correct path based on category and context
         if category == "file" and context:
             # For file category with context (loaded or o)
             audio_path = Path(f"{base_sound_dir}/file_sentences/{context}")
             print(f"Looking in file category path: {audio_path}")
-            
+
         elif category == "tool" and context:
             if context == "use":
                 # For tool "use" context
@@ -3416,37 +3414,37 @@ def get_random_audio(category, context=None):
                 # Default tool context folder
                 audio_path = Path(f"{base_sound_dir}/tool_sentences/{context}")
             print(f"Looking in tool category path: {audio_path}")
-            
+
         elif category == "wake" and context in ["Laura.pmdl", "Wake_up_Laura.pmdl", "GD_Laura.pmdl"]:
             # Map wake word models to context folders
             context_map = {
                 "Laura.pmdl": "standard",
-                "Wake_up_Laura.pmdl": "sleepy", 
+                "Wake_up_Laura.pmdl": "sleepy",
                 "GD_Laura.pmdl": "frustrated"
             }
             folder = context_map.get(context, "standard")
             audio_path = Path(f"{base_sound_dir}/wake_sentences/{folder}")
             print(f"Looking for wake audio in: {audio_path}")
-            
+
         else:
             # Default to main category folder for timeout, calibration, etc.
             audio_path = Path(f"{base_sound_dir}/{category}_sentences")
             if context and (Path(f"{audio_path}/{context}")).exists():
                 audio_path = Path(f"{audio_path}/{context}")
             print(f"Looking for audio in category folder: {audio_path}")
-        
+
         # Find audio files in the specified path
         audio_files = []
         if audio_path.exists():
             audio_files = list(audio_path.glob('*.mp3')) + list(audio_path.glob('*.wav'))
-        
+
         if audio_files:
             chosen_file = str(random.choice(audio_files))
             print(f"Found and selected audio file: {chosen_file}")
             return chosen_file
         else:
             print(f"WARNING: No audio files found in {audio_path}")
-            
+
             # Fallback to parent directory for empty subfolders
             if context and category + "_sentences" in str(audio_path):
                 parent_path = Path(f"{base_sound_dir}/{category}_sentences")
@@ -3455,9 +3453,9 @@ def get_random_audio(category, context=None):
                     if parent_files:
                         print(f"Found fallback files in parent directory: {parent_path}")
                         return str(random.choice(parent_files))
-            
+
             return None
-            
+
     except Exception as e:
         print(f"Error in get_random_audio: {str(e)}")
         return None
@@ -3468,10 +3466,10 @@ def sanitize_tool_interactions(chat_history):
     Fix mismatched tool_use and tool_result pairs in chat history.
     """
     print("DEBUG: Sanitizing tool interactions in chat history")
-    
+
     # STEP 1: Build comprehensive tool_use ID mapping
     tool_use_info = {}  # Maps tool_use ID to (message_index, item_index)
-    
+
     for msg_idx, message in enumerate(chat_history):
         if message.get("role") == "assistant" and isinstance(message.get("content"), list):
             for item_idx, item in enumerate(message.get("content", [])):
@@ -3479,21 +3477,21 @@ def sanitize_tool_interactions(chat_history):
                     tool_id = item.get("id")
                     if tool_id:
                         tool_use_info[tool_id] = (msg_idx, item_idx)
-    
+
     # STEP 2: Check and fix tool_result references
     valid_history = []
-    
+
     for message in chat_history:
         # Handle non-list content directly
         if not isinstance(message.get("content"), list):
             valid_history.append(message)
             continue
-            
+
         # Process list content for tool results
         content = message.get("content", [])
         valid_content = []
         modified = False
-        
+
         for item in content:
             if isinstance(item, dict) and item.get("type") == "tool_result":
                 tool_id = item.get("tool_use_id")
@@ -3505,13 +3503,13 @@ def sanitize_tool_interactions(chat_history):
                     print(f"DEBUG: Removed orphaned tool_result with ID: {tool_id}")
             else:
                 valid_content.append(item)
-        
+
         if content and not valid_content:
             # Skip entirely empty messages
             print(f"DEBUG: Skipping message with only invalid tool results")
             modified = True
             continue
-            
+
         # Only create a new message if we modified content
         if modified:
             valid_message = dict(message)
@@ -3519,10 +3517,10 @@ def sanitize_tool_interactions(chat_history):
             valid_history.append(valid_message)
         else:
             valid_history.append(message)
-    
+
     # STEP 3: Ensure all tool_use entries have matching results
     has_orphaned_tool_use = False
-    
+
     # Map tool_results back to their tool_use entries
     result_mapping = {}
     for msg_idx, message in enumerate(valid_history):
@@ -3532,45 +3530,45 @@ def sanitize_tool_interactions(chat_history):
                     tool_id = item.get("tool_use_id")
                     if tool_id:
                         result_mapping[tool_id] = True
-    
+
     # Check for orphaned tool_use entries
     for tool_id in tool_use_info:
         if tool_id not in result_mapping:
             has_orphaned_tool_use = True
             print(f"DEBUG: Found orphaned tool_use with ID: {tool_id}")
-    
+
     # If we have orphaned tool_use entries, consider more aggressive trimming or repair
     if has_orphaned_tool_use:
         print("WARNING: Conversation contains orphaned tool_use entries")
         # For severe cases, we might want to:
         # 1. Remove all tool-related messages to start fresh
         # 2. Keep only the most recent N non-tool messages
-    
+
     return valid_history
 
 async def main():
     """
     Main entry point for LAURA (Language & Automation User Response Agent).
-    
+
     Manages the initialization and lifecycle of core system components:
     - Token Management: Handles API token usage and limits
     - Document Management: Controls file loading and processing
     - Transcription: Manages speech-to-text (local or remote)
     - Display: Controls visual feedback and animations
     - Calendar: Monitors and notifies of upcoming events
-    
+
     The system uses asyncio for concurrent operation of multiple tasks:
     - Background animations
     - Main interaction loop
     - Calendar monitoring
     - Heartbeat monitoring (for remote transcription)
-    
+
     Last Updated: 2025-03-28 20:37:10 UTC
     Author: fandango328
     """
     global remote_transcriber, display_manager, transcriber, token_tracker, chat_log, document_manager, system_manager, keyboard_device, keyboard_path
-    tasks = []  
-    
+    tasks = []
+
     try:
         # KEYBOARD INITIALIZATION PHASE
         #print(f"\n{Fore.CYAN}=== Keyboard Initialization Phase ==={Fore.WHITE}")
@@ -3582,12 +3580,12 @@ async def main():
             try:
                 device = InputDevice(path)
                 #print(f"Device: {device.name} at {path}")
-                
+
                 # Check if we can read from this device
                 try:
                     select.select([device.fd], [], [], 0)
                     #print(f"  - Can read from device: YES")
-                    
+
                     # Check for Pi 500 keyboard specifically
                     if "Pi 500" in device.name and "Keyboard" in device.name and "Mouse" not in device.name:
                         #print(f"{Fore.GREEN}Found Pi 500 Keyboard!{Fore.WHITE}")
@@ -3602,14 +3600,14 @@ async def main():
                             device.close()
                     else:
                         device.close()
-                        
+
                 except Exception as e:
                     print(f"  - Can read from device: NO - {e}")
                     device.close()
-                    
+
             except Exception as e:
                 print(f"Error with device {path}: {e}")
-        
+
         #print(f"\nFound {len(keyboard_devices)} valid keyboard devices")
 
             # Diagnostic: Reset and flush keyboard buffer
@@ -3624,22 +3622,22 @@ async def main():
                 #print(f"{Fore.GREEN}Keyboard ready for input{Fore.WHITE}")
             except Exception as e:
                 print(f"{Fore.YELLOW}Keyboard initialization note: {str(e)}{Fore.WHITE}")
-        
+
         # Use the first valid keyboard device
         if keyboard_devices:
             keyboard_device = keyboard_devices[0]
             print(f"{Fore.GREEN}Using keyboard device: {keyboard_device.path}{Fore.WHITE}")
-            
+
             # Do NOT grab exclusive access - that blocks normal keyboard input
             print(f"{Fore.GREEN}Using keyboard without exclusive access to allow normal typing{Fore.WHITE}")
-            
+
             # Debug: Print capabilities
             #print("\nKeyboard capabilities:")
             #caps = keyboard_device.capabilities(verbose=True)
             #if ecodes.EV_KEY in caps:
                 #for key_info in caps[ecodes.EV_KEY]:
                     #print(f"Key: {key_info[0]}, Code: {key_info[1]}")
-            
+
             # Keep other devices in case we need them
             keyboard_device_alternates = keyboard_devices[1:]
         else:
@@ -3664,13 +3662,13 @@ async def main():
         print(f"{Fore.CYAN}Initializing token management system...{Fore.WHITE}")
         token_tracker = TokenManager(anthropic_client=anthropic_client)
         token_tracker.start_session()
-        
+
         # Initialize DocumentManager
         print(f"{Fore.CYAN}Initializing document management system...{Fore.WHITE}")
         document_manager = DocumentManager()
-      
-        
-        
+
+
+
         # NEW: Load chat log from recent context
         chat_log = load_recent_context()
         print("\n=== Chat Log Initialization Debug ===")
@@ -3727,17 +3725,17 @@ async def main():
             asyncio.create_task(run_main_loop()),                     # Main application loop
             asyncio.create_task(check_upcoming_events())              # Calendar monitoring
         ]
-        
+
         # Add websocket heartbeat task for remote transcription
         if TRANSCRIPTION_MODE == "remote":
             tasks.append(asyncio.create_task(heartbeat(remote_transcriber)))
-        
+
         # EXECUTION PHASE
         # -------------------------------------------------------------
         # Run all tasks concurrently with error handling
         # Set initial state to sleep
         await display_manager.update_display('sleep')
-        
+
         # EXECUTION PHASE
         # -------------------------------------------------------------
         # Run all tasks concurrently with error handling
@@ -3746,7 +3744,7 @@ async def main():
         except Exception as e:
             print(f"Task execution error: {e}")
             traceback.print_exc()
-            
+
     except Exception as e:
         print(f"Critical error in main function: {e}")
         traceback.print_exc()
@@ -3761,7 +3759,7 @@ async def main():
                     await task
                 except asyncio.CancelledError:
                     pass
-        
+
         # Cleanup transcription systems
         if TRANSCRIPTION_MODE == "remote" and remote_transcriber:
             try:
@@ -3773,18 +3771,18 @@ async def main():
                 transcriber.cleanup()
             except Exception as e:
                 print(f"Local transcriber cleanup error: {e}")
-        
+
         # Cleanup display and audio systems
         try:
             display_manager.cleanup()
         except Exception as e:
             print(f"Display manager cleanup error: {e}")
-        
+
         try:
             await audio_manager.reset_audio_state()
         except Exception as e:
             print(f"Audio manager cleanup error: {e}")
-        
+
         # Clean up keyboard device
         if keyboard_device:
             try:
@@ -3801,7 +3799,7 @@ async def run_main_loop():
     """
     global document_manager, chat_log, system_manager, keyboard_device, notification_manager
     iteration_count = 0
-    
+
     # Initialize SystemManager if not already initialized
     async with system_manager_lock:
         if system_manager is None:
@@ -3819,7 +3817,7 @@ async def run_main_loop():
                 print(f"Error initializing SystemManager: {e}")
                 print("SystemManager initialization failed")
                 return
-                
+
     # Initialize NotificationManager if not already initialized
     if 'notification_manager' not in globals():
         try:
@@ -3830,24 +3828,24 @@ async def run_main_loop():
         except Exception as e:
             print(f"Error initializing NotificationManager: {e}")
             print("NotificationManager initialization failed")
-            return               
-            
+            return
+
     while True:
         # Start of iteration - clear variables
         wake_detected = False
         detected_model = None
-                   
+
         iteration_count += 1
 
         try:
             current_state = display_manager.current_state
-            
+
             # Sleep/Idle states - check for wake events and notifications
             if current_state in ['sleep', 'idle']:
                 # Process any pending notifications during idle periods
                 if await notification_manager.has_pending_notifications():
                     await notification_manager.process_pending_notifications()
-                    
+
                 # Quick non-blocking keyboard check
                 if keyboard_device:
                     try:
@@ -3884,16 +3882,16 @@ async def run_main_loop():
                         if wake_audio:
                             await audio_manager.play_audio(wake_audio)
                             await audio_manager.wait_for_audio_completion()
-                    
+
                     # Transition to listening state and pause wake word detection
                     await display_manager.update_display('listening')
-                    
+
                     # Properly manage wake word detection state
                     wake_word_active = False
                     if hasattr(wake_word, 'state') and wake_word.state.get('stream'):
                         wake_word.state['stream'].stop_stream()
                         wake_word_active = True
-                    
+
                     try:
                         transcript = await capture_speech(is_follow_up=False)
                     finally:
@@ -3901,16 +3899,16 @@ async def run_main_loop():
                         if wake_word_active:
                             await asyncio.sleep(0.1)  # Small buffer to prevent immediate re-trigger
                             wake_word.state['stream'].start_stream()
-                    
+
                     if not transcript:
                         print(f"No input detected. Returning to sleep state.")
                         await display_manager.update_display('sleep')
                         await asyncio.sleep(0.1)  # Small buffer before next iteration
                         continue
-                    
+
                     # Process the transcript
                     transcript_lower = transcript.lower().strip()
-                    
+
                     # Check for system commands
                     command_result = system_manager.detect_command(transcript)
                     if command_result:
@@ -3920,39 +3918,39 @@ async def run_main_loop():
                             if success:
                                 await display_manager.update_display('listening')
                                 follow_up = await capture_speech(is_follow_up=True)
-                                
+
                                 while follow_up:
                                     cmd_result = system_manager.detect_command(follow_up)
                                     if cmd_result and cmd_result[0]:
                                         is_cmd, cmd_type, action = cmd_result
                                         success = await system_manager.handle_command(cmd_type, action)
-                                        
+
                                         if success:
                                             await display_manager.update_display('listening')
                                             follow_up = await capture_speech(is_follow_up=True)
                                             continue
                                         else:
                                             break
-                                    
+
                                     user_message = {"role": "user", "content": follow_up}
                                     if not any(msg["role"] == "user" and msg["content"] == follow_up for msg in chat_log[-2:]):
                                         chat_log.append(user_message)
-                                    
+
                                     await display_manager.update_display('thinking')
                                     formatted_response = await generate_response(follow_up)
-                                    
+
                                     if formatted_response == "[CONTINUE]":
                                         print("DEBUG - Detected control signal in follow-up, continuing")
                                         continue
-                                    
+
                                     try:
                                         await display_manager.update_display('speaking')
                                         await generate_voice(formatted_response)
-                                        
+
                                         # Check notifications before state transition
                                         if await notification_manager.has_pending_notifications():
                                             await notification_manager.process_pending_notifications()
-                                        
+
                                         if isinstance(formatted_response, str) and has_conversation_hook(formatted_response):
                                             await audio_manager.wait_for_audio_completion()
                                             await display_manager.update_display('listening')
@@ -3965,44 +3963,44 @@ async def run_main_loop():
                                         print(f"Error during follow-up voice generation: {voice_error}")
                                         await display_manager.update_display('sleep')
                                         break
-                                    
+
                                     follow_up = await capture_speech(is_follow_up=True)
                             else:
                                 await display_manager.update_display('sleep')
                             continue
-                    
+
                     # Normal conversation flow
                     try:
                         # Allow any previous state changes to complete
                         await asyncio.sleep(0.1)
                         await display_manager.update_display('thinking')
                         formatted_response = await generate_response(transcript)
-                        
+
                         if formatted_response == "[CONTINUE]":
                             print("DEBUG - Detected control signal, skipping voice generation")
                             continue
-                        
+
                         # Ensure clean state transition
                         await asyncio.sleep(0.1)
                         await display_manager.update_display('speaking')
                         await generate_voice(formatted_response)
-                        
+
                         # Wait for speech to complete
                         await audio_manager.wait_for_audio_completion()
-                        
+
                         # Check and process any pending notifications
                         if await notification_manager.has_pending_notifications():
                             await notification_manager.process_pending_notifications()
-                        
+
                         # Always transition to listening and continue conversation unless explicitly ended
                         await display_manager.update_display('listening')
                         await handle_conversation_loop(formatted_response)
-                            
+
                     except Exception as voice_error:
                         print(f"Error during voice generation: {voice_error}")
                         await display_manager.update_display('sleep')
                         continue
-                        
+
             else:
                 # If we're in idle state, check for timeout to sleep
                 if current_state == 'idle':
@@ -4026,14 +4024,14 @@ async def run_main_loop():
                 await display_manager.update_display('idle')
             await asyncio.sleep(0.1)
             continue
-            
+
 if __name__ == "__main__":
     try:
         display_manager = DisplayManager()
         asyncio.run(main())
     except KeyboardInterrupt:
         print("\nExiting Virtual Assistant - Cleaning up resources...")
-        
+
         # First stop any active processes
         if 'audio_manager' in globals() and audio_manager:
             try:
@@ -4041,7 +4039,7 @@ if __name__ == "__main__":
                 asyncio.run(audio_manager.cleanup())
             except Exception as e:
                 print(f"Error cleaning up audio manager: {e}")
-        
+
         # Release the transcriber resources explicitly
         if 'transcriber' in globals() and transcriber:
             try:
@@ -4050,20 +4048,20 @@ if __name__ == "__main__":
                 transcriber = None  # Explicitly clear the reference
             except Exception as e:
                 print(f"Error cleaning up transcriber: {e}")
-        
+
         # Clean up remaining components
         if 'remote_transcriber' in globals() and remote_transcriber:
             try:
                 asyncio.run(remote_transcriber.cleanup())
             except Exception as e:
                 print(f"Error cleaning up remote transcriber: {e}")
-                
+
         if 'display_manager' in globals() and display_manager:
             try:
                 display_manager.cleanup()
             except Exception as e:
                 print(f"Error cleaning up display manager: {e}")
-        
+
         # Final garbage collection pass
         import gc
         gc.collect()
