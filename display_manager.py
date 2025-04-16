@@ -19,10 +19,7 @@ class DisplayManager:
         self.state_entry_time = None
         self.initialized = False
         self.state_lock = asyncio.Lock()
-        self.moods = [
-            "caring", "casual", "cheerful", "concerned", "confused", "curious",
-            "disappointed", "embarrassed", "sassy", "surprised", "suspicious", "thoughtful"
-        ]
+        self.moods = [ "amused", "annoyed", "caring", "casual", "cheerful", "concerned", "confused", "curious", "disappointed", "embarrassed", "excited", "frustrated", "interested", "sassy", "scared", "surprised","suspicious", "thoughtful"]
         self.states = {
             'listening': str(self.base_path / 'listening'),
             'idle': str(self.base_path / 'idle'),
