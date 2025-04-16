@@ -300,4 +300,281 @@ class SystemManager:
                                             'voicecalibrationcomplete.mp3')
 
             elif command_type == "reminder":
-                return await self._
+                return await self._handle_reminder_command(action, arguments)
+            
+            elif command_type == "persona":
+                return await self._handle_persona_command(action, arguments)
+
+            if audio_file and os.path.exists(audio_file):
+                await self.audio_manager.play_audio(audio_file)
+            await self.audio_manager.wait_for_audio_completion()
+            
+            await self.display_manager.update_display('listening')
+            
+            return True
+            
+        except Exception as e:
+            error_msg = f"Command error: {str(e)}"
+            print(error_msg)
+            print(f"Traceback: {traceback.format_exc()}")
+            
+            error_audio = os.path.join(SOUND_PATHS['system']['error'], 'error.mp3')
+            if os.path.exists(error_audio):
+                await self.audio_manager.play_audio(error_audio)
+            
+            return False
+    
+    async def _run_calibration(self) -> bool:
+        """
+        Run the voice calibration process
+        Returns True if calibration succeeded, False if it failed
+        """
+        try:
+            calib_script = Path("vad_calib.py").absolute()
+            
+            process = await asyncio.create_subprocess_exec(
+                "python3", str(calib_script),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            
+            stdout, stderr = await process.communicate()
+            success = "CALIBRATION_COMPLETE" in stdout.decode()
+            
+            if success:
+                print("Voice calibration completed successfully")
+            else:
+                print("Voice calibration failed")
+                if stderr:
+                    print(f"Calibration error: {stderr.decode()}")
+                    
+            return success
+            
+        except Exception as e:
+            print(f"Calibration error: {str(e)}")
+            print(f"Traceback: {traceback.format_exc()}")
+            return False
+
+    async def _handle_reminder_command(self, action: str, arguments: str = None) -> bool:
+        """
+        Handle reminder-related commands
+        Returns True if command succeeded, False if it failed
+        """
+        try:
+            await self.display_manager.update_display('tools')
+            success = False
+            audio_folder = None
+            
+            if action == "clear":
+                if arguments:
+                    success = await self.notification_manager.clear_notification(arguments)
+                    audio_folder = SOUND_PATHS['reminder']['cleared'] if success else SOUND_PATHS['reminder']['error']
+                else:
+                    # No reminder ID provided, show list of active reminders
+                    active_reminders = await self.notification_manager.get_active_reminders()
+                    if active_reminders:
+                        print("Active reminders:")
+                        for rid, details in active_reminders.items():
+                            print(f"- {rid}: {details['type']} ({details['created']})")
+                        success = True
+                        audio_folder = SOUND_PATHS['reminder']['list']
+                    else:
+                        audio_folder = SOUND_PATHS['reminder']['none']
+                        
+            elif action == "add":
+                if arguments:
+                    import shlex
+                    try:
+                        args = shlex.split(arguments)
+                    except ValueError:
+                        args = arguments.split()
+                        
+                    if len(args) >= 2:
+                        reminder_type = args[0]
+                        time = args[1]
+                        day_input = ' '.join(args[2:]) if len(args) > 2 else "all"
+                        
+                        try:
+                            schedule_days = self._parse_schedule_days(day_input)
+                            await self.notification_manager.add_recurring_reminder(
+                                reminder_type=reminder_type,
+                                schedule={
+                                    "time": time,
+                                    "days": schedule_days,
+                                    "recurring": True
+                                }
+                            )
+                            print(f"Added recurring reminder '{reminder_type}' for {time} on {', '.join(schedule_days)}")
+                            success = True
+                            audio_folder = SOUND_PATHS['reminder']['added']
+                        except ValueError as e:
+                            print(f"Error adding reminder: {e}")
+                            audio_folder = SOUND_PATHS['reminder']['error']
+                    else:
+                        audio_folder = SOUND_PATHS['reminder']['error']
+                else:
+                    audio_folder = SOUND_PATHS['reminder']['error']
+                    
+            # Play appropriate audio feedback
+            if audio_folder and os.path.exists(audio_folder):
+                mp3_files = [f for f in os.listdir(audio_folder) if f.endswith('.mp3')]
+                if mp3_files:
+                    audio_file = os.path.join(audio_folder, random.choice(mp3_files))
+                    await self.audio_manager.play_audio(audio_file)
+                    await self.audio_manager.wait_for_audio_completion()
+            
+            await self.display_manager.update_display('listening')
+            return success
+            
+        except Exception as e:
+            print(f"Reminder command error: {str(e)}")
+            print(f"Traceback: {traceback.format_exc()}")
+            error_audio = os.path.join(SOUND_PATHS['system']['error'], 'error.mp3')
+            if os.path.exists(error_audio):
+                await self.audio_manager.play_audio(error_audio)
+            return False
+
+    async def _handle_persona_command(self, action: str, arguments: str = None) -> bool:
+        """
+        Handle persona-related commands
+        Returns True if command succeeded, False if it failed
+        """
+        try:
+            await self.display_manager.update_display('tools')
+            success = False
+            
+            # Load personas file
+            persona_path = "personalities.json"
+            try:
+                with open(persona_path, 'r') as f:
+                    personas_data = json.load(f)
+            except FileNotFoundError:
+                # Create default personas file if it doesn't exist
+                personas_data = {
+                    "personas": {
+                        "laura": {
+                            "name": "Laura",
+                            "voice": "L.A.U.R.A.",
+                            "system_prompt": "You are Laura (Language & Automation User Response Agent), a professional and supportive AI-powered smart assistant."
+                        }
+                    },
+                    "active_persona": "laura"
+                }
+                with open(persona_path, 'w') as f:
+                    json.dump(personas_data, f, indent=2)
+            
+            # Get available personas
+            available_personas = personas_data.get("personas", {})
+            
+            if action == "switch":
+                if not arguments:
+                    # No persona specified, show list of available personas
+                    print("Available personas:")
+                    for persona in available_personas.keys():
+                        print(f"- {persona}")
+                    
+                    await self.audio_manager.play_audio(os.path.join(SOUND_PATHS['system']['error'], 'error.mp3'))
+                    await self.audio_manager.wait_for_audio_completion()
+                    await self.display_manager.update_display('listening')
+                    return True
+                
+                # Clean up and normalize the persona name from arguments
+                normalized_input = arguments.strip().lower()
+                
+                # First try direct match with persona key
+                if normalized_input in available_personas:
+                    persona_name = normalized_input
+                else:
+                    # Try to match against persona names (case-insensitive)
+                    for key, persona in available_personas.items():
+                        persona_display_name = persona.get("name", "").lower()
+                        # Check if the normalized input contains the persona name 
+                        # or if persona name contains the normalized input
+                        if (persona_display_name in normalized_input or 
+                            normalized_input in persona_display_name or
+                            key.lower() in normalized_input or
+                            normalized_input in key.lower()):
+                            persona_name = key
+                            break
+                    else:
+                        # No match found
+                        print(f"No matching persona found for: {arguments}")
+                        await self.audio_manager.play_audio(os.path.join(SOUND_PATHS['system']['error'], 'error.mp3'))
+                        await self.audio_manager.wait_for_audio_completion()
+                        await self.display_manager.update_display('listening')
+                        return False
+                
+                # Try to switch to the identified persona
+                if persona_name in available_personas:
+                    print(f"Switching to persona: {persona_name}")
+                    
+                # Update active persona in data
+                personas_data["active_persona"] = persona_name
+                
+                # Save updated persona data
+                with open(persona_path, 'w') as f:
+                    json.dump(personas_data, f, indent=2)
+                
+                # Update global variables for immediate effect
+                global SYSTEM_PROMPT, VOICE, SOUND_BASE_PATH, SOUND_PATHS
+                active_persona = personas_data["personas"][persona_name]
+                SYSTEM_PROMPT = active_persona["system_prompt"]
+                VOICE = active_persona["voice"]
+                
+                # Update display base path for the persona
+                self.display_manager.update_base_path(Path(f'/home/user/LAURA/pygame/{persona_name}'))
+                
+                # Update sound paths for the persona
+                    SOUND_BASE_PATH = Path(f'/home/user/LAURA/sounds/{persona_name}')
+                    
+                    # Rebuild sound paths
+                    SOUND_PATHS = {
+                        'wake': str(SOUND_BASE_PATH / 'wake_sentences'),  
+                        'tool': {
+                            'status': {
+                                'enabled': str(SOUND_BASE_PATH / 'tool_sentences' / 'status' / 'enabled'),
+                                'disabled': str(SOUND_BASE_PATH / 'tool_sentences' / 'status' / 'disabled'),
+                            },
+                            'use': str(SOUND_BASE_PATH / 'tool_sentences' / 'use')
+                        },
+                        'file': {
+                            'loaded': str(SOUND_BASE_PATH / 'file_sentences' / 'loaded'),
+                            'offloaded': str(SOUND_BASE_PATH / 'file_sentences' / 'offloaded'),
+                        },
+                        'timeout': str(SOUND_BASE_PATH / 'timeout_sentences'),
+                        'calibration': str(SOUND_BASE_PATH / 'calibration'),
+                        'filler': str(SOUND_BASE_PATH / 'filler'),
+                        'system': {  # Make sure system error folder exists
+                            'error': str(SOUND_BASE_PATH / 'system' / 'error')
+                        }
+                    }
+                    
+                    # Play persona switch audio feedback
+                    try:
+                        # Try to play specific audio for this persona change
+                        success_folder = SOUND_PATHS['tool']['status']['enabled']
+                        if os.path.exists(success_folder):
+                            mp3_files = [f for f in os.listdir(success_folder) if f.endswith('.mp3')]
+                            if mp3_files:
+                                await self.audio_manager.play_audio(os.path.join(success_folder, random.choice(mp3_files)))
+                                await self.audio_manager.wait_for_audio_completion()
+                    except Exception as audio_err:
+                        print(f"Error playing audio feedback: {audio_err}")
+                    
+                    success = True
+                else:
+                    print(f"Persona not found: {persona_name}")
+                    await self.audio_manager.play_audio(os.path.join(SOUND_PATHS['system']['error'], 'error.mp3'))
+                    await self.audio_manager.wait_for_audio_completion()
+                    success = False
+            
+            await self.display_manager.update_display('listening')
+            return success
+            
+        except Exception as e:
+            print(f"Persona command error: {str(e)}")
+            print(f"Traceback: {traceback.format_exc()}")
+            error_audio = os.path.join(SOUND_PATHS['system']['error'], 'error.mp3')
+            if os.path.exists(error_audio):
+                await self.audio_manager.play_audio(error_audio)
+            return False
