@@ -1,6 +1,7 @@
 import asyncio
 import os
 import random
+import json
 import traceback
 from datetime import datetime
 from pathlib import Path
@@ -14,19 +15,20 @@ from config_cl import (
     SOUND_PATHS
 )
 
+RECURRENCE_TERMS = {
+    "recurring": "recurring",    # standard spelling
+    "reoccuring": "recurring",   # common misspelling
+    "reoccurring": "recurring",  # another common variant
+    "repeating": "recurring",    # alternative term
+    "regular": "recurring",      # natural language variant
+    "scheduled": "recurring"     # another natural term
+}
+
 class SystemManager:
     """
     Handles all system commands (loading files, enabling tools, etc.)
     Works with other managers to execute commands and provide audio feedback
     """
-    RECURRENCE_TERMS = {
-        "recurring": "recurring",    # standard spelling
-        "reoccuring": "recurring",   # common misspelling
-        "reoccurring": "recurring",  # another common variant
-        "repeating": "recurring",    # alternative term
-        "regular": "recurring",      # natural language variant
-        "scheduled": "recurring"     # another natural term
-    }
 
     def __init__(self, 
                  display_manager, 
@@ -71,7 +73,7 @@ class SystemManager:
             "reminder": {
                 "clear": [
                     "clear reminder", "dismiss reminder", "acknowledge reminder",
-                    "clear notification", "dismiss notification"
+                    "clear notification", "dismiss notification", "I've finished my task", "I've taken my medicine" 
                 ],
                 "add": [
                     f"add {term} reminder" for term in RECURRENCE_TERMS.keys()
@@ -95,6 +97,15 @@ class SystemManager:
                     f"show {term} reminders" for term in RECURRENCE_TERMS.keys()
                 ] + [
                     f"active {term} reminders" for term in RECURRENCE_TERMS.keys()
+                ]
+            },
+            "persona": {
+                "switch": [
+                    "switch persona", "change persona", "talk to", "switch to", "change to",
+                    "load personality", "load character", "load assistant", "become", 
+                    "switch personality", "change personality", "change character",
+                    "switch character", "switch voice", "change voice", "use persona",
+                    "activate persona", "activate personality", "activate character"
                 ]
             }
         }
@@ -289,133 +300,4 @@ class SystemManager:
                                             'voicecalibrationcomplete.mp3')
 
             elif command_type == "reminder":
-                return await self._handle_reminder_command(action, arguments)
-
-            if audio_file and os.path.exists(audio_file):
-                await self.audio_manager.play_audio(audio_file)
-            await self.audio_manager.wait_for_audio_completion()
-            
-            await self.display_manager.update_display('listening')
-            
-            return True
-            
-        except Exception as e:
-            error_msg = f"Command error: {str(e)}"
-            print(error_msg)
-            print(f"Traceback: {traceback.format_exc()}")
-            
-            error_audio = os.path.join(SOUND_PATHS['system']['error'], 'error.mp3')
-            if os.path.exists(error_audio):
-                await self.audio_manager.play_audio(error_audio)
-            
-            return False
-
-    async def _run_calibration(self) -> bool:
-        """
-        Run the voice calibration process
-        Returns True if calibration succeeded, False if it failed
-        """
-        try:
-            calib_script = Path("vad_calib.py").absolute()
-            
-            process = await asyncio.create_subprocess_exec(
-                "python3", str(calib_script),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            
-            stdout, stderr = await process.communicate()
-            success = "CALIBRATION_COMPLETE" in stdout.decode()
-            
-            if success:
-                print("Voice calibration completed successfully")
-            else:
-                print("Voice calibration failed")
-                if stderr:
-                    print(f"Calibration error: {stderr.decode()}")
-                    
-            return success
-            
-        except Exception as e:
-            print(f"Calibration error: {str(e)}")
-            print(f"Traceback: {traceback.format_exc()}")
-            return False
-
-    async def _handle_reminder_command(self, action: str, arguments: str = None) -> bool:
-        """
-        Handle reminder-related commands
-        Returns True if command succeeded, False if it failed
-        """
-        try:
-            await self.display_manager.update_display('tools')
-            success = False
-            audio_folder = None
-            
-            if action == "clear":
-                if arguments:
-                    success = await self.notification_manager.clear_notification(arguments)
-                    audio_folder = SOUND_PATHS['reminder']['cleared'] if success else SOUND_PATHS['reminder']['error']
-                else:
-                    # No reminder ID provided, show list of active reminders
-                    active_reminders = await self.notification_manager.get_active_reminders()
-                    if active_reminders:
-                        print("Active reminders:")
-                        for rid, details in active_reminders.items():
-                            print(f"- {rid}: {details['type']} ({details['created']})")
-                        success = True
-                        audio_folder = SOUND_PATHS['reminder']['list']
-                    else:
-                        audio_folder = SOUND_PATHS['reminder']['none']
-                        
-            elif action == "add":
-                if arguments:
-                    import shlex
-                    try:
-                        args = shlex.split(arguments)
-                    except ValueError:
-                        args = arguments.split()
-                        
-                    if len(args) >= 2:
-                        reminder_type = args[0]
-                        time = args[1]
-                        day_input = ' '.join(args[2:]) if len(args) > 2 else "all"
-                        
-                        try:
-                            schedule_days = self._parse_schedule_days(day_input)
-                            await self.notification_manager.add_recurring_reminder(
-                                reminder_type=reminder_type,
-                                schedule={
-                                    "time": time,
-                                    "days": schedule_days,
-                                    "recurring": True
-                                }
-                            )
-                            print(f"Added recurring reminder '{reminder_type}' for {time} on {', '.join(schedule_days)}")
-                            success = True
-                            audio_folder = SOUND_PATHS['reminder']['added']
-                        except ValueError as e:
-                            print(f"Error adding reminder: {e}")
-                            audio_folder = SOUND_PATHS['reminder']['error']
-                    else:
-                        audio_folder = SOUND_PATHS['reminder']['error']
-                else:
-                    audio_folder = SOUND_PATHS['reminder']['error']
-                    
-            # Play appropriate audio feedback
-            if audio_folder and os.path.exists(audio_folder):
-                mp3_files = [f for f in os.listdir(audio_folder) if f.endswith('.mp3')]
-                if mp3_files:
-                    audio_file = os.path.join(audio_folder, random.choice(mp3_files))
-                    await self.audio_manager.play_audio(audio_file)
-                    await self.audio_manager.wait_for_audio_completion()
-            
-            await self.display_manager.update_display('listening')
-            return success
-            
-        except Exception as e:
-            print(f"Reminder command error: {str(e)}")
-            print(f"Traceback: {traceback.format_exc()}")
-            error_audio = os.path.join(SOUND_PATHS['system']['error'], 'error.mp3')
-            if os.path.exists(error_audio):
-                await self.audio_manager.play_audio(error_audio)
-            return False
+                return await self._
