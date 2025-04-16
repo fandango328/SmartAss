@@ -9,7 +9,7 @@ import random
 import os
 
 class NotificationManager:
-    def __init__(self, audio_manager, config_path="config/notifications.json"):
+    def __init__(self, audio_manager, config_path="config_notifications.json"):
         self.audio_manager = audio_manager
         self.last_calendar_check = datetime.now()
         self.notification_queue = asyncio.Queue()
