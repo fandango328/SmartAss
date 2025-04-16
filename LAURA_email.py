@@ -3805,11 +3805,25 @@ async def run_main_loop():
         if system_manager is None:
             try:
                 print("Initializing SystemManager...")
+                # Initialize NotificationManager if needed first
+                if 'notification_manager' not in globals():
+                    try:
+                        print("Initializing NotificationManager...")
+                        notification_manager = NotificationManager(audio_manager)
+                        await notification_manager.start()
+                        print("NotificationManager initialized successfully")
+                    except Exception as e:
+                        print(f"Error initializing NotificationManager: {e}")
+                        print("NotificationManager initialization failed")
+                        return
+
+                # Now create SystemManager with all required parameters
                 system_manager = SystemManager(
                     display_manager=display_manager,
                     audio_manager=audio_manager,
                     document_manager=document_manager,
-                    token_tracker=token_tracker
+                    token_tracker=token_tracker,
+                    notification_manager=notification_manager
                 )
                 print("SystemManager initialized successfully")
                 print(f"{Fore.MAGENTA}Listening for wake word or press Raspberry button to begin...{Fore.WHITE}")
