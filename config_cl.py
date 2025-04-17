@@ -42,12 +42,17 @@ TRANSCRIPTION_SERVER = {
     "port": 8765
 }
 
+
 # Set up paths for the active persona
-SOUND_BASE_PATH = Path(f'/home/user/LAURA/sounds/{ACTIVE_PERSONA}')
+SOUND_BASE_PATH = Path(f'/home/user/LAURA/sounds/{ACTIVE_PERSONA.lower()}')  # Ensure lowercase for consistency
 
 # Audio file directories
 SOUND_PATHS = {
-    'wake': str(SOUND_BASE_PATH / 'wake_sentences'),  
+    'wake': {
+        'frustrated': str(SOUND_BASE_PATH / 'wake_sentences' / 'frustrated'),
+        'sleepy': str(SOUND_BASE_PATH / 'wake_sentences' / 'sleepy'),
+        'standard': str(SOUND_BASE_PATH / 'wake_sentences' / 'standard')
+    },  
     'tool': {
         'status': {
             'enabled': str(SOUND_BASE_PATH / 'tool_sentences' / 'status' / 'enabled'),
