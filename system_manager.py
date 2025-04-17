@@ -24,6 +24,14 @@ RECURRENCE_TERMS = {
 	"scheduled": "recurring"	 # another natural term
 }
 
+PERSONA_SWITCH_INTENTS = [
+    "talk to",
+    "switch to",
+    "change to",
+    "i want to talk to",
+    "let me talk to"
+]
+
 class SystemManager:
 	"""
 	Handles all system commands (loading files, enabling tools, etc.)
@@ -182,29 +190,39 @@ class SystemManager:
 		Check if the user's words match any of our command patterns
 		Returns:
 		- is this a command? (True/False)
-		- what type of command? (document/tool/calibration/reminder)
-		- what action to take? (load/offload/enable/disable/clear/add/etc)
+		- what type of command? (document/tool/calibration/reminder/persona)
+		- what action to take? (load/offload/enable/disable/switch)
 		- arguments for the command (if any)
 		"""
 		normalized_transcript = self._normalize_command_input(transcript)
-
+		
+		# First check for persona commands as they need special handling
+		try:
+			with open("personalities.json", 'r') as f:
+				personas_data = json.load(f)
+				available_personas = personas_data.get("personas", {}).keys()
+				
+				# Check each persona switch intent
+				for intent in PERSONA_SWITCH_INTENTS:
+					if intent in normalized_transcript:
+						# Check if any persona name appears after the intent
+						for persona in available_personas:
+							if persona.lower() in normalized_transcript:
+								return True, "persona", "switch", persona.lower()
+		except Exception as e:
+			print(f"Error checking personas: {e}")
+		
+		# Handle all other commands
 		for command_type, actions in self.command_patterns.items():
-			for action, patterns in actions.items():
-				# First try exact matches
-				if any(pattern == normalized_transcript for pattern in patterns):
-					return True, command_type, action, None
-
-				# Then try component matching for more flexible detection
-				for pattern in patterns:
-					components = pattern.split()
-					if self.has_command_components(normalized_transcript, components):
-						# Extract arguments (anything after the command pattern)
-						pattern_pos = normalized_transcript.find(pattern)
-						if pattern_pos >= 0:
-							cmd_end = pattern_pos + len(pattern)
-							arguments = transcript[cmd_end:].strip()  # Use original transcript for arguments
-							return True, command_type, action, arguments if arguments else None
-
+			if command_type != "persona":  # Skip persona commands as already handled
+				for action, patterns in actions.items():
+					for pattern in patterns:
+						if pattern in normalized_transcript:
+							# Extract arguments after the pattern if any
+							start_idx = normalized_transcript.find(pattern) + len(pattern)
+							args = normalized_transcript[start_idx:].strip()
+							return True, command_type, action, args if args else None
+		
 		return False, None, None, None
 
 	def _parse_schedule_days(self, day_input: str) -> list:
@@ -232,7 +250,7 @@ class SystemManager:
 			days = [d.strip().lower()[:3] for d in day_input.split(',')]
 			return [day_mapping[d] for d in days if d in day_mapping]
 
-	async def handle_command(self, command_type: str, action: str, arguments: str = None) -> bool:
+	async def handle_command(self, command_type: str, action: str, arguments: str = None) -> Tuple[bool, Optional[str], Optional[str]]:
 		"""
 		Execute a command and provide audio feedback
 		Returns True if command succeeded, False if it failed
@@ -259,39 +277,31 @@ class SystemManager:
 
 			elif command_type == "tool":
 				if action == "enable":
-					result = self.token_tracker.enable_tools()
-					print(f"Tool enable result: {result}")  # Debug output
-					if result["state"] == "enabled":
-						print("Tools successfully enabled")
-						folder_path = SOUND_PATHS['tool']['status']['enabled']
-						mp3_files = [f for f in os.listdir(folder_path) if f.endswith('.mp3')]
-						if mp3_files:
-							audio_file = os.path.join(folder_path, random.choice(mp3_files))
-							if audio_file and os.path.exists(audio_file):
-								await self.audio_manager.play_audio(audio_file)
-								await self.audio_manager.wait_for_audio_completion()
-						await self.display_manager.update_display('listening')
-						return True
-					else:
-						print("Failed to enable tools")
-						return False
-				else:  # disable
-					result = self.token_tracker.disable_tools()
-					print(f"Tool disable result: {result}")  # Debug output
-					if result["state"] == "disabled":
-						print("Tools successfully disabled")
-						folder_path = SOUND_PATHS['tool']['status']['disabled']
-						mp3_files = [f for f in os.listdir(folder_path) if f.endswith('.mp3')]
-						if mp3_files:
-							audio_file = os.path.join(folder_path, random.choice(mp3_files))
-							if audio_file and os.path.exists(audio_file):
-								await self.audio_manager.play_audio(audio_file)
-								await self.audio_manager.wait_for_audio_completion()
-						await self.display_manager.update_display('listening')
-						return True
-					else:
-						print("Failed to disable tools")
-						return False
+					try:
+						result = self.token_tracker.enable_tools()
+						print(f"Tool enable result: {result}")  # Debug output
+						
+						if isinstance(result, dict) and result.get("state") == "enabled":
+							print("Tools successfully enabled")
+							# Play success audio
+							folder_path = SOUND_PATHS['tool']['status']['enabled']
+							if os.path.exists(folder_path):
+								mp3_files = [f for f in os.listdir(folder_path) if f.endswith('.mp3')]
+								if mp3_files:
+									audio_file = os.path.join(folder_path, random.choice(mp3_files))
+									if os.path.exists(audio_file):
+										await self.audio_manager.play_audio(audio_file)
+										await self.audio_manager.wait_for_audio_completion()
+							
+							await self.display_manager.update_display('listening')
+							return True, None, None  # Return tuple of 3 values as expected
+						else:
+							print("Failed to enable tools")
+							return False, None, None  # Return tuple of 3 values as expected
+							
+					except Exception as e:
+						print(f"Error enabling tools: {e}")
+						return False, None, None  # Return tuple of 3 values as expected
 
 			elif command_type == "calibration":
 				success = await self._run_calibration()
@@ -436,23 +446,31 @@ class SystemManager:
 
 	async def _handle_persona_command(self, action: str, arguments: str = None) -> bool:
 		"""
-		Handle persona-related commands
+		Handle persona-related commands using pre-recorded audio files
 		Returns True if command succeeded, False if it failed
 		"""
+		# Initialize personas_data outside try block so it's accessible in catch-all error handler
+		personas_data = None  
+		
 		try:
-			await self.display_manager.update_display('tools')
+			# Step 1: Update display to 'tools' state to show we're processing a command
+			try:
+				await self.display_manager.update_display('tools')
+			except Exception as e:
+				print(f"Warning: Failed to update display to tools state: {e}")
+			
 			success = False
 			
-			# Load personas file
+			# Step 2: Load or create personalities configuration
 			persona_path = "personalities.json"
 			try:
 				with open(persona_path, 'r') as f:
 					personas_data = json.load(f)
 			except FileNotFoundError:
+				# Create default config if file doesn't exist
 				personas_data = {
 					"personas": {
 						"laura": {
-							"name": "Laura",
 							"voice": "L.A.U.R.A.",
 							"system_prompt": "You are Laura (Language & Automation User Response Agent), a professional and supportive AI-powered smart assistant."
 						}
@@ -462,72 +480,74 @@ class SystemManager:
 				with open(persona_path, 'w') as f:
 					json.dump(personas_data, f, indent=2)
 			
+			# Step 3: Get available personas from config
 			available_personas = personas_data.get("personas", {})
 			
+			# Step 4: Process the switch command
 			if action == "switch":
-				if not arguments:
-					print("Available personas:")
-					for persona in available_personas.keys():
-						print(f"- {persona}")
+				# Normalize input for case-insensitive matching
+				normalized_input = arguments.strip().lower() if arguments else ""
+				
+				# Step 5: Find matching persona in available personas
+				target_persona = None
+				for key in available_personas:
+					if key.lower() in normalized_input:
+						target_persona = key
+						break
+				
+				# Step 6: If matching persona found, process the switch
+				if target_persona:
+					# Step 7: Check for persona's audio files
+					audio_path = Path(f'/home/user/LAURA/sounds/{target_persona}/persona_sentences')
 					
-					await self.audio_manager.tts_handler.generate_voice(
-						"Please specify which persona you'd like to switch to."
-					)
-					await self.audio_manager.wait_for_audio_completion()
-					await self.display_manager.update_display('listening')
-					return True
-				
-				normalized_input = arguments.strip().lower()
-				
-				if normalized_input in available_personas:
-					persona_name = normalized_input
-				else:
-					for key, persona in available_personas.items():
-						persona_display_name = persona.get("name", "").lower()
-						if (persona_display_name in normalized_input or 
-							normalized_input in persona_display_name or
-							key.lower() in normalized_input or
-							normalized_input in key.lower()):
-							persona_name = key
-							break
+					if audio_path.exists():
+						# Get list of MP3 files in persona directory
+						audio_files = list(audio_path.glob('*.mp3'))
+						
+						if audio_files:
+							try:
+								# Step 8: Play switch announcement audio
+								chosen_audio = str(random.choice(audio_files))
+								await self.audio_manager.play_audio(chosen_audio)
+								await self.audio_manager.wait_for_audio_completion()
+								
+								# Step 9: Update active persona in config file
+								personas_data["active_persona"] = target_persona
+								with open(persona_path, 'w') as f:
+									json.dump(personas_data, f, indent=2)
+								
+								# Step 10: Update display manager with new persona path
+								try:
+									await self.display_manager.update_display_path(
+										str(Path(f'/home/user/LAURA/pygame/{target_persona}'))
+									)
+									success = True
+								except Exception as e:
+									print(f"Error updating display path: {e}")
+									success = False
+							except Exception as e:
+								print(f"Error during persona switch: {e}")
+								success = False
+						else:
+							print(f"No audio files found in {audio_path}")
+							success = False
 					else:
-						error_message = f"I couldn't find a persona matching '{arguments}'. Available personas are: {', '.join(available_personas.keys())}"
-						await self.audio_manager.tts_handler.generate_voice(error_message)
-						await self.audio_manager.wait_for_audio_completion()
-						await self.display_manager.update_display('listening')
-						return False
-				
-				if persona_name in available_personas:
-					print(f"Switching to persona: {persona_name}")
-					
-					personas_data["active_persona"] = persona_name
-					with open(persona_path, 'w') as f:
-						json.dump(personas_data, f, indent=2)
-					
-					active_persona = personas_data["personas"][persona_name]
-					
-					self.display_manager.update_base_path(Path(f'/home/user/LAURA/pygame/{persona_name}'))
-					sound_base_path = Path(f'/home/user/LAURA/sounds/{persona_name}')
-					
-					switch_message = f"Switching to {active_persona.get('name', persona_name)} persona. How can I help you?"
-					await self.audio_manager.tts_handler.generate_voice(switch_message)
-					await self.audio_manager.wait_for_audio_completion()
-					
-					success = True
+						print(f"Audio path not found: {audio_path}")
+						success = False
 				else:
-					error_message = f"Sorry, I couldn't switch to that persona. Available personas are: {', '.join(available_personas.keys())}"
-					await self.audio_manager.tts_handler.generate_voice(error_message)
-					await self.audio_manager.wait_for_audio_completion()
+					print(f"Persona '{arguments}' not found")
 					success = False
 			
-			await self.display_manager.update_display('listening')
+			# Step 11: Return to listening state
+			try:
+				await self.display_manager.update_display('listening')
+			except Exception as e:
+				print(f"Warning: Failed to update display to listening state: {e}")
+			
 			return success
 			
 		except Exception as e:
+			# Step 12: Handle any unexpected errors
 			print(f"Persona command error: {str(e)}")
 			print(f"Traceback: {traceback.format_exc()}")
-			await self.audio_manager.tts_handler.generate_voice(
-				"I encountered an error while trying to switch personas. Please try again."
-			)
-			await self.audio_manager.wait_for_audio_completion()
 			return False
