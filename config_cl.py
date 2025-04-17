@@ -43,34 +43,42 @@ TRANSCRIPTION_SERVER = {
 }
 
 
-# Set up paths for the active persona
-SOUND_BASE_PATH = Path(f'/home/user/LAURA/sounds/{ACTIVE_PERSONA.lower()}')  # Ensure lowercase for consistency
+def get_sound_base_path():
+    """Get the current sound base path based on active persona"""
+    return Path(f'/home/user/LAURA/sounds/{ACTIVE_PERSONA.lower()}')
 
-# Audio file directories
-SOUND_PATHS = {
-    'wake': {
-        'frustrated': str(SOUND_BASE_PATH / 'wake_sentences' / 'frustrated'),
-        'sleepy': str(SOUND_BASE_PATH / 'wake_sentences' / 'sleepy'),
-        'standard': str(SOUND_BASE_PATH / 'wake_sentences' / 'standard')
-    },  
-    'tool': {
-        'status': {
-            'enabled': str(SOUND_BASE_PATH / 'tool_sentences' / 'status' / 'enabled'),
-            'disabled': str(SOUND_BASE_PATH / 'tool_sentences' / 'status' / 'disabled'),
+def get_sound_paths():
+    """Generate sound paths dictionary based on current active persona"""
+    sound_base = get_sound_base_path()
+    return {
+        'wake': {
+            'frustrated': str(sound_base / 'wake_sentences' / 'frustrated'),
+            'sleepy': str(sound_base / 'wake_sentences' / 'sleepy'),
+            'standard': str(sound_base / 'wake_sentences' / 'standard')
+        },  
+        'tool': {
+            'status': {
+                'enabled': str(sound_base / 'tool_sentences' / 'status' / 'enabled'),
+                'disabled': str(sound_base / 'tool_sentences' / 'status' / 'disabled'),
+            },
+            'use': str(sound_base / 'tool_sentences' / 'use')
         },
-        'use': str(SOUND_BASE_PATH / 'tool_sentences' / 'use')
-    },
-    'file': {
-        'loaded': str(SOUND_BASE_PATH / 'file_sentences' / 'loaded'),
-        'offloaded': str(SOUND_BASE_PATH / 'file_sentences' / 'offloaded'),
-    },
-    'timeout': str(SOUND_BASE_PATH / 'timeout_sentences'),
-    'calibration': str(SOUND_BASE_PATH / 'calibration'),
-    'filler': str(SOUND_BASE_PATH / 'filler'),
-    'system': {
-        'error': str(SOUND_BASE_PATH / 'system' / 'error')
+        'file': {
+            'loaded': str(sound_base / 'file_sentences' / 'loaded'),
+            'offloaded': str(sound_base / 'file_sentences' / 'offloaded'),
+        },
+        'timeout': str(sound_base / 'timeout_sentences'),
+        'calibration': str(sound_base / 'calibration'),
+        'filler': str(sound_base / 'filler'),
+        'system': {
+            'error': str(sound_base / 'system' / 'error')
+        }
     }
-}
+
+# Initialize sound paths
+SOUND_BASE_PATH = get_sound_base_path()
+SOUND_PATHS = get_sound_paths()
+
 
 # Use the voice from the active persona
 VOICE = ACTIVE_PERSONA_DATA.get("voice", "L.A.U.R.A.")  # voice - elevenlabs specific
