@@ -516,15 +516,22 @@ class SystemManager:
                                 with open(persona_path, 'w') as f:
                                     json.dump(personas_data, f, indent=2)
                                 
-                                # Update configuration in memory and reload
+                                # Update just the in-memory values that other parts of LAURA use
+                                import config_cl
                                 try:
-                                    from config_cl import PERSONALITIES_DATA, ACTIVE_PERSONA, ACTIVE_PERSONA_DATA
-                                    globals()['PERSONALITIES_DATA'] = personas_data
-                                    globals()['ACTIVE_PERSONA'] = target_persona
-                                    globals()['ACTIVE_PERSONA_DATA'] = personas_data.get("personas", {}).get(target_persona, {})
-                                    print(f"Configuration updated, new active persona: {target_persona}")
-                                except Exception as reload_error:
-                                    print(f"Error updating configuration: {reload_error}")
+                                    # Change the active persona name and data
+                                    config_cl.ACTIVE_PERSONA = target_persona
+                                    config_cl.ACTIVE_PERSONA_DATA = personas_data["personas"][target_persona]
+                                    # Update the voice that will be used
+                                    config_cl.VOICE = personas_data["personas"][target_persona].get("voice", "L.A.U.R.A.")
+                                    # Update the prompt that will be used
+                                    new_prompt = personas_data["personas"][target_persona].get("system_prompt", "You are an AI assistant.")
+                                    config_cl.SYSTEM_PROMPT = f"{new_prompt}\n\n{config_cl.UNIVERSAL_SYSTEM_PROMPT}"
+                                    print(f"Switched to persona: {target_persona}")
+                                    print(f"Using voice: {config_cl.VOICE}")
+                                except Exception as e:
+                                    print(f"Error switching persona: {e}")
+                                    success = False
                                 
                                 # Step 10: Update display manager with new persona path
                                 try:
