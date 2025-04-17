@@ -35,6 +35,13 @@ import glob
 import wave
 
 # =============================================================================
+# Warning Suppression
+# =============================================================================
+os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = '1'  # Hide pygame welcome message
+import warnings
+warnings.filterwarnings('ignore', category=UserWarning)
+
+# =============================================================================
 # Third-Party Imports - Audio Processing
 # =============================================================================
 import pyaudio
@@ -3395,7 +3402,7 @@ def get_random_audio(category, context=None):
 	"""
 	try:
 		# Base directory containing all sound categories
-		base_sound_dir = "/home/user/LAURA/sounds"
+		base_sound_dir = f"/home/user/LAURA/sounds/{ACTIVE_PERSONA.lower()}"
 
 		# Determine the correct path based on category and context
 		if category == "file" and context:
