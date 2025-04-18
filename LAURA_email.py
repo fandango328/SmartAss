@@ -408,7 +408,7 @@ try:
     if USE_GOOGLE:
         if os.path.exists("token.json"):
             try:
-                creds = Credentials.from_authorized_user_file("token.json", SCOPES)
+                creds = Credentials.from_authorized_user_file("token.json", SCOPES)  #This is your refresh token.  As long as you don't switch wifi networks the refresh token should log you back in automatically if you need to restart the script, or the device
                 print("Loaded existing credentials from token.json")
             except Exception as e:
                 print(f"Error loading credentials: {e}")
@@ -3792,8 +3792,8 @@ async def run_main_loop():
                     display_manager=display_manager,
                     audio_manager=audio_manager,
                     document_manager=document_manager,
-                    token_tracker=token_tracker,
-                    notification_manager=notification_manager
+                    notification_manager=notification_manager,
+                    token_tracker=token_tracker
                 )
                 print("SystemManager initialized successfully")
                 print(f"{Fore.MAGENTA}Listening for wake word or press Raspberry button to begin...{Fore.WHITE}")
@@ -3801,18 +3801,6 @@ async def run_main_loop():
                 print(f"Error initializing SystemManager: {e}")
                 print("SystemManager initialization failed")
                 return
-
-    # Initialize NotificationManager if not already initialized
-    if 'notification_manager' not in globals():
-        try:
-            print("Initializing NotificationManager...")
-            notification_manager = NotificationManager(audio_manager)
-            await notification_manager.start()
-            print("NotificationManager initialized successfully")
-        except Exception as e:
-            print(f"Error initializing NotificationManager: {e}")
-            print("NotificationManager initialization failed")
-            return
 
     while True:
         # Start of iteration - clear variables
