@@ -79,6 +79,7 @@ from googleapiclient.errors import HttpError
 # Local Module Imports
 # =============================================================================
 from laura_tools import AVAILABLE_TOOLS as TOOLS
+from tts_handler import TTSHandler
 from display_manager import DisplayManager
 from audio_manager_vosk import AudioManager
 from whisper_transcriber import WhisperCppTranscriber
@@ -375,53 +376,6 @@ class RemoteTranscriber:
             finally:
                 self.websocket = None
 
-class TTSHandler:
-    def __init__(self, config):
-        self.config = config  # Store config in instance variable
-        self.tts_engine = config["TTS_ENGINE"]
-        self.eleven = None
-        if self.tts_engine == "elevenlabs":
-            self.eleven = ElevenLabs(api_key=config["ELEVENLABS_KEY"])
-
-    def generate_audio(self, text):
-        if self.tts_engine == "elevenlabs":
-            return self._generate_elevenlabs(text)
-        else:
-            return self._generate_alltalk(text)
-
-    def _generate_elevenlabs(self, text):
-        audio = b"".join(self.eleven.generate(
-            text=text,
-            voice=self.config["VOICE"],
-            model=self.config["ELEVENLABS_MODEL"],  # Changed from model_id to model
-            output_format="mp3_44100_128"  # Optional: specify output format
-        ))
-        return audio
-
-    def _generate_alltalk(self, text): #this function is needing to be redone and be api compliant.  Put this on my to-do list for later
-        try:
-            response = requests.post( #ignore for now
-                f"{self.config['ALLTALK_HOST']}/api/tts",
-                json={
-                    "text": text,
-                    "voice": self.config["ALLTALK_VOICE"],
-                    "model": self.config["ALLTALK_MODEL"]
-                },
-                timeout=30
-            )
-            response.raise_for_status()
-
-            if response.status_code == 200:
-                return response.content
-            else:
-                raise Exception(f"AllTalk API error: {response.status_code} - {response.text}")
-
-        except requests.exceptions.RequestException as e:
-            print(f"AllTalk API request failed: {str(e)}")
-            if self.eleven:
-                print("Falling back to ElevenLabs...")
-                return self._generate_elevenlabs(text)
-            raise
 
 # Global variables
 # =============================================================================
@@ -2725,8 +2679,8 @@ async def generate_voice(chat):
 
         print(f"Sending to TTS: {chat[:50]}..." if len(chat) > 50 else f"Sending to TTS: {chat}")
 
-        # Generate and save audio
-        audio = tts_handler.generate_audio(chat)
+        # Use SystemManager's TTS handler for voice generation
+        audio = system_manager.tts_handler.generate_audio(chat)
         with open(AUDIO_FILE, "wb") as f:
             f.write(audio)
 
