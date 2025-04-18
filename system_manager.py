@@ -8,6 +8,9 @@ from pathlib import Path
 from typing import Optional, Tuple, Dict, Any
 from enum import Enum
 from token_manager import TokenManager
+from tts_handler import TTSHandler
+import config_cl
+from secret import ELEVENLABS_KEY
 
 # Configuration imports
 from config_cl import (
@@ -50,6 +53,15 @@ class SystemManager:
         self.document_manager = document_manager
         self.notification_manager = notification_manager
         self.token_tracker = token_tracker
+        
+        # Initialize TTS handler
+        from secret import ELEVENLABS_KEY
+        self.tts_handler = TTSHandler({
+            "TTS_ENGINE": config_cl.TTS_ENGINE,
+            "ELEVENLABS_KEY": ELEVENLABS_KEY,
+            "VOICE": config_cl.VOICE,
+            "ELEVENLABS_MODEL": config_cl.ELEVENLABS_MODEL,
+        })
 
         self.command_patterns = {
             "document": {
@@ -516,7 +528,7 @@ class SystemManager:
                                 with open(persona_path, 'w') as f:
                                     json.dump(personas_data, f, indent=2)
                                 
-                                # Update just the in-memory values that other parts of LAURA use
+                                # Update configuration and reinitialize TTS
                                 import config_cl
                                 try:
                                     # Change the active persona name and data
@@ -527,8 +539,22 @@ class SystemManager:
                                     # Update the prompt that will be used
                                     new_prompt = personas_data["personas"][target_persona].get("system_prompt", "You are an AI assistant.")
                                     config_cl.SYSTEM_PROMPT = f"{new_prompt}\n\n{config_cl.UNIVERSAL_SYSTEM_PROMPT}"
+                                    
+
+                                    # Reinitialize TTS handler with new voice
+                                    from secret import ELEVENLABS_KEY
+                                    new_config = {
+                                        "TTS_ENGINE": config_cl.TTS_ENGINE,
+                                        "ELEVENLABS_KEY": ELEVENLABS_KEY,
+                                        "VOICE": config_cl.VOICE,
+                                        "ELEVENLABS_MODEL": config_cl.ELEVENLABS_MODEL,
+                                    }
+                                    self.tts_handler = TTSHandler(new_config)
+                                    
                                     print(f"Switched to persona: {target_persona}")
                                     print(f"Using voice: {config_cl.VOICE}")
+                                    print(f"TTS handler reinitialized with new voice")
+                                    print(f"System prompt updated and reloaded")
                                 except Exception as e:
                                     print(f"Error switching persona: {e}")
                                     success = False
