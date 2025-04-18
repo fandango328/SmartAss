@@ -27,14 +27,6 @@ RECURRENCE_TERMS = {
     "scheduled": "recurring"     # another natural term
 }
 
-PERSONA_SWITCH_INTENTS = [
-    "talk to",
-    "switch to",
-    "change to",
-    "i want to talk to",
-    "let me talk to"
-]
-
 class SystemManager:
     """
     Handles all system commands (loading files, enabling tools, etc.)
@@ -81,7 +73,8 @@ class SystemManager:
                 ],
                 "disable": [
                     "tools offline", "disable tools", "stop tools",
-                    "tools off", "disable tool use"
+                    "tools off", "disable tool use", "stop tool",
+                    "tools stop", "tool stop"
                 ]
             },
             "calibration": {
@@ -121,11 +114,10 @@ class SystemManager:
             },
             "persona": {
                 "switch": [
-                    "switch persona", "change persona", "talk to", "switch to", "change to",
-                    "load personality", "load character", "load assistant", "become",
-                    "switch personality", "change personality", "change character",
-                    "switch character", "switch voice", "change voice", "use persona",
-                    "activate persona", "activate personality", "activate character"
+                    "change character to", "talk to", "switch to", "change to",
+                    "load personality", "load character", "load assistant",
+                    "switch personality", "change personality",
+                    "switch character to", "switch voice", "change voice"
                 ]
             }
         }
@@ -207,34 +199,39 @@ class SystemManager:
         - arguments for the command (if any)
         """
         normalized_transcript = self._normalize_command_input(transcript)
+        print(f"DEBUG - Normalized transcript: '{normalized_transcript}'")
         
-        # First check for persona commands as they need special handling
+        # Load available personas for command context
         try:
             with open("personalities.json", 'r') as f:
                 personas_data = json.load(f)
                 available_personas = personas_data.get("personas", {}).keys()
-                
-                # Check each persona switch intent
-                for intent in PERSONA_SWITCH_INTENTS:
-                    if intent in normalized_transcript:
-                        # Check if any persona name appears after the intent
-                        for persona in available_personas:
-                            if persona.lower() in normalized_transcript:
-                                return True, "persona", "switch", persona.lower()
         except Exception as e:
-            print(f"Error checking personas: {e}")
+            print(f"Error loading personas: {e}")
+            available_personas = set()
         
-        # Handle all other commands
+        # Handle all commands including persona
         for command_type, actions in self.command_patterns.items():
-            if command_type != "persona":  # Skip persona commands as already handled
-                for action, patterns in actions.items():
-                    for pattern in patterns:
-                        if pattern in normalized_transcript:
-                            # Extract arguments after the pattern if any
-                            start_idx = normalized_transcript.find(pattern) + len(pattern)
-                            args = normalized_transcript[start_idx:].strip()
-                            return True, command_type, action, args if args else None
+            for action, patterns in actions.items():
+                for pattern in patterns:
+                    if pattern in normalized_transcript:
+                        # Extract arguments after the pattern if any
+                        start_idx = normalized_transcript.find(pattern) + len(pattern)
+                        args = normalized_transcript[start_idx:].strip()
+                        
+                        # Special handling for persona commands to extract target persona
+                        if command_type == "persona" and available_personas:
+                            for persona in available_personas:
+                                if persona.lower() in normalized_transcript:
+                                    return True, command_type, action, persona.lower()
+                            # If no valid persona found in command, return without args
+                            if args:
+                                print(f"No valid persona found in command: {args}")
+                            return True, command_type, action, None
+                        
+                        return True, command_type, action, args if args else None
         
+        print("DEBUG - No command pattern matched")
         return False, None, None, None
 
     def _parse_schedule_days(self, day_input: str) -> list:
@@ -274,52 +271,71 @@ class SystemManager:
             if command_type == "document":
                 if action == "load":
                     load_success = await self.document_manager.load_all_files(clear_existing=False)
-                    folder_path = SOUND_PATHS['file']['loaded' if load_success else 'error']
-                    mp3_files = [f for f in os.listdir(folder_path) if f.endswith('.mp3')]
-                    if mp3_files:
-                        audio_file = os.path.join(folder_path, random.choice(mp3_files))
+                    folder_path = os.path.join(f"/home/user/LAURA/sounds/{config_cl.ACTIVE_PERSONA.lower()}/file_sentences/{'loaded' if load_success else 'error'}")
+                    if os.path.exists(folder_path):
+                        mp3_files = [f for f in os.listdir(folder_path) if f.endswith('.mp3')]
+                        if mp3_files:
+                            audio_file = os.path.join(folder_path, random.choice(mp3_files))
                     if not load_success:
-                        return False
+                        return False, None, None
                 else:  # offload
                     await self.document_manager.offload_all_files()
-                    folder_path = SOUND_PATHS['file']['offloaded']
-                    mp3_files = [f for f in os.listdir(folder_path) if f.endswith('.mp3')]
-                    if mp3_files:
-                        audio_file = os.path.join(folder_path, random.choice(mp3_files))
+                    folder_path = os.path.join(f"/home/user/LAURA/sounds/{config_cl.ACTIVE_PERSONA.lower()}/file_sentences/offloaded")
+                    if os.path.exists(folder_path):
+                        mp3_files = [f for f in os.listdir(folder_path) if f.endswith('.mp3')]
+                        if mp3_files:
+                            audio_file = os.path.join(folder_path, random.choice(mp3_files))
 
             elif command_type == "tool":
-                if action == "enable":
-                    try:
+                try:
+                    # Update display to show we're processing a tool command
+                    await self.display_manager.update_display('tools')
+                    
+                    # Get the appropriate status folder based on action
+                    status_type = 'enabled' if action == 'enable' else 'disabled'
+                    folder_path = os.path.join(f"/home/user/LAURA/sounds/{config_cl.ACTIVE_PERSONA.lower()}/tool_sentences/status/{status_type}")
+                    
+                    # Execute the tool state change
+                    if action == "enable":
                         result = self.token_tracker.enable_tools()
-                        print(f"Tool enable result: {result}")  # Debug output
+                    else:  # disable
+                        result = self.token_tracker.disable_tools()
+                    
+                    print(f"Tool {action} result: {result}")  # Debug output
+                    
+                    # Check if operation was successful
+                    if isinstance(result, dict) and result.get("state") == status_type:
+                        print(f"Tools successfully {status_type}")
                         
-                        if isinstance(result, dict) and result.get("state") == "enabled":
-                            print("Tools successfully enabled")
-                            # Play success audio
-                            folder_path = SOUND_PATHS['tool']['status']['enabled']
-                            if os.path.exists(folder_path):
-                                mp3_files = [f for f in os.listdir(folder_path) if f.endswith('.mp3')]
-                                if mp3_files:
-                                    audio_file = os.path.join(folder_path, random.choice(mp3_files))
-                                    if os.path.exists(audio_file):
-                                        await self.audio_manager.play_audio(audio_file)
-                                        await self.audio_manager.wait_for_audio_completion()
-                            
-                            await self.display_manager.update_display('listening')
-                            return True, None, None  # Return tuple of 3 values as expected
-                        else:
-                            print("Failed to enable tools")
-                            return False, None, None  # Return tuple of 3 values as expected
-                            
-                    except Exception as e:
-                        print(f"Error enabling tools: {e}")
-                        return False, None, None  # Return tuple of 3 values as expected
+                        # Play appropriate audio feedback if available
+                        if os.path.exists(folder_path):
+                            mp3_files = [f for f in os.listdir(folder_path) if f.endswith('.mp3')]
+                            if mp3_files:
+                                audio_file = os.path.join(folder_path, random.choice(mp3_files))
+                                if os.path.exists(audio_file):
+                                    await self.audio_manager.play_audio(audio_file)
+                                    await self.audio_manager.wait_for_audio_completion()
+                        
+                        # Return to listening state
+                        await self.display_manager.update_display('listening')
+                        return True, None, None
+                    else:
+                        print(f"Failed to {action} tools")
+                        return False, None, None
+                        
+                except Exception as e:
+                    print(f"Error during tool {action}: {e}")
+                    traceback.print_exc()
+                    return False, None, None
 
             elif command_type == "calibration":
                 success = await self._run_calibration()
                 if success:
-                    audio_file = os.path.join(SOUND_PATHS['calibration'],
-                                            'voicecalibrationcomplete.mp3')
+                    folder_path = os.path.join(f"/home/user/LAURA/sounds/{config_cl.ACTIVE_PERSONA.lower()}/calibration_sentences")
+                    if os.path.exists(folder_path):
+                        mp3_files = [f for f in os.listdir(folder_path) if f.endswith('.mp3')]
+                        if mp3_files:
+                            audio_file = os.path.join(folder_path, random.choice(mp3_files))
 
             elif command_type == "reminder":
                 return await self._handle_reminder_command(action, arguments)
@@ -332,19 +348,13 @@ class SystemManager:
             await self.audio_manager.wait_for_audio_completion()
 
             await self.display_manager.update_display('listening')
-
-            return True
+            return True, None, None
 
         except Exception as e:
             error_msg = f"Command error: {str(e)}"
             print(error_msg)
             print(f"Traceback: {traceback.format_exc()}")
-
-            error_audio = os.path.join(SOUND_PATHS['system']['error'], 'error.mp3')
-            if os.path.exists(error_audio):
-                await self.audio_manager.play_audio(error_audio)
-
-            return False
+            return False, None, None
 
     async def _run_calibration(self) -> bool:
         """
@@ -390,7 +400,7 @@ class SystemManager:
             if action == "clear":
                 if arguments:
                     success = await self.notification_manager.clear_notification(arguments)
-                    audio_folder = SOUND_PATHS['reminder']['cleared'] if success else SOUND_PATHS['reminder']['error']
+                    audio_folder = os.path.join(f"/home/user/LAURA/sounds/{config_cl.ACTIVE_PERSONA.lower()}/reminder_sentences/{'cleared' if success else 'error'}")
                 else:
                     # No reminder ID provided, show list of active reminders
                     active_reminders = await self.notification_manager.get_active_reminders()
@@ -399,9 +409,9 @@ class SystemManager:
                         for rid, details in active_reminders.items():
                             print(f"- {rid}: {details['type']} ({details['created']})")
                         success = True
-                        audio_folder = SOUND_PATHS['reminder']['list']
+                        audio_folder = os.path.join(f"/home/user/LAURA/sounds/{config_cl.ACTIVE_PERSONA.lower()}/reminder_sentences/list")
                     else:
-                        audio_folder = SOUND_PATHS['reminder']['none']
+                        audio_folder = os.path.join(f"/home/user/LAURA/sounds/{config_cl.ACTIVE_PERSONA.lower()}/reminder_sentences/none")
 
             elif action == "add":
                 if arguments:
@@ -428,14 +438,14 @@ class SystemManager:
                             )
                             print(f"Added recurring reminder '{reminder_type}' for {time} on {', '.join(schedule_days)}")
                             success = True
-                            audio_folder = SOUND_PATHS['reminder']['added']
+                            audio_folder = os.path.join(f"/home/user/LAURA/sounds/{config_cl.ACTIVE_PERSONA.lower()}/reminder_sentences/added")
                         except ValueError as e:
                             print(f"Error adding reminder: {e}")
-                            audio_folder = SOUND_PATHS['reminder']['error']
+                            audio_folder = os.path.join(f"/home/user/LAURA/sounds/{config_cl.ACTIVE_PERSONA.lower()}/reminder_sentences/error")
                     else:
-                        audio_folder = SOUND_PATHS['reminder']['error']
+                        audio_folder = os.path.join(f"/home/user/LAURA/sounds/{config_cl.ACTIVE_PERSONA.lower()}/reminder_sentences/error")
                 else:
-                    audio_folder = SOUND_PATHS['reminder']['error']
+                    audio_folder = os.path.join(f"/home/user/LAURA/sounds/{config_cl.ACTIVE_PERSONA.lower()}/reminder_sentences/error")
 
             # Play appropriate audio feedback
             if audio_folder and os.path.exists(audio_folder):
@@ -451,9 +461,6 @@ class SystemManager:
         except Exception as e:
             print(f"Reminder command error: {str(e)}")
             print(f"Traceback: {traceback.format_exc()}")
-            error_audio = os.path.join(SOUND_PATHS['system']['error'], 'error.mp3')
-            if os.path.exists(error_audio):
-                await self.audio_manager.play_audio(error_audio)
             return False
 
     async def _handle_persona_command(self, action: str, arguments: str = None) -> bool:
