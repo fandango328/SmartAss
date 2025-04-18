@@ -17,7 +17,7 @@ except Exception as e:
     ACTIVE_PERSONA = "laura"
     ACTIVE_PERSONA_DATA = PERSONALITIES_DATA["personas"]["laura"]
 
-ANTHROPIC_MODEL = "claude-3-7-sonnet-20250219" # Or whichever Claude model you want to use          
+ANTHROPIC_MODEL = "claude-3-5-haiku-20241022" # Or whichever Claude model you want to use          
 
 CHAT_LOG_MAX_TOKENS = 80000  # Maximum tokens to keep in memory
 CHAT_LOG_RECOVERY_TOKENS = 1000 # Tokens to recover on startup
