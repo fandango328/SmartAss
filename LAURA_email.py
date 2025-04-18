@@ -1823,7 +1823,7 @@ async def generate_response(query):
 
         # Debug output
         print("\nDEBUG - Final API request state:")
-        print(f"System content: {system_content[:100]}...")
+        #print(f"System content: {system_content[:100]}...")
         print(f"Chat log message count: {len(sanitized_messages)}")
         print("Message structure verification:")
         if sanitized_messages:
@@ -3394,7 +3394,7 @@ def get_random_audio(category, context=None):
             }
             folder = context_map.get(context, "standard")
             audio_path = Path(f"{base_sound_dir}/wake_sentences/{folder}")
-            print(f"Looking for wake audio in: {audio_path}")
+            #print(f"Looking for wake audio in: {audio_path}")
 
         else:
             # Default to main category folder for timeout, calibration, etc.
@@ -3410,7 +3410,7 @@ def get_random_audio(category, context=None):
 
         if audio_files:
             chosen_file = str(random.choice(audio_files))
-            print(f"Found and selected audio file: {chosen_file}")
+            #print(f"Found and selected audio file: {chosen_file}")
             return chosen_file
         else:
             print(f"WARNING: No audio files found in {audio_path}")
@@ -3842,15 +3842,16 @@ async def run_main_loop():
 
                 # If no wake event detected, quick sleep and continue
                 if not wake_detected:
-                    await asyncio.sleep(0.15)
+                    await asyncio.sleep(0.1)
                     continue
 
                 # Handle wake event
                 if wake_detected:
                     # Only play wake audio if wake word was used (not keyboard)
                     if detected_model:
+                        await display_manager.update_display('wake')						
                         wake_audio = get_random_audio('wake', detected_model)
-                        await display_manager.update_display('wake')
+
                         if wake_audio:
                             await audio_manager.play_audio(wake_audio)
                             await audio_manager.wait_for_audio_completion()
