@@ -47,7 +47,8 @@ class DisplayManager:
             'speaking': str(self.base_path / 'speaking'),
             'thinking': str(self.base_path / 'thinking'),
             'tools': str(self.base_path / 'tools'),
-            'wake': str(self.base_path / 'wake')
+            'wake': str(self.base_path / 'wake'),
+            'system': str(self.base_path / 'system')
         }
         
         self.setup_display()
@@ -121,41 +122,7 @@ class DisplayManager:
         
         if missing_states:
             raise RuntimeError(f"Failed to load required states: {', '.join(missing_states)}")
-    
-    async def update_display(self, state, mood=None):
-        async with self.state_lock:
-            if mood is None:
-                mood = self.current_mood
-
-            if state == self.current_state and mood == self.current_mood:
-                return  # No change needed
-            
-            try:
-                self.last_state = self.current_state
-                self.current_state = state
-                self.current_mood = mood
-                
-                if state == 'speaking':
-                    if mood not in self.image_cache[state]:
-                        print(f"Warning: Invalid mood '{mood}', using casual mood")
-                        mood = 'casual'
-                    self.current_image = random.choice(self.image_cache[state][mood])
-                elif state in self.image_cache:
-                    self.current_image = random.choice(self.image_cache[state])
-                else:
-                    print(f"Error: Invalid state '{state}'")
-                    return
-                
-                self.screen.blit(self.current_image, (0, 0))
-                pygame.display.flip()
-                
-                self.state_entry_time = time.time()
-                if state in ['idle', 'sleep']:
-                    self.last_image_change = self.state_entry_time
-            
-            except Exception as e:
-                print(f"Error updating display: {e}")
-    
+        
     async def rotate_background(self):
         while not self.initialized:
             await asyncio.sleep(0.1)
@@ -214,7 +181,8 @@ class DisplayManager:
                     'speaking': str(self.base_path / 'speaking'),
                     'thinking': str(self.base_path / 'thinking'),
                     'tools': str(self.base_path / 'tools'),
-                    'wake': str(self.base_path / 'wake')
+                    'wake': str(self.base_path / 'wake'),
+                    'system': str(self.base_path / 'system')
                 }
                 
                 # Clear existing cache
@@ -239,4 +207,100 @@ class DisplayManager:
             
             except Exception as e:
                 print(f"Error updating display path: {e}")
+                return False
+             
+    async def update_display(self, state, mood=None, transition_path=None):
+        async with self.state_lock:
+            if mood is None:
+                mood = self.current_mood
+
+            # Skip no-change updates unless it's a transition with a specific path
+            if state == self.current_state and mood == self.current_mood and transition_path is None:
+                return  # No change needed
+            
+            try:
+                self.last_state = self.current_state
+                self.current_state = state
+                self.current_mood = mood
+                
+                # Handle special case for persona transitions
+                if transition_path is not None:
+                    # Load and display transition image(s) directly from the path
+                    transition_path = Path(transition_path)
+                    if transition_path.exists():
+                        png_files = list(transition_path.glob('*.png'))
+                        if png_files:
+                            # If we have multiple images, use the first one for now
+                            # (Could be extended to play a sequence)
+                            transition_image = pygame.transform.scale(
+                                pygame.image.load(str(png_files[0])), 
+                                (512, 512)
+                            )
+                            self.current_image = transition_image
+                            self.screen.blit(self.current_image, (0, 0))
+                            pygame.display.flip()
+                            self.state_entry_time = time.time()
+                            return
+                        else:
+                            print(f"Warning: No PNG files found in transition path: {transition_path}")
+                    else:
+                        print(f"Warning: Transition path not found: {transition_path}")
+                        # Continue with normal state handling
+                
+                # Normal state handling
+                if state == 'speaking':
+                    if mood not in self.image_cache[state]:
+                        print(f"Warning: Invalid mood '{mood}', using casual mood")
+                        mood = 'casual'
+                    self.current_image = random.choice(self.image_cache[state][mood])
+                elif state in self.image_cache:
+                    self.current_image = random.choice(self.image_cache[state])
+                else:
+                    print(f"Error: Invalid state '{state}'")
+                    return
+                
+                self.screen.blit(self.current_image, (0, 0))
+                pygame.display.flip()
+                
+                self.state_entry_time = time.time()
+                if state in ['idle', 'sleep']:
+                    self.last_image_change = self.state_entry_time
+            
+            except Exception as e:
+                print(f"Error updating display: {e}")
+
+    async def play_transition_sequence(self, transition_path, frame_delay=0.1):
+        """
+        Play a sequence of transition images from a directory
+        Args:
+            transition_path: Path to directory containing transition frames
+            frame_delay: Delay between frames in seconds
+        """
+        async with self.state_lock:
+            try:
+                transition_path = Path(transition_path)
+                if not transition_path.exists():
+                    print(f"Warning: Transition path not found: {transition_path}")
+                    return False
+                    
+                png_files = sorted(list(transition_path.glob('*.png')))
+                if not png_files:
+                    print(f"Warning: No PNG files found in transition path: {transition_path}")
+                    return False
+                    
+                # Play the sequence
+                for frame_file in png_files:
+                    frame_image = pygame.transform.scale(
+                        pygame.image.load(str(frame_file)), 
+                        (512, 512)
+                    )
+                    self.current_image = frame_image
+                    self.screen.blit(self.current_image, (0, 0))
+                    pygame.display.flip()
+                    await asyncio.sleep(frame_delay)
+                    
+                return True
+                    
+            except Exception as e:
+                print(f"Error playing transition sequence: {e}")
                 return False
