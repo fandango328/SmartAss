@@ -4,6 +4,7 @@ import numpy as np
 import time
 import sys
 import os
+import random
 import pygame.mixer
 import json
 import logging
@@ -181,15 +182,35 @@ def calculate_thresholds(silence_levels, speech_levels, speech_peaks):
     
     return energy_threshold, continued_ratio, continued_threshold
 
-def play_and_wait(file_path):
+def get_random_audio(persona, phase):
+    """Get random audio file from calibration subdirectory for current phase"""
+    base_path = Path(f'/home/user/LAURA/sounds/{persona}/calibration/{phase}')
+    if not base_path.exists():
+        logger.error(f"Calibration audio directory not found: {base_path}")
+        return None
+        
+    audio_files = list(base_path.glob('*.mp3'))
+    if not audio_files:
+        logger.error(f"No audio files found in {base_path}")
+        return None
+        
+    return str(random.choice(audio_files))
+
+def play_and_wait(persona, phase):
+    """Play random audio file for the current calibration phase"""
     try:
         pygame.mixer.init()
-        sound = pygame.mixer.Sound(file_path)
+        audio_file = get_random_audio(persona, phase)
+        if not audio_file:
+            logger.error(f"No audio file found for {persona} - {phase}")
+            return
+            
+        sound = pygame.mixer.Sound(audio_file)
         sound.play()
         while pygame.mixer.get_busy():
-            time.sleep(0.1)
-        pygame.mixer.quit()  # Close mixer after playback
-        time.sleep(.7)     # buffer time adjusted to .7 because 1.5 is excessive
+            time.time(0.1)
+        pygame.mixer.quit()
+        time.sleep(0.7)
     except Exception as e:
         logger.error(f"Error playing audio: {e}")
         print("Please follow the instructions...")
@@ -216,15 +237,28 @@ def main():
     p, stream = setup_audio_stream()
     
     try:
+
+        # Get current active persona from config
+        try:
+            with open("personalities.json", 'r') as f:
+                persona_config = json.load(f)
+                current_persona = persona_config.get("active_persona", "laura")
+        except Exception as e:
+            logger.warning(f"Could not read persona config, defaulting to laura: {e}")
+            current_persona = "laura"
+
         # Silence calibration phase
-        play_and_wait("/home/user/LAURA/sounds/laura/calibration/keepquiet.mp3")
+        play_and_wait(current_persona, "silence")
         print("MEASURING SILENCE NOW - Please remain quiet")
         silence_levels, silence_peaks = measure_levels(stream, 5, "Silence")
         
         # Speech calibration phase
-        play_and_wait("/home/user/LAURA/sounds/laura/calibration/nowineedyoutotalk2.mp3")
+        play_and_wait(current_persona, "talk")
         print("MEASURING SPEECH NOW - Please speak continuously")
         speech_levels, speech_peaks = measure_levels(stream, 5, "Speech")
+        
+        # Completion notification
+        play_and_wait(current_persona, "complete")
         
         # Unpack the returned tuple correctly
         energy_threshold, continued_ratio, continued_threshold = calculate_thresholds(
