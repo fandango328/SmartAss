@@ -9,11 +9,11 @@ from typing import Optional, Tuple, Dict, Any
 from enum import Enum
 from token_manager import TokenManager
 from tts_handler import TTSHandler
-import config_cl
+import config
 from secret import ELEVENLABS_KEY
 
 # Configuration imports
-from config_cl import (
+from config import (
     VAD_SETTINGS,
     SOUND_PATHS
 )
@@ -49,10 +49,10 @@ class SystemManager:
         # Initialize TTS handler
         from secret import ELEVENLABS_KEY
         self.tts_handler = TTSHandler({
-            "TTS_ENGINE": config_cl.TTS_ENGINE,
+            "TTS_ENGINE": config.TTS_ENGINE,
             "ELEVENLABS_KEY": ELEVENLABS_KEY,
-            "VOICE": config_cl.VOICE,
-            "ELEVENLABS_MODEL": config_cl.ELEVENLABS_MODEL,
+            "VOICE": config.VOICE,
+            "ELEVENLABS_MODEL": config.ELEVENLABS_MODEL,
         })
 
         self.command_patterns = {
@@ -271,7 +271,7 @@ class SystemManager:
             if command_type == "document":
                 if action == "load":
                     load_success = await self.document_manager.load_all_files(clear_existing=False)
-                    folder_path = os.path.join(f"/home/user/LAURA/sounds/{config_cl.ACTIVE_PERSONA.lower()}/file_sentences/{'loaded' if load_success else 'error'}")
+                    folder_path = os.path.join(f"/home/user/LAURA/sounds/{config.ACTIVE_PERSONA.lower()}/file_sentences/{'loaded' if load_success else 'error'}")
                     if os.path.exists(folder_path):
                         mp3_files = [f for f in os.listdir(folder_path) if f.endswith('.mp3')]
                         if mp3_files:
@@ -280,7 +280,7 @@ class SystemManager:
                         return False, None, None
                 else:  # offload
                     await self.document_manager.offload_all_files()
-                    folder_path = os.path.join(f"/home/user/LAURA/sounds/{config_cl.ACTIVE_PERSONA.lower()}/file_sentences/offloaded")
+                    folder_path = os.path.join(f"/home/user/LAURA/sounds/{config.ACTIVE_PERSONA.lower()}/file_sentences/offloaded")
                     if os.path.exists(folder_path):
                         mp3_files = [f for f in os.listdir(folder_path) if f.endswith('.mp3')]
                         if mp3_files:
@@ -293,7 +293,7 @@ class SystemManager:
                     
                     # Get the appropriate status folder based on action
                     status_type = 'enabled' if action == 'enable' else 'disabled'
-                    folder_path = os.path.join(f"/home/user/LAURA/sounds/{config_cl.ACTIVE_PERSONA.lower()}/tool_sentences/status/{status_type}")
+                    folder_path = os.path.join(f"/home/user/LAURA/sounds/{config.ACTIVE_PERSONA.lower()}/tool_sentences/status/{status_type}")
                     
                     # Execute the tool state change
                     if action == "enable":
@@ -331,7 +331,7 @@ class SystemManager:
             elif command_type == "calibration":
                 success = await self._run_calibration()
                 if success:
-                    folder_path = os.path.join(f"/home/user/LAURA/sounds/{config_cl.ACTIVE_PERSONA.lower()}/calibration_sentences")
+                    folder_path = os.path.join(f"/home/user/LAURA/sounds/{config.ACTIVE_PERSONA.lower()}/calibration_sentences")
                     if os.path.exists(folder_path):
                         mp3_files = [f for f in os.listdir(folder_path) if f.endswith('.mp3')]
                         if mp3_files:
@@ -400,7 +400,7 @@ class SystemManager:
             if action == "clear":
                 if arguments:
                     success = await self.notification_manager.clear_notification(arguments)
-                    audio_folder = os.path.join(f"/home/user/LAURA/sounds/{config_cl.ACTIVE_PERSONA.lower()}/reminder_sentences/{'cleared' if success else 'error'}")
+                    audio_folder = os.path.join(f"/home/user/LAURA/sounds/{config.ACTIVE_PERSONA.lower()}/reminder_sentences/{'cleared' if success else 'error'}")
                 else:
                     # No reminder ID provided, show list of active reminders
                     active_reminders = await self.notification_manager.get_active_reminders()
@@ -409,9 +409,9 @@ class SystemManager:
                         for rid, details in active_reminders.items():
                             print(f"- {rid}: {details['type']} ({details['created']})")
                         success = True
-                        audio_folder = os.path.join(f"/home/user/LAURA/sounds/{config_cl.ACTIVE_PERSONA.lower()}/reminder_sentences/list")
+                        audio_folder = os.path.join(f"/home/user/LAURA/sounds/{config.ACTIVE_PERSONA.lower()}/reminder_sentences/list")
                     else:
-                        audio_folder = os.path.join(f"/home/user/LAURA/sounds/{config_cl.ACTIVE_PERSONA.lower()}/reminder_sentences/none")
+                        audio_folder = os.path.join(f"/home/user/LAURA/sounds/{config.ACTIVE_PERSONA.lower()}/reminder_sentences/none")
 
             elif action == "add":
                 if arguments:
@@ -438,14 +438,14 @@ class SystemManager:
                             )
                             print(f"Added recurring reminder '{reminder_type}' for {time} on {', '.join(schedule_days)}")
                             success = True
-                            audio_folder = os.path.join(f"/home/user/LAURA/sounds/{config_cl.ACTIVE_PERSONA.lower()}/reminder_sentences/added")
+                            audio_folder = os.path.join(f"/home/user/LAURA/sounds/{config.ACTIVE_PERSONA.lower()}/reminder_sentences/added")
                         except ValueError as e:
                             print(f"Error adding reminder: {e}")
-                            audio_folder = os.path.join(f"/home/user/LAURA/sounds/{config_cl.ACTIVE_PERSONA.lower()}/reminder_sentences/error")
+                            audio_folder = os.path.join(f"/home/user/LAURA/sounds/{config.ACTIVE_PERSONA.lower()}/reminder_sentences/error")
                     else:
-                        audio_folder = os.path.join(f"/home/user/LAURA/sounds/{config_cl.ACTIVE_PERSONA.lower()}/reminder_sentences/error")
+                        audio_folder = os.path.join(f"/home/user/LAURA/sounds/{config.ACTIVE_PERSONA.lower()}/reminder_sentences/error")
                 else:
-                    audio_folder = os.path.join(f"/home/user/LAURA/sounds/{config_cl.ACTIVE_PERSONA.lower()}/reminder_sentences/error")
+                    audio_folder = os.path.join(f"/home/user/LAURA/sounds/{config.ACTIVE_PERSONA.lower()}/reminder_sentences/error")
 
             # Play appropriate audio feedback
             if audio_folder and os.path.exists(audio_folder):
@@ -536,30 +536,30 @@ class SystemManager:
                                     json.dump(personas_data, f, indent=2)
                                 
                                 # Update configuration and reinitialize TTS
-                                import config_cl
+                                import config
                                 try:
                                     # Change the active persona name and data
-                                    config_cl.ACTIVE_PERSONA = target_persona
-                                    config_cl.ACTIVE_PERSONA_DATA = personas_data["personas"][target_persona]
+                                    config.ACTIVE_PERSONA = target_persona
+                                    configl.ACTIVE_PERSONA_DATA = personas_data["personas"][target_persona]
                                     # Update the voice that will be used
-                                    config_cl.VOICE = personas_data["personas"][target_persona].get("voice", "L.A.U.R.A.")
+                                    config.VOICE = personas_data["personas"][target_persona].get("voice", "L.A.U.R.A.")
                                     # Update the prompt that will be used
                                     new_prompt = personas_data["personas"][target_persona].get("system_prompt", "You are an AI assistant.")
-                                    config_cl.SYSTEM_PROMPT = f"{new_prompt}\n\n{config_cl.UNIVERSAL_SYSTEM_PROMPT}"
+                                    config.SYSTEM_PROMPT = f"{new_prompt}\n\n{config.UNIVERSAL_SYSTEM_PROMPT}"
                                     
 
                                     # Reinitialize TTS handler with new voice
                                     from secret import ELEVENLABS_KEY
                                     new_config = {
-                                        "TTS_ENGINE": config_cl.TTS_ENGINE,
+                                        "TTS_ENGINE": config.TTS_ENGINE,
                                         "ELEVENLABS_KEY": ELEVENLABS_KEY,
-                                        "VOICE": config_cl.VOICE,
-                                        "ELEVENLABS_MODEL": config_cl.ELEVENLABS_MODEL,
+                                        "VOICE": config.VOICE,
+                                        "ELEVENLABS_MODEL": config.ELEVENLABS_MODEL,
                                     }
                                     self.tts_handler = TTSHandler(new_config)
                                     
                                     print(f"Switched to persona: {target_persona}")
-                                    print(f"Using voice: {config_cl.VOICE}")
+                                    print(f"Using voice: {config.VOICE}")
                                     print(f"TTS handler reinitialized with new voice")
                                     print(f"System prompt updated and reloaded")
                                 except Exception as e:
