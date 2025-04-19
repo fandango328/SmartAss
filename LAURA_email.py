@@ -98,8 +98,8 @@ from tool_context import TOOL_CONTEXTS
 from token_manager import TokenManager
 from document_manager import DocumentManager
 from notification_manager import NotificationManager
-import config_cl
-from config_cl import (
+import config
+from config import (
     TRANSCRIPTION_SERVER,
     TRANSCRIPTION_MODE,
     VOSK_MODEL_PATH,
@@ -1755,11 +1755,11 @@ async def generate_response(query):
         sanitized_messages = sanitize_messages_for_api(chat_log)
 
         # Get fresh system prompt from config by forcing a module reload
-        system_content = importlib.reload(config_cl).SYSTEM_PROMPT
+        system_content = importlib.reload(config).SYSTEM_PROMPT
 
         # Get fresh system prompt from config
-        importlib.reload(config_cl)  # Force reload to get latest changes
-        system_content = config_cl.SYSTEM_PROMPT
+        importlib.reload(config)  # Force reload to get latest changes
+        system_content = config.SYSTEM_PROMPT
 
         # Add document content to system prompt if available
         if document_manager and document_manager.files_loaded:
