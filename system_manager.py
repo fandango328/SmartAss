@@ -465,29 +465,28 @@ class SystemManager:
             return False
 
     async def _handle_persona_command(self, action: str, arguments: str = None) -> bool:
-        """
-        Handle persona-related commands using pre-recorded audio files
-        Returns True if command succeeded, False if it failed
-        """
-        # Initialize personas_data outside try block so it's accessible in catch-all error handler
-        personas_data = None  
-        
+        """Handle persona-related commands with transition animations"""
         try:
-            # Step 1: Update display to 'tools' state to show we're processing a command
-            try:
-                await self.display_manager.update_display('tools')
-            except Exception as e:
-                print(f"Warning: Failed to update display to tools state: {e}")
+            # Log the command details
+            print(f"\nDEBUG: Handling persona command - Action: {action}, Arguments: {arguments}")
             
-            success = False
+            # Step 1: Update to system state with current persona's "out" animation
+            current_persona = config.ACTIVE_PERSONA.lower()
+            out_path = f"/home/user/LAURA/pygame/{current_persona}/system/persona/out"
+            default_image = "/home/user/LAURA/pygame/laura/system/persona/dont_touch_this_image.png"
             
-            # Step 2: Load or create personalities configuration
+            print(f"DEBUG: Transitioning from {current_persona} with path: {out_path}")
+            
+            # Update display to system state
+            await self.display_manager.update_display('system')
+            
+            # Load personality configuration
             persona_path = "personalities.json"
             try:
                 with open(persona_path, 'r') as f:
                     personas_data = json.load(f)
             except FileNotFoundError:
-                # Create default config if file doesn't exist
+                print("DEBUG: Creating default personalities configuration")
                 personas_data = {
                     "personas": {
                         "laura": {
@@ -500,104 +499,73 @@ class SystemManager:
                 with open(persona_path, 'w') as f:
                     json.dump(personas_data, f, indent=2)
             
-            # Step 3: Get available personas from config
-            available_personas = personas_data.get("personas", {})
-            
-            # Step 4: Process the switch command
+            # Find target persona
             if action == "switch":
-                # Normalize input for case-insensitive matching
                 normalized_input = arguments.strip().lower() if arguments else ""
-                
-                # Step 5: Find matching persona in available personas
                 target_persona = None
-                for key in available_personas:
+                
+                for key in personas_data.get("personas", {}):
                     if key.lower() in normalized_input:
                         target_persona = key
                         break
                 
-                # Step 6: If matching persona found, process the switch
                 if target_persona:
-                    # Step 7: Check for persona's audio files
-                    audio_path = Path(f'/home/user/LAURA/sounds/{target_persona}/persona_sentences')
+                    print(f"DEBUG: Switching to persona: {target_persona}")
                     
-                    if audio_path.exists():
-                        # Get list of MP3 files in persona directory
-                        audio_files = list(audio_path.glob('*.mp3'))
+                    # Step 2: Update the base display path
+                    new_base_path = str(Path(f'/home/user/LAURA/pygame/{target_persona.lower()}'))
+                    await self.display_manager.update_display_path(new_base_path)
+                    
+                    # Step 3: Show incoming animation
+                    in_path = f"/home/user/LAURA/pygame/{target_persona.lower()}/system/persona/in"
+                    print(f"DEBUG: Loading incoming animation from: {in_path}")
+                    
+                    # Step 4: Update configuration
+                    try:
+                        # Update active persona
+                        personas_data["active_persona"] = target_persona
+                        with open(persona_path, 'w') as f:
+                            json.dump(personas_data, f, indent=2)
                         
-                        if audio_files:
-                            try:
-                                # Step 8: Update display path first
-                                new_base_path = str(Path(f'/home/user/LAURA/pygame/{target_persona.lower()}'))
-                                await self.display_manager.update_display_path(new_base_path)
-                                
-                                # Step 9: Show tools state with new persona
-                                await self.display_manager.update_display('tools')
-                                
-                                # Step 10: Update active persona in config and save
-                                personas_data["active_persona"] = target_persona
-                                with open(persona_path, 'w') as f:
-                                    json.dump(personas_data, f, indent=2)
-                                
-                                # Step 11: Play switch announcement audio
-                                chosen_audio = str(random.choice(audio_files))
-                                await self.audio_manager.play_audio(chosen_audio)
-                                await self.audio_manager.wait_for_audio_completion()
-                                
-                                # Update configuration and reinitialize TTS
-                                import config
-                                importlib.reload(config)
-                                try:
-                                    # Change the active persona name and data
-                                    config.ACTIVE_PERSONA = target_persona
-                                    config.ACTIVE_PERSONA_DATA = personas_data["personas"][target_persona]
-                                    # Update the voice that will be used
-                                    config.VOICE = personas_data["personas"][target_persona].get("voice", "L.A.U.R.A.")
-                                    # Update the prompt that will be used
-                                    new_prompt = personas_data["personas"][target_persona].get("system_prompt", "You are an AI assistant.")
-                                    config.SYSTEM_PROMPT = f"{new_prompt}\n\n{config.UNIVERSAL_SYSTEM_PROMPT}"
-                                    
-
-                                    # Reinitialize TTS handler with new voice
-                                    from secret import ELEVENLABS_KEY
-                                    new_config = {
-                                        "TTS_ENGINE": config.TTS_ENGINE,
-                                        "ELEVENLABS_KEY": ELEVENLABS_KEY,
-                                        "VOICE": config.VOICE,
-                                        "ELEVENLABS_MODEL": config.ELEVENLABS_MODEL,
-                                    }
-                                    self.tts_handler = TTSHandler(new_config)
-                                    
-                                    print(f"Switched to persona: {target_persona}")
-                                    print(f"Using voice: {config.VOICE}")
-                                    print(f"TTS handler reinitialized with new voice")
-                                    print(f"System prompt updated and reloaded")
-                                except Exception as e:
-                                    print(f"Error switching persona: {e}")
-                                    success = False
-                                
-                            except Exception as e:
-                                print(f"Error during persona switch: {e}")
-                                success = False
-                        else:
-                            print(f"No audio files found in {audio_path}")
-                            success = False
-                    else:
-                        print(f"Audio path not found: {audio_path}")
-                        success = False
+                        # Reload config and update system
+                        import config
+                        importlib.reload(config)
+                        
+                        config.ACTIVE_PERSONA = target_persona
+                        config.ACTIVE_PERSONA_DATA = personas_data["personas"][target_persona]
+                        config.VOICE = personas_data["personas"][target_persona].get("voice", "L.A.U.R.A.")
+                        new_prompt = personas_data["personas"][target_persona].get("system_prompt", "You are an AI assistant.")
+                        config.SYSTEM_PROMPT = f"{new_prompt}\n\n{config.UNIVERSAL_SYSTEM_PROMPT}"
+                        
+                        # Reinitialize TTS handler
+                        from secret import ELEVENLABS_KEY
+                        new_config = {
+                            "TTS_ENGINE": config.TTS_ENGINE,
+                            "ELEVENLABS_KEY": ELEVENLABS_KEY,
+                            "VOICE": config.VOICE,
+                            "ELEVENLABS_MODEL": config.ELEVENLABS_MODEL,
+                        }
+                        self.tts_handler = TTSHandler(new_config)
+                        
+                        print(f"DEBUG: Successfully switched to persona: {target_persona}")
+                        print(f"DEBUG: Using voice: {config.VOICE}")
+                        
+                        # Step 5: Transition to listening state
+                        await asyncio.sleep(0.1)  # Small buffer for state change
+                        await self.display_manager.update_display('listening')
+                        
+                        return True
+                        
+                    except Exception as e:
+                        print(f"ERROR: Failed to update configuration: {e}")
+                        return False
                 else:
-                    print(f"Persona '{arguments}' not found")
-                    success = False
+                    print(f"ERROR: Persona '{arguments}' not found")
+                    return False
             
-            # Step 11: Return to listening state
-            try:
-                await self.display_manager.update_display('listening')
-            except Exception as e:
-                print(f"Warning: Failed to update display to listening state: {e}")
-            
-            return success
+            return False
             
         except Exception as e:
-            # Step 12: Handle any unexpected errors
-            print(f"Persona command error: {str(e)}")
-            print(f"Traceback: {traceback.format_exc()}")
+            print(f"ERROR: Persona command failed: {e}")
+            traceback.print_exc()
             return False
