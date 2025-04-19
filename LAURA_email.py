@@ -1754,11 +1754,9 @@ async def generate_response(query):
         # Get sanitized message history
         sanitized_messages = sanitize_messages_for_api(chat_log)
 
-        # Get fresh system prompt from config by forcing a module reload
-        system_content = importlib.reload(config).SYSTEM_PROMPT
-
-        # Get fresh system prompt from config
-        importlib.reload(config)  # Force reload to get latest changes
+        # Import config module and reload it to get fresh values
+        import config
+        importlib.reload(config)
         system_content = config.SYSTEM_PROMPT
 
         # Add document content to system prompt if available
