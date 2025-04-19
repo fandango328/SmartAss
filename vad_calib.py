@@ -208,7 +208,7 @@ def play_and_wait(persona, phase):
         sound = pygame.mixer.Sound(audio_file)
         sound.play()
         while pygame.mixer.get_busy():
-            time.time(0.1)
+            time.sleep(0.1)
         pygame.mixer.quit()
         time.sleep(0.7)
     except Exception as e:
