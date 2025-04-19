@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env python3
+#!/usr/bin/env python3
 import pyaudio
 import numpy as np
 import time
@@ -217,12 +217,12 @@ def main():
     
     try:
         # Silence calibration phase
-        play_and_wait("/home/user/LAURA/sounds/calibration/keepquiet.mp3")
+        play_and_wait("/home/user/LAURA/sounds/laura/calibration/keepquiet.mp3")
         print("MEASURING SILENCE NOW - Please remain quiet")
         silence_levels, silence_peaks = measure_levels(stream, 5, "Silence")
         
         # Speech calibration phase
-        play_and_wait("/home/user/LAURA/sounds/calibration/nowineedyoutotalk2.mp3")
+        play_and_wait("/home/user/LAURA/sounds/laura/calibration/nowineedyoutotalk2.mp3")
         print("MEASURING SPEECH NOW - Please speak continuously")
         speech_levels, speech_peaks = measure_levels(stream, 5, "Speech")
         
