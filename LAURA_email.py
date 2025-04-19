@@ -3847,7 +3847,7 @@ async def run_main_loop():
                 if wake_detected:
                     # Only play wake audio if wake word was used (not keyboard)
                     if detected_model:
-                        await display_manager.update_display('wake')						
+                        await display_manager.update_display('wake')                        
                         wake_audio = get_random_audio('wake', detected_model)
 
                         if wake_audio:
@@ -3883,6 +3883,7 @@ async def run_main_loop():
                     # Check for system commands
                     command_result = system_manager.detect_command(transcript)
                     if command_result:
+                        print(f"\nDEBUG: System command detected: {command_result}")
                         is_command, command_type, action, arguments = command_result
                         if is_command:
                             success = await system_manager.handle_command(command_type, action, arguments)
