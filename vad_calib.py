@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import pyaudio
 import numpy as np
 import time
@@ -16,6 +15,10 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Add sound effect paths
+RADAR_PING_SOUND = "/home/user/LAURA/sounds/sound_effects/radarping.mp3"
+TRITONE_SOUND = "/home/user/LAURA/sounds/sound_effects/tritone.mp3"
 
 # Add parent directory to path for imports
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -254,8 +257,13 @@ def main():
         
         # Speech calibration phase
         play_and_wait(current_persona, "talk")
+        # Play radar ping to signal start of speech detection
+        play_sound_effect(RADAR_PING_SOUND)
         print("MEASURING SPEECH NOW - Please speak continuously")
         speech_levels, speech_peaks = measure_levels(stream, 5, "Speech")
+        
+        # Play tritone to signal end of speech detection
+        play_sound_effect(TRITONE_SOUND)
         
         # Completion notification
         play_and_wait(current_persona, "complete")
