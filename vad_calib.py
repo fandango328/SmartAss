@@ -65,6 +65,22 @@ def verify_settings_file(settings_path):
         logger.error(f"Error verifying settings file: {e}")
         return False
 
+def play_sound_effect(sound_file):
+    """Play a sound effect file"""
+    try:
+        if not os.path.exists(sound_file):
+            logger.error(f"Sound effect file not found: {sound_file}")
+            return
+            
+        pygame.mixer.init()
+        sound = pygame.mixer.Sound(sound_file)
+        sound.play()
+        while pygame.mixer.get_busy():
+            time.sleep(0.01)
+        pygame.mixer.quit()
+    except Exception as e:
+        logger.error(f"Error playing sound effect: {e}")
+
 def save_settings_directly(settings_data, settings_path):
     """Save settings directly to file with proper structure"""
     try:
