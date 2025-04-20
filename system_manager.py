@@ -245,8 +245,10 @@ class SystemManager:
 
             elif command_type == "tool":
                 try:
-                    # Update display to show we're processing a tool command
-                    await self.display_manager.update_display('tools')
+					# Update display to show the specific tool state image
+					status_type = 'enabled' if action == 'enable' else 'disabled'
+					tool_image_path = str(Path(self.states['system']) / 'tool' / status_type)
+					await self.display_manager.update_display('system', transition_path=tool_image_path)
                     
                     # Get the appropriate status folder based on action
                     status_type = 'enabled' if action == 'enable' else 'disabled'
@@ -411,8 +413,6 @@ class SystemManager:
                     audio_file = os.path.join(audio_folder, random.choice(mp3_files))
                     await self.audio_manager.play_audio(audio_file)
                     await self.audio_manager.wait_for_audio_completion()
-
-            await self.display_manager.update_display('listening')
             return success
 
         except Exception as e:
@@ -617,6 +617,27 @@ class SystemManager:
             print(f"ERROR: Persona command failed: {e}")
             traceback.print_exc()
             return False
+            
+    async def show_tool_state(self, action):
+        """
+        Display tool enabling/disabling state image
+        
+        Args:
+            action: Either 'enable' or 'disable'
+        """
+        status_type = 'enabled' if action == 'enable' else 'disabled'
+        
+        if status_type not in ['enabled', 'disabled']:
+            print(f"Invalid tool action: {action}")
+            return False
+            
+        try:
+            await self.display_manager.update_display('tools', specific_image=status_type)
+            return True
+        except Exception as e:
+            print(f"Error showing tool {status_type} image: {e}")
+            return False
+
             
     async def show_calibration_image(self):
         """Display calibration image during voice calibration"""
