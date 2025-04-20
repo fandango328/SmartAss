@@ -209,65 +209,145 @@ class DisplayManager:
                 print(f"Error updating display path: {e}")
                 return False
              
-    async def update_display(self, state, mood=None, transition_path=None):
-        async with self.state_lock:
-            if mood is None:
-                mood = self.current_mood
+	async def update_display(self, state, mood=None, transition_path=None, specific_image=None):
+		async with self.state_lock:
+			if mood is None:
+				mood = self.current_mood
 
-            # Skip no-change updates unless it's a transition with a specific path
-            if state == self.current_state and mood == self.current_mood and transition_path is None:
-                return  # No change needed
-            
-            try:
-                self.last_state = self.current_state
-                self.current_state = state
-                self.current_mood = mood
-                
-                # Handle special case for persona transitions
-                if transition_path is not None:
-                    # Load and display transition image(s) directly from the path
-                    transition_path = Path(transition_path)
-                    if transition_path.exists():
-                        png_files = list(transition_path.glob('*.png'))
-                        if png_files:
-                            # If we have multiple images, use the first one for now
-                            # (Could be extended to play a sequence)
-                            transition_image = pygame.transform.scale(
-                                pygame.image.load(str(png_files[0])), 
-                                (512, 512)
-                            )
-                            self.current_image = transition_image
-                            self.screen.blit(self.current_image, (0, 0))
-                            pygame.display.flip()
-                            self.state_entry_time = time.time()
-                            return
-                        else:
-                            print(f"Warning: No PNG files found in transition path: {transition_path}")
-                    else:
-                        print(f"Warning: Transition path not found: {transition_path}")
-                        # Continue with normal state handling
-                
-                # Normal state handling
-                if state == 'speaking':
-                    if mood not in self.image_cache[state]:
-                        print(f"Warning: Invalid mood '{mood}', using casual mood")
-                        mood = 'casual'
-                    self.current_image = random.choice(self.image_cache[state][mood])
-                elif state in self.image_cache:
-                    self.current_image = random.choice(self.image_cache[state])
-                else:
-                    print(f"Error: Invalid state '{state}'")
-                    return
-                
-                self.screen.blit(self.current_image, (0, 0))
-                pygame.display.flip()
-                
-                self.state_entry_time = time.time()
-                if state in ['idle', 'sleep']:
-                    self.last_image_change = self.state_entry_time
-            
-            except Exception as e:
-                print(f"Error updating display: {e}")
+			# Skip no-change updates unless it's a transition with a specific path
+			if state == self.current_state and mood == self.current_mood and transition_path is None and specific_image is None:
+				return  # No change needed
+			
+			try:
+				self.last_state = self.current_state
+				self.current_state = state
+				self.current_mood = mood
+				
+				# Handle special case for calibration
+				if state == 'calibration':
+					# Try to load persona-specific calibration image
+					calib_path = Path(f"{self.base_path}/system/calibration")
+					if calib_path.exists():
+						png_files = list(calib_path.glob('*.png'))
+						if png_files:
+							calib_image = pygame.transform.scale(
+								pygame.image.load(str(png_files[0])), 
+								(512, 512)
+							)
+							self.current_image = calib_image
+							self.screen.blit(self.current_image, (0, 0))
+							pygame.display.flip()
+							self.state_entry_time = time.time()
+							return
+					
+					# Fall back to Laura's calibration image
+					laura_calib = Path("/home/user/LAURA/pygame/laura/system/calibration/calibration.png")
+					if laura_calib.exists():
+						calib_image = pygame.transform.scale(
+							pygame.image.load(str(laura_calib)), 
+							(512, 512)
+						)
+						self.current_image = calib_image
+						self.screen.blit(self.current_image, (0, 0))
+						pygame.display.flip()
+						self.state_entry_time = time.time()
+						return
+				
+				# Handle special case for document operations
+				if state == 'document':
+					# doctype should be either 'load' or 'unload'
+					doctype = specific_image if specific_image in ['load', 'unload'] else 'load'
+					doc_path = Path(f"{self.base_path}/system/document/{doctype}")
+					
+					if doc_path.exists():
+						png_files = list(doc_path.glob('*.png'))
+						if png_files:
+							doc_image = pygame.transform.scale(
+								pygame.image.load(str(png_files[0])), 
+								(512, 512)
+							)
+							self.current_image = doc_image
+							self.screen.blit(self.current_image, (0, 0))
+							pygame.display.flip()
+							self.state_entry_time = time.time()
+							return
+					
+					# Fall back to Laura's document images
+					laura_doc = Path(f"/home/user/LAURA/pygame/laura/system/document/{doctype}")
+					if laura_doc.exists() and any(laura_doc.glob('*.png')):
+						doc_image = pygame.transform.scale(
+							pygame.image.load(str(list(laura_doc.glob('*.png'))[0])), 
+							(512, 512)
+						)
+						self.current_image = doc_image
+						self.screen.blit(self.current_image, (0, 0))
+						pygame.display.flip()
+						self.state_entry_time = time.time()
+						return
+						
+				# Handle special case for persona transitions
+				if transition_path is not None:
+					# If a specific image is provided, use that directly
+					if specific_image is not None:
+						specific_path = Path(specific_image)
+						if specific_path.exists() and specific_path.is_file():
+							try:
+								# Load and display the specific image
+								transition_image = pygame.transform.scale(
+									pygame.image.load(str(specific_path)), 
+									(512, 512)
+								)
+								self.current_image = transition_image
+								self.screen.blit(self.current_image, (0, 0))
+								pygame.display.flip()
+								self.state_entry_time = time.time()
+								return
+							except Exception as e:
+								print(f"Error loading specific image {specific_image}: {e}")
+								# Continue with directory handling
+					
+					# Load and display transition image(s) directly from the path
+					transition_path = Path(transition_path)
+					if transition_path.exists():
+						png_files = list(transition_path.glob('*.png'))
+						if png_files:
+							# If we have multiple images, use the first one for now
+							transition_image = pygame.transform.scale(
+								pygame.image.load(str(png_files[0])), 
+								(512, 512)
+							)
+							self.current_image = transition_image
+							self.screen.blit(self.current_image, (0, 0))
+							pygame.display.flip()
+							self.state_entry_time = time.time()
+							return
+						else:
+							print(f"Warning: No PNG files found in transition path: {transition_path}")
+					else:
+						print(f"Warning: Transition path not found: {transition_path}")
+						# Continue with normal state handling
+				
+				# Normal state handling (unchanged)
+				if state == 'speaking':
+					if mood not in self.image_cache[state]:
+						print(f"Warning: Invalid mood '{mood}', using casual mood")
+						mood = 'casual'
+					self.current_image = random.choice(self.image_cache[state][mood])
+				elif state in self.image_cache:
+					self.current_image = random.choice(self.image_cache[state])
+				else:
+					print(f"Error: Invalid state '{state}'")
+					return
+				
+				self.screen.blit(self.current_image, (0, 0))
+				pygame.display.flip()
+				
+				self.state_entry_time = time.time()
+				if state in ['idle', 'sleep']:
+					self.last_image_change = self.state_entry_time
+			
+			except Exception as e:
+				print(f"Error updating display: {e}")
 
     async def play_transition_sequence(self, transition_path, frame_delay=0.1):
         """
