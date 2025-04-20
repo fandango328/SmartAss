@@ -1586,11 +1586,16 @@ async def handle_system_command(transcript):
     """
     try:
         # Check if command matches any system patterns
-        is_command, command_type, action = system_manager.detect_command(transcript)
+        is_command, command_type, action, arguments = system_manager.detect_command(transcript)
 
         if is_command:
             # Execute the command through system manager
-            success = await system_manager.handle_command(command_type, action)
+            # This will handle:
+            # - Document loading/unloading (showing document states from /system/document/{load,unload})
+            # - Calibration (showing calibration image from /system/calibration/)
+            # - Persona switching (with transition animations from /system/persona/out and /in)
+            # - Tool enabling/disabling
+            success = await system_manager.handle_command(command_type, action, arguments)
             return success
 
         return False
@@ -3276,60 +3281,45 @@ def optimize_memory():
     return memory_info
 
 async def run_vad_calibration():
-    """Run the VAD calibration script and reload settings"""
-    global VAD_SETTINGS
-
-    print("Starting VAD calibration process")
+    """Run VAD calibration process"""
     try:
-        # Debug info
-        print(f"CWD: {os.getcwd()}")
-        print(f"Script path: {os.path.abspath('vad_calib.py')}")
-
-        # First, wait for any current audio to finish
-        await audio_manager.wait_for_audio_completion()
-
-        # Path to the calibration script
+        print("Starting VAD calibration...")
+        
+        # Show calibration image
+        if system_manager:
+            await system_manager.show_calibration_image()
+        
+        # Create and run the calibration process
         calibration_script = os.path.join(os.path.dirname(__file__), "vad_calib.py")
-
-        # Print current settings
-        print(f"Starting VAD calibration...")
-        print(f"Current VAD settings before calibration: {VAD_SETTINGS}")
-
-        # Run the calibration script
-        print("About to run calibration subprocess")
         process = await asyncio.create_subprocess_exec(
-            "python3", calibration_script,
+            sys.executable, calibration_script,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
-
+        
+        # Wait for completion
         stdout, stderr = await process.communicate()
-        stdout_text = stdout.decode()
-        print("Calibration subprocess completed")
-
-        if "CALIBRATION_COMPLETE" in stdout_text:
-            # Import reload function and use it
-            from vad_settings import reload_vad_settings
-            VAD_SETTINGS = reload_vad_settings()
-
-            # Print new settings
-            print(f"Calibration successful!")
-            print(f"Updated VAD settings after calibration: {VAD_SETTINGS}")
-
-            # Update the transcriber settings
-            if "transcriber" in globals() and transcriber and hasattr(transcriber, "vad_settings"):
-                transcriber.vad_settings = VAD_SETTINGS
-                print("Updated transcriber VAD settings")
-
-            print("Calibration successful, returning confirmation")
+        output = stdout.decode()
+        error = stderr.decode()
+        
+        # Check if successful
+        if "CALIBRATION_COMPLETE" in output:
+            print("VAD calibration completed successfully")
+            
+            # Reset display to listening state
+            if display_manager:
+                await display_manager.update_display('listening')
+                
+            # Reload VAD settings
             return True
         else:
-            print(f"Calibration error: {stderr.decode()}")
+            print("VAD calibration failed")
+            print(f"Output: {output}")
+            print(f"Error: {error}")
             return False
-
+            
     except Exception as e:
-        print(f"Failed to run calibration: {e}")
-        traceback.print_exc()
+        print(f"Error during calibration: {e}")
         return False
 
 async def heartbeat(remote_transcriber):
