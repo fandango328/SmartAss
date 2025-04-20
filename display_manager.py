@@ -223,6 +223,40 @@ class DisplayManager:
                 self.current_state = state
                 self.current_mood = mood
                 
+                # Handle special case for tools (enabled/disabled/use)
+                if state == 'tools':
+                    # Tool state should be either 'enabled', 'disabled', or 'use' if specified
+                    tool_state = specific_image if specific_image in ['enabled', 'disabled', 'use'] else None
+                    
+                    if tool_state:
+                        # Try to load persona-specific tool state image
+                        tool_path = Path(f"{self.base_path}/system/tools/{tool_state}")
+                        if tool_path.exists():
+                            png_files = list(tool_path.glob('*.png'))
+                            if png_files:
+                                tool_image = pygame.transform.scale(
+                                    pygame.image.load(str(png_files[0])), 
+                                    (512, 512)
+                                )
+                                self.current_image = tool_image
+                                self.screen.blit(self.current_image, (0, 0))
+                                pygame.display.flip()
+                                self.state_entry_time = time.time()
+                                return
+                        
+                        # Fall back to Laura's tool state images
+                        laura_tool = Path(f"/home/user/LAURA/pygame/laura/system/tools/{tool_state}")
+                        if laura_tool.exists() and any(laura_tool.glob('*.png')):
+                            tool_image = pygame.transform.scale(
+                                pygame.image.load(str(list(laura_tool.glob('*.png'))[0])), 
+                                (512, 512)
+                            )
+                            self.current_image = tool_image
+                            self.screen.blit(self.current_image, (0, 0))
+                            pygame.display.flip()
+                            self.state_entry_time = time.time()
+                            return
+                
                 # Handle special case for calibration
                 if state == 'calibration':
                     # Try to load persona-specific calibration image
