@@ -488,18 +488,18 @@ class SystemManager:
             
             print(f"DEBUG: Transitioning from {current_persona} with path: {out_path}")
             
-			# Check if persona out directory exists with images
-			out_path_dir = Path(out_path)
-			if out_path_dir.exists() and any(out_path_dir.glob('*.png')):
-				# Use transition path to display persona-specific "out" animation
-				await self.display_manager.update_display('system', transition_path=str(out_path_dir))
-			else:
-				# Fall back to default persona transition image
-				print(f"Warning: No persona exit animations found at {out_path}")
-				print(f"Using default persona transition image: {default_image}")
-				default_dir = Path(default_image).parent
-				await self.display_manager.update_display('system', transition_path=str(default_dir), 
-														 specific_image=default_image)
+            # Check if persona out directory exists with images
+            out_path_dir = Path(out_path)
+            if out_path_dir.exists() and any(out_path_dir.glob('*.png')):
+                # Use transition path to display persona-specific "out" animation
+                await self.display_manager.update_display('system', transition_path=str(out_path_dir))
+            else:
+                # Fall back to default persona transition image
+                print(f"Warning: No persona exit animations found at {out_path}")
+                print(f"Using default persona transition image: {default_image}")
+                default_dir = Path(default_image).parent
+                await self.display_manager.update_display('system', transition_path=str(default_dir), 
+                                                         specific_image=default_image)
             
             # Load personality configuration
             persona_path = "personalities.json"
@@ -551,22 +551,22 @@ class SystemManager:
                     in_path = f"/home/user/LAURA/pygame/{target_persona.lower()}/system/persona/in"
                     print(f"DEBUG: Loading incoming animation from: {in_path}")
                     
-					# Check if persona in directory exists with images
-					in_path_dir = Path(in_path)
-					if in_path_dir.exists() and any(in_path_dir.glob('*.png')):
-						# Use transition path to display persona-specific "in" animation
-						await self.display_manager.update_display('system', transition_path=str(in_path_dir))
-						# Add a small delay to show the animation
-						await asyncio.sleep(0.5)
-					else:
-						# Fall back to default persona transition image
-						print(f"Warning: No persona entry animations found at {in_path}")
-						print(f"Using default persona transition image: {default_image}")
-						default_dir = Path(default_image).parent
-						await self.display_manager.update_display('system', transition_path=str(default_dir), 
-																 specific_image=default_image)
-						# Add a small delay to show the animation
-						await asyncio.sleep(0.5)
+                    # Check if persona in directory exists with images
+                    in_path_dir = Path(in_path)
+                    if in_path_dir.exists() and any(in_path_dir.glob('*.png')):
+                        # Use transition path to display persona-specific "in" animation
+                        await self.display_manager.update_display('system', transition_path=str(in_path_dir))
+                        # Add a small delay to show the animation
+                        await asyncio.sleep(0.5)
+                    else:
+                        # Fall back to default persona transition image
+                        print(f"Warning: No persona entry animations found at {in_path}")
+                        print(f"Using default persona transition image: {default_image}")
+                        default_dir = Path(default_image).parent
+                        await self.display_manager.update_display('system', transition_path=str(default_dir), 
+                                                                 specific_image=default_image)
+                        # Add a small delay to show the animation
+                        await asyncio.sleep(0.5)
                     
                     # Step 4: Update configuration
                     try:
@@ -618,29 +618,29 @@ class SystemManager:
             traceback.print_exc()
             return False
             
-	async def show_calibration_image(self):
-		"""Display calibration image during voice calibration"""
-		try:
-			await self.display_manager.update_display('calibration')
-			return True
-		except Exception as e:
-			print(f"Error showing calibration image: {e}")
-			return False
+    async def show_calibration_image(self):
+        """Display calibration image during voice calibration"""
+        try:
+            await self.display_manager.update_display('calibration')
+            return True
+        except Exception as e:
+            print(f"Error showing calibration image: {e}")
+            return False
 
-	async def show_document_state(self, action):
-		"""
-		Display document loading/unloading state image
-		
-		Args:
-			action: Either 'load' or 'unload'
-		"""
-		if action not in ['load', 'unload']:
-			print(f"Invalid document action: {action}")
-			return False
-			
-		try:
-			await self.display_manager.update_display('document', specific_image=action)
-			return True
-		except Exception as e:
-			print(f"Error showing document {action} image: {e}")
-			return False
+    async def show_document_state(self, action):
+        """
+        Display document loading/unloading state image
+        
+        Args:
+            action: Either 'load' or 'unload'
+        """
+        if action not in ['load', 'unload']:
+            print(f"Invalid document action: {action}")
+            return False
+            
+        try:
+            await self.display_manager.update_display('document', specific_image=action)
+            return True
+        except Exception as e:
+            print(f"Error showing document {action} image: {e}")
+            return False
