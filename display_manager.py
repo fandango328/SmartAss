@@ -122,6 +122,39 @@ class DisplayManager:
         
         if missing_states:
             raise RuntimeError(f"Failed to load required states: {', '.join(missing_states)}")
+
+    def _get_image_path(self, state_type, specific_type=None):
+        """
+        Centralized image path resolution with fallbacks
+        
+        Args:
+            state_type: Primary category (tools, calibration, document)
+            specific_type: Subcategory (enabled, disabled, load, etc.)
+        
+        Returns:
+            Path object to the appropriate image or directory
+        """
+        # First try persona-specific path
+        if specific_type:
+            primary_path = Path(f"{self.base_path}/system/{state_type}/{specific_type}")
+        else:
+            primary_path = Path(f"{self.base_path}/{state_type}")
+        
+        # Check if primary path exists with images
+        if primary_path.exists() and any(primary_path.glob('*.png')):
+            return primary_path
+        
+        # Fall back to Laura's resources
+        if specific_type:
+            fallback_path = Path(f"/home/user/LAURA/pygame/laura/system/{state_type}/{specific_type}")
+        else:
+            fallback_path = Path(f"/home/user/LAURA/pygame/laura/{state_type}")
+        
+        if fallback_path.exists() and any(fallback_path.glob('*.png')):
+            return fallback_path
+        
+        # If all else fails, return the thinking state as last resort
+        return Path(f"{self.base_path}/thinking")
         
     async def rotate_background(self):
         while not self.initialized:
@@ -229,21 +262,21 @@ class DisplayManager:
                     tool_state = specific_image if specific_image in ['enabled', 'disabled', 'use'] else None
                     
                     if tool_state:
-                        # Try to load persona-specific tool state image
-                        tool_path = Path(f"{self.base_path}/system/tools/{tool_state}")
-                        if tool_path.exists():
-                            png_files = list(tool_path.glob('*.png'))
-                            if png_files:
-                                print(f"Using persona-specific tool state image from {tool_path}")
-                                tool_image = pygame.transform.scale(
-                                    pygame.image.load(str(png_files[0])), 
-                                    (512, 512)
-                                )
-                                self.current_image = tool_image
-                                self.screen.blit(self.current_image, (0, 0))
-                                pygame.display.flip()
-                                self.state_entry_time = time.time()
-                                return
+                        # Use centralized path resolution
+                        tool_path = self._get_image_path('tools', tool_state)
+                        
+                        # Load first PNG from the directory
+                        png_files = list(tool_path.glob('*.png'))
+                        if png_files:
+                            tool_image = pygame.transform.scale(
+                                pygame.image.load(str(png_files[0])), 
+                                (512, 512)
+                            )
+                            self.current_image = tool_image
+                            self.screen.blit(self.current_image, (0, 0))
+                            pygame.display.flip()
+                            self.state_entry_time = time.time()
+                            return
                         
                         # Fall back to Laura's tool state images
                         laura_tool = Path(f"/home/user/LAURA/pygame/laura/system/tools/{tool_state}")
@@ -289,26 +322,14 @@ class DisplayManager:
                 
                 # Handle special case for calibration
                 if state == 'calibration':
-                    # Try to load persona-specific calibration image
-                    calib_path = Path(f"{self.base_path}/system/calibration")
-                    if calib_path.exists():
-                        png_files = list(calib_path.glob('*.png'))
-                        if png_files:
-                            calib_image = pygame.transform.scale(
-                                pygame.image.load(str(png_files[0])), 
-                                (512, 512)
-                            )
-                            self.current_image = calib_image
-                            self.screen.blit(self.current_image, (0, 0))
-                            pygame.display.flip()
-                            self.state_entry_time = time.time()
-                            return
+                    # Use centralized path resolution
+                    calib_path = self._get_image_path('calibration')
                     
-                    # Fall back to Laura's calibration image
-                    laura_calib = Path("/home/user/LAURA/pygame/laura/system/calibration/calibration.png")
-                    if laura_calib.exists():
+                    # Load first PNG from the directory
+                    png_files = list(calib_path.glob('*.png'))
+                    if png_files:
                         calib_image = pygame.transform.scale(
-                            pygame.image.load(str(laura_calib)), 
+                            pygame.image.load(str(png_files[0])), 
                             (512, 512)
                         )
                         self.current_image = calib_image
@@ -321,26 +342,15 @@ class DisplayManager:
                 if state == 'document':
                     # doctype should be either 'load' or 'unload'
                     doctype = specific_image if specific_image in ['load', 'unload'] else 'load'
-                    doc_path = Path(f"{self.base_path}/system/document/{doctype}")
                     
-                    if doc_path.exists():
-                        png_files = list(doc_path.glob('*.png'))
-                        if png_files:
-                            doc_image = pygame.transform.scale(
-                                pygame.image.load(str(png_files[0])), 
-                                (512, 512)
-                            )
-                            self.current_image = doc_image
-                            self.screen.blit(self.current_image, (0, 0))
-                            pygame.display.flip()
-                            self.state_entry_time = time.time()
-                            return
+                    # Use centralized path resolution
+                    doc_path = self._get_image_path('document', doctype)
                     
-                    # Fall back to Laura's document images
-                    laura_doc = Path(f"/home/user/LAURA/pygame/laura/system/document/{doctype}")
-                    if laura_doc.exists() and any(laura_doc.glob('*.png')):
+                    # Load first PNG from the directory
+                    png_files = list(doc_path.glob('*.png'))
+                    if png_files:
                         doc_image = pygame.transform.scale(
-                            pygame.image.load(str(list(laura_doc.glob('*.png'))[0])), 
+                            pygame.image.load(str(png_files[0])), 
                             (512, 512)
                         )
                         self.current_image = doc_image
