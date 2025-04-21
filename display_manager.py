@@ -234,6 +234,7 @@ class DisplayManager:
                         if tool_path.exists():
                             png_files = list(tool_path.glob('*.png'))
                             if png_files:
+                                print(f"Using persona-specific tool state image from {tool_path}")
                                 tool_image = pygame.transform.scale(
                                     pygame.image.load(str(png_files[0])), 
                                     (512, 512)
@@ -243,6 +244,35 @@ class DisplayManager:
                                 pygame.display.flip()
                                 self.state_entry_time = time.time()
                                 return
+                        
+                        # Fall back to Laura's tool state images
+                        laura_tool = Path(f"/home/user/LAURA/pygame/laura/system/tools/{tool_state}")
+                        if laura_tool.exists() and any(laura_tool.glob('*.png')):
+                            print(f"Falling back to Laura's tool state image from {laura_tool}")
+                            tool_image = pygame.transform.scale(
+                                pygame.image.load(str(list(laura_tool.glob('*.png'))[0])), 
+                                (512, 512)
+                            )
+                            self.current_image = tool_image
+                            self.screen.blit(self.current_image, (0, 0))
+                            pygame.display.flip()
+                            self.state_entry_time = time.time()
+                            return
+                    
+                    # If we get here, there's no valid tool state image, use thinking state from current persona
+                    print(f"No valid tool state image found, using thinking state for {state}/{specific_image}")
+                    thinking_path = Path(f"{self.base_path}/thinking")
+                    if thinking_path.exists() and any(thinking_path.glob('*.png')):
+                        print(f"Using persona's thinking state as fallback for tools")
+                        thinking_image = pygame.transform.scale(
+                            pygame.image.load(str(list(thinking_path.glob('*.png'))[0])), 
+                            (512, 512)
+                        )
+                        self.current_image = thinking_image
+                        self.screen.blit(self.current_image, (0, 0))
+                        pygame.display.flip()
+                        self.state_entry_time = time.time()
+                        return
                         
                         # Fall back to Laura's tool state images
                         laura_tool = Path(f"/home/user/LAURA/pygame/laura/system/tools/{tool_state}")
