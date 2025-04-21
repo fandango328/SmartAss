@@ -292,6 +292,38 @@ class DisplayManager:
                         pygame.display.flip()
                         self.state_entry_time = time.time()
                         return
+
+                # Handle special case for system state (persona transitions, etc.)
+                if state == 'system':
+                    # If a transition path is specified, use it directly without looking for tool images
+                    if transition_path is not None:
+                        transition_path = Path(transition_path)
+                        if transition_path.exists():
+                            png_files = list(transition_path.glob('*.png'))
+                            if png_files:
+                                # Use the first image (or specific image if provided)
+                                if specific_image:
+                                    specific_path = Path(specific_image)
+                                    if specific_path.exists() and specific_path.is_file():
+                                        image_path = specific_path
+                                    else:
+                                        image_path = png_files[0]
+                                else:
+                                    image_path = png_files[0]
+                                
+                                system_image = pygame.transform.scale(
+                                    pygame.image.load(str(image_path)), 
+                                    (512, 512)
+                                )
+                                self.current_image = system_image
+                                self.screen.blit(self.current_image, (0, 0))
+                                pygame.display.flip()
+                                self.state_entry_time = time.time()
+                                return
+                            else:
+                                print(f"Warning: No PNG files found in system transition path: {transition_path}")
+                        else:
+                            print(f"Warning: System transition path not found: {transition_path}")
                 
                 # Handle special case for calibration
                 if state == 'calibration':
