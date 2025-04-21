@@ -222,8 +222,8 @@ class SystemManager:
         Returns True if command succeeded, False if it failed
         """
         try:
-            await self.display_manager.update_display('tools')
-            audio_file = None
+            if command_type == "persona":
+                return await self._handle_persona_command(action, arguments)
 
             if command_type == "document":
                 if action == "load":
@@ -233,6 +233,9 @@ class SystemManager:
                         mp3_files = [f for f in os.listdir(folder_path) if f.endswith('.mp3')]
                         if mp3_files:
                             audio_file = os.path.join(folder_path, random.choice(mp3_files))
+                            if os.path.exists(audio_file):
+                                await self.audio_manager.play_audio(audio_file)
+                                await self.audio_manager.wait_for_audio_completion()
                     if not load_success:
                         return False, None, None
                 else:  # offload
@@ -242,31 +245,28 @@ class SystemManager:
                         mp3_files = [f for f in os.listdir(folder_path) if f.endswith('.mp3')]
                         if mp3_files:
                             audio_file = os.path.join(folder_path, random.choice(mp3_files))
+                            if os.path.exists(audio_file):
+                                await self.audio_manager.play_audio(audio_file)
+                                await self.audio_manager.wait_for_audio_completion()
 
             elif command_type == "tool":
+                if action not in ["enable", "disable"]:
+                    print(f"Invalid tool action: {action}")
+                    return False, None, None
+                    
                 try:
-                    # Get the appropriate status type based on action
                     status_type = 'enabled' if action == 'enable' else 'disabled'
-                    
-                    # Show the specific tool state image
-                    await self.display_manager.update_display('tools', specific_image=status_type)
-                    
-                    # Get the appropriate status folder based on action
                     folder_path = os.path.join(f"/home/user/LAURA/sounds/{config.ACTIVE_PERSONA.lower()}/tool_sentences/status/{status_type}")
                     
-                    # Execute the tool state change
                     if action == "enable":
                         result = self.token_tracker.enable_tools()
                     else:  # disable
                         result = self.token_tracker.disable_tools()
                     
-                    print(f"Tool {action} result: {result}")  # Debug output
+                    print(f"Tool {action} result: {result}")
                     
-                    # Check if operation was successful
                     if isinstance(result, dict) and result.get("state") == status_type:
                         print(f"Tools successfully {status_type}")
-                        
-                        # Play appropriate audio feedback if available
                         if os.path.exists(folder_path):
                             mp3_files = [f for f in os.listdir(folder_path) if f.endswith('.mp3')]
                             if mp3_files:
@@ -274,8 +274,6 @@ class SystemManager:
                                 if os.path.exists(audio_file):
                                     await self.audio_manager.play_audio(audio_file)
                                     await self.audio_manager.wait_for_audio_completion()
-                        
-                        # Return success without changing display state
                         return True, None, None
                     else:
                         print(f"Failed to {action} tools")
@@ -294,16 +292,12 @@ class SystemManager:
                         mp3_files = [f for f in os.listdir(folder_path) if f.endswith('.mp3')]
                         if mp3_files:
                             audio_file = os.path.join(folder_path, random.choice(mp3_files))
+                            if os.path.exists(audio_file):
+                                await self.audio_manager.play_audio(audio_file)
+                                await self.audio_manager.wait_for_audio_completion()
 
             elif command_type == "reminder":
                 return await self._handle_reminder_command(action, arguments)
-
-            elif command_type == "persona":
-                return await self._handle_persona_command(action, arguments)
-
-            if audio_file and os.path.exists(audio_file):
-                await self.audio_manager.play_audio(audio_file)
-            await self.audio_manager.wait_for_audio_completion()
 
             await self.display_manager.update_display('listening')
             return True, None, None
@@ -472,34 +466,28 @@ class SystemManager:
         return False, None, None, None
 
     async def _handle_persona_command(self, action: str, arguments: str = None) -> bool:
-        """Handle persona-related commands with transition animations"""
+        """Handle persona-related commands with transition animations and audio sync"""
         try:
-            # Log the command details
             print(f"\nDEBUG: Handling persona command - Action: {action}, Arguments: {arguments}")
             
-            # Import config module at function start
             import config as config_module
             
-            # Step 1: Update to system state with current persona's "out" animation
+            # Step 1: Show current persona's "out" animation
             current_persona = config_module.ACTIVE_PERSONA.lower()
             out_path = f"/home/user/LAURA/pygame/{current_persona}/system/persona/out"
             default_image = "/home/user/LAURA/pygame/laura/system/persona/dont_touch_this_image.png"
             
-            print(f"DEBUG: Transitioning from {current_persona} with path: {out_path}")
-            
-            # Check if persona out directory exists with images
+            # Display current persona's out animation
             out_path_dir = Path(out_path)
             if out_path_dir.exists() and any(out_path_dir.glob('*.png')):
-                # Use transition path to display persona-specific "out" animation with 'system' state
+                print(f"DEBUG: Found out animation at {out_path}")
                 await self.display_manager.update_display('system', transition_path=str(out_path_dir))
             else:
-                # Fall back to default persona transition image with 'system' state
-                print(f"Warning: No persona exit animations found at {out_path}")
-                print(f"Using default persona transition image: {default_image}")
+                print(f"DEBUG: Using default transition for out animation")
                 default_dir = Path(default_image).parent
                 await self.display_manager.update_display('system', transition_path=str(default_dir), 
                                                          specific_image=default_image)
-            
+
             # Load personality configuration
             persona_path = "personalities.json"
             try:
@@ -518,10 +506,8 @@ class SystemManager:
                 }
                 with open(persona_path, 'w') as f:
                     json.dump(personas_data, f, indent=2)
-            
-            # Find target persona
+
             if action == "switch":
-                # If arguments is empty or None, handle it gracefully
                 if not arguments:
                     print("DEBUG: No persona specified in switch command")
                     return False
@@ -529,11 +515,9 @@ class SystemManager:
                 normalized_input = arguments.strip().lower()
                 target_persona = None
                 
-                # Check if arguments exactly matches a persona key
                 if normalized_input in personas_data.get("personas", {}):
                     target_persona = normalized_input
                 else:
-                    # Try to find a matching persona
                     for key in personas_data.get("personas", {}):
                         if key.lower() == normalized_input:
                             target_persona = key
@@ -542,39 +526,12 @@ class SystemManager:
                 if target_persona:
                     print(f"DEBUG: Switching to persona: {target_persona}")
                     
-                    # Step 2: Update the base display path
-                    new_base_path = str(Path(f'/home/user/LAURA/pygame/{target_persona.lower()}'))
-                    await self.display_manager.update_display_path(new_base_path)
-                    
-                    # Step 3: Show incoming animation
-                    in_path = f"/home/user/LAURA/pygame/{target_persona.lower()}/system/persona/in"
-                    print(f"DEBUG: Loading incoming animation from: {in_path}")
-                    
-                    # Check if persona in directory exists with images
-                    in_path_dir = Path(in_path)
-                    if in_path_dir.exists() and any(in_path_dir.glob('*.png')):
-                        # Use transition path to display persona-specific "in" animation with 'system' state
-                        await self.display_manager.update_display('system', transition_path=str(in_path_dir))
-                        # Add a small delay to show the animation
-                        await asyncio.sleep(0.5)
-                    else:
-                        # Fall back to default persona transition image with 'system' state
-                        print(f"Warning: No persona entry animations found at {in_path}")
-                        print(f"Using default persona transition image: {default_image}")
-                        default_dir = Path(default_image).parent
-                        await self.display_manager.update_display('system', transition_path=str(default_dir), 
-                                                                 specific_image=default_image)
-                        # Add a small delay to show the animation
-                        await asyncio.sleep(0.5)
-                                            
-                    # Step 4: Update configuration
+                    # Step 2: Update configuration
                     try:
-                        # Update active persona
                         personas_data["active_persona"] = target_persona
                         with open(persona_path, 'w') as f:
                             json.dump(personas_data, f, indent=2)
                         
-                        # Reload config and update system
                         importlib.reload(config_module)
                         
                         config_module.ACTIVE_PERSONA = target_persona
@@ -583,7 +540,7 @@ class SystemManager:
                         new_prompt = personas_data["personas"][target_persona].get("system_prompt", "You are an AI assistant.")
                         config_module.SYSTEM_PROMPT = f"{new_prompt}\n\n{config_module.UNIVERSAL_SYSTEM_PROMPT}"
                         
-                        # Reinitialize TTS handler
+                        # Update TTS handler for new voice
                         from secret import ELEVENLABS_KEY
                         new_config = {
                             "TTS_ENGINE": config_module.TTS_ENGINE,
@@ -593,14 +550,51 @@ class SystemManager:
                         }
                         self.tts_handler = TTSHandler(new_config)
                         
-                        print(f"DEBUG: Successfully switched to persona: {target_persona}")
-                        print(f"DEBUG: Using voice: {config_module.VOICE}")
+                        # Step 3: Start playing new persona's introduction audio (don't await)
+                        audio_task = None
+                        persona_audio_path = f"/home/user/LAURA/sounds/{target_persona}/persona_sentences"
+                        if os.path.exists(persona_audio_path):
+                            mp3_files = [f for f in os.listdir(persona_audio_path) if f.endswith('.mp3')]
+                            if mp3_files:
+                                audio_file = os.path.join(persona_audio_path, random.choice(mp3_files))
+                                # Start audio playback without awaiting
+                                audio_task = asyncio.create_task(self.audio_manager.play_audio(audio_file))
                         
-                        # Step 5: Transition to listening state
-                        await asyncio.sleep(0.1)  # Small buffer for state change
+                        # Step 4: Wait one second before showing new persona
+                        await asyncio.sleep(1.0)
+                        
+                        # Step 5: Update display path and show new persona
+                        new_base_path = str(Path(f'/home/user/LAURA/pygame/{target_persona.lower()}'))
+                        await self.display_manager.update_display_path(new_base_path)
+                        
+                        in_path = f"/home/user/LAURA/pygame/{target_persona.lower()}/system/persona/in"
+                        in_path_dir = Path(in_path)
+                        print(f"DEBUG: Checking for in animation at {in_path_dir}")
+                        
+                        if in_path_dir.exists() and any(in_path_dir.glob('*.png')):
+                            print(f"DEBUG: Found in animation files")
+                            await self.display_manager.update_display('system', transition_path=str(in_path_dir))
+                        else:
+                            print(f"DEBUG: Using default transition for in animation")
+                            default_dir = Path(default_image).parent
+                            await self.display_manager.update_display('system', transition_path=str(default_dir), 
+                                                                   specific_image=default_image)
+                        
+                        # Now wait for audio to complete if it was started
+                        if audio_task:
+                            await audio_task
+                        
+                        # Step 6: Wait for audio completion
+                        if audio_task:
+                            try:
+                                await audio_task
+                            except Exception as e:
+                                print(f"WARNING: Error waiting for audio completion: {e}")
+                        
+                        # Step 7: Ensure transition to listening state
                         await self.display_manager.update_display('listening')
-                        
-                        return True
+                        print("DEBUG: Transitioning back to listening state after persona switch")
+                        return True, None, None
                         
                     except Exception as e:
                         print(f"ERROR: Failed to update configuration: {e}")
@@ -617,50 +611,3 @@ class SystemManager:
             traceback.print_exc()
             return False
             
-    async def show_tool_state(self, action):
-        """
-        Display tool enabling/disabling state image
-        
-        Args:
-            action: Either 'enable' or 'disable'
-        """
-        status_type = 'enabled' if action == 'enable' else 'disabled'
-        
-        if status_type not in ['enabled', 'disabled']:
-            print(f"Invalid tool action: {action}")
-            return False
-            
-        try:
-            await self.display_manager.update_display('tools', specific_image=status_type)
-            return True
-        except Exception as e:
-            print(f"Error showing tool {status_type} image: {e}")
-            return False
-
-            
-    async def show_calibration_image(self):
-        """Display calibration image during voice calibration"""
-        try:
-            await self.display_manager.update_display('calibration')
-            return True
-        except Exception as e:
-            print(f"Error showing calibration image: {e}")
-            return False
-
-    async def show_document_state(self, action):
-        """
-        Display document loading/unloading state image
-        
-        Args:
-            action: Either 'load' or 'unload'
-        """
-        if action not in ['load', 'unload']:
-            print(f"Invalid document action: {action}")
-            return False
-            
-        try:
-            await self.display_manager.update_display('document', specific_image=action)
-            return True
-        except Exception as e:
-            print(f"Error showing document {action} image: {e}")
-            return False
