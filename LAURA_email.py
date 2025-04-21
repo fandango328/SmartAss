@@ -1622,18 +1622,38 @@ async def process_response_content(content):
     # Step 1: Parse content into usable text
     if isinstance(content, str):
         text = content
-    else:
+        print(f"DEBUG - String content: {text[:50]}...")
+    elif hasattr(content, 'text'):
+        # Direct access to text attribute (common in newer API responses)
+        text = content.text
+        print(f"DEBUG - Direct text attribute: {text[:50]}...")
+    elif isinstance(content, list):
         # Handle content blocks from API response
         text = ""
+        print(f"DEBUG - Content is a list with {len(content)} items")
         for content_block in content:
             if hasattr(content_block, 'type') and content_block.type == "text":
                 text += content_block.text
-
+                print(f"DEBUG - Added text block: {content_block.text[:30]}...")
+            elif isinstance(content_block, dict) and content_block.get('type') == 'text':
+                text += content_block.get('text', '')
+                print(f"DEBUG - Added dict text: {content_block.get('text', '')[:30]}...")
+            elif isinstance(content_block, str):
+                text += content_block
+                print(f"DEBUG - Added string item: {content_block[:30]}...")
+        
         if not text:
-            print("DEBUG - No valid text content found")
+            print("DEBUG - No valid text content found in list content")
+            return "I processed your request but couldn't generate a proper response."
+    else:
+        print(f"DEBUG - Unhandled content type: {type(content)}")
+        # Try direct string conversion as last resort
+        try:
+            text = str(content)
+            print(f"DEBUG - Converted to string: {text[:50]}...")
+        except:
+            print("DEBUG - Failed to convert content to string")
             return "No valid response content"
-
-    print(f"DEBUG - Full response text:\n{text}\n")
 
     # Step 2: Format message for voice generation BEFORE mood extraction
     # Convert all formatting to natural speech patterns
@@ -1702,24 +1722,28 @@ async def generate_response(query):
 
     query_lower = query.lower().strip()
 
-    # In generate_response, modify the tool command section:
+    # Tool command section with proper audio synchronization
     try:
         was_command, command_response = token_tracker.handle_tool_command(query)
         if was_command:
             success = command_response.get('success', False)
             mood = command_response.get('mood', 'casual')
-            await display_manager.update_display('speaking', mood=mood if success else 'disappointed')
-
-            # Add this block for tool status audio
+            
+            # Update display state first
+            await display_manager.update_display('speaking', mood=mood if success else 'excited')
+            
+            # Handle tool status audio with proper synchronization
             if command_response.get('state') in ['enabled', 'disabled']:
                 # Play appropriate audio based on state
                 status_type = command_response['state'].lower()
                 audio_file = get_random_audio('tool', f'status/{status_type}')
                 if audio_file:
+                    # Set tools display with specific image
+                    await display_manager.update_display('tools', specific_image=status_type)
+                    # Play audio
                     await audio_manager.play_audio(audio_file)
                     await audio_manager.wait_for_audio_completion()  # Wait for audio to complete
-                    await display_manager.update_display('listening')  # EXPLICITLY set to listening
-
+                    
             return "[CONTINUE]"  # Still return [CONTINUE] but audio will play first
     except Exception as e:
         print(f"Error handling tool command: {e}")
@@ -1886,12 +1910,13 @@ async def generate_response(query):
         # Tool handling section...
         if response.stop_reason == "tool_use":
             print(f"DEBUG: Tool use detected! Tools active: {token_tracker.tools_are_active()}")
-            await display_manager.update_display('tools')
+            await display_manager.update_display('tools', specific_image='use')
 
             # Use context-aware tool audio
             tool_audio = get_random_audio('tool', 'use')
             if tool_audio:
                 await audio_manager.play_audio(tool_audio)
+                await audio_manager.wait_for_audio_completion()  # Wait for tool audio to complete
             else:
                 print("WARNING: No tool audio files found, skipping audio")
 
@@ -2015,33 +2040,35 @@ async def generate_response(query):
                     "content": tool_results
                 })
 
-                try:
-                    print("\nDEBUG: Chat log structure before final API call:")
-                    for i, message in enumerate(chat_log[-3:]):  # Just show last 3 messages
-                        print(f"Message {i} role: {message['role']}")
-                        if isinstance(message['content'], list):
-                            for j, content_item in enumerate(message['content']):
-                                if isinstance(content_item, dict):
-                                    print(f"  Content item {j} type: {content_item.get('type')}")
-                                    if content_item.get('type') == 'tool_use':
-                                        print(f"    Tool use ID: {content_item.get('id')}")
-                                    elif content_item.get('type') == 'tool_result':
-                                        print(f"    Tool result for ID: {content_item.get('tool_use_id')}")
+                print("\nDEBUG: Chat log structure before final API call:")
+                for i, message in enumerate(chat_log[-3:]):  # Just show last 3 messages
+                    print(f"Message {i} role: {message['role']}")
+                    if isinstance(message['content'], list):
+                        for j, content_item in enumerate(message['content']):
+                            if isinstance(content_item, dict):
+                                print(f"  Content item {j} type: {content_item.get('type')}")
+                                if content_item.get('type') == 'tool_use':
+                                    print(f"    Tool use ID: {content_item.get('id')}")
+                                elif content_item.get('type') == 'tool_result':
+                                    print(f"    Tool result for ID: {content_item.get('tool_use_id')}")
 
-                    # Get final response after tool use
+                # Get final response after tool use
+                try:
+                    # Make final API call to process tool results
                     final_response = anthropic_client.messages.create(
                         model=ANTHROPIC_MODEL,
+                        system=system_content,  # Include system content in follow-up call
                         messages=chat_log,
                         max_tokens=1024,
                         temperature=0.7
                     )
 
-                    # Token tracking for tool response - separate try block to isolate errors
+                    # Token tracking for tool response
                     try:
                         tool_messages = chat_log[-2:] if len(chat_log) >= 2 else chat_log
                         tool_input_count = token_tracker.count_message_tokens(tool_messages)
 
-                        # Extract text from final response TextBlock
+                        # Extract text from final response
                         final_response_text = ""
                         if isinstance(final_response.content, list):
                             for block in final_response.content:
@@ -2052,26 +2079,35 @@ async def generate_response(query):
 
                         token_tracker.update_session_costs(
                             tool_input_count,
-                            final_response_text,  # Changed to pass actual text
+                            final_response_text,
                             True
                         )
-                        # Can use these values if needed, or just ignore them with _ variables
                     except Exception as token_err:
                         print(f"Token tracking error in tool response: {token_err}")
 
-                    # Process the final response content
-                    if hasattr(final_response, 'error'):
-                        error_msg = f"Sorry, there was an error processing the tool response: {final_response.error}"
-                        print(f"API Error in tool response: {final_response.error}")
-                        await display_manager.update_display('speaking', mood='casual')
+                    # Process the final response content with error checking
+                    if not final_response.content:
+                        error_msg = "I'm sorry, I couldn't process the tool result properly."
+                        print("API Error: Empty content in tool response")
+                        await display_manager.update_display('speaking', mood='disappointed')
                         return error_msg
 
-                    return await process_response_content(final_response.content)
+                    # Wait for any pending audio to complete before changing state
+                    await audio_manager.wait_for_audio_completion()
+
+                    # Ensure the display is set to the current character's speaking state
+                    await display_manager.update_display('speaking', mood='casual')
+
+                    # Process the response content and return it
+                    processed_content = await process_response_content(final_response.content)
+                    return processed_content
+
                 except Exception as final_api_err:
                     print(f"Error in final response after tool use: {final_api_err}")
-                    await display_manager.update_display('speaking', mood='casual')
+                    await display_manager.update_display('speaking', mood='disappointed')
                     return f"Sorry, there was an error after using tools: {str(final_api_err)}"
 
+        # Non-tool response processing
         else:
             print(f"DEBUG: Returning response. Tools active: {token_tracker.tools_are_active()}, Tools used in session: {token_tracker.tools_used_in_session}")
 
@@ -3868,6 +3904,7 @@ async def run_main_loop():
                         continue
 
                     # Process the transcript
+                    await audio_manager.wait_for_audio_completion()
                     transcript_lower = transcript.lower().strip()
 
                     # Check for system commands
@@ -3931,8 +3968,10 @@ async def run_main_loop():
 
                     # Normal conversation flow
                     try:
-                        # Allow any previous state changes to complete
-                        await asyncio.sleep(0.1)
+                        # Make sure any previous audio has completed
+                        await audio_manager.wait_for_audio_completion()
+                        
+                        # Set thinking state and generate response
                         await display_manager.update_display('thinking')
                         formatted_response = await generate_response(transcript)
 
@@ -3940,8 +3979,10 @@ async def run_main_loop():
                             print("DEBUG - Detected control signal, skipping voice generation")
                             continue
 
-                        # Ensure clean state transition
-                        await asyncio.sleep(0.1)
+                        # Ensure audio is complete before state transitions
+                        await audio_manager.wait_for_audio_completion()
+                        
+                        # Transition to speaking state
                         await display_manager.update_display('speaking')
                         await generate_voice(formatted_response)
 
