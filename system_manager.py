@@ -245,13 +245,13 @@ class SystemManager:
 
             elif command_type == "tool":
                 try:
-					# Update display to show the specific tool state image
-					status_type = 'enabled' if action == 'enable' else 'disabled'
-					tool_image_path = str(Path(self.states['system']) / 'tool' / status_type)
-					await self.display_manager.update_display('system', transition_path=tool_image_path)
+                    # Get the appropriate status type based on action
+                    status_type = 'enabled' if action == 'enable' else 'disabled'
+                    
+                    # Show the specific tool state image
+                    await self.display_manager.update_display('tools', specific_image=status_type)
                     
                     # Get the appropriate status folder based on action
-                    status_type = 'enabled' if action == 'enable' else 'disabled'
                     folder_path = os.path.join(f"/home/user/LAURA/sounds/{config.ACTIVE_PERSONA.lower()}/tool_sentences/status/{status_type}")
                     
                     # Execute the tool state change
@@ -275,13 +275,12 @@ class SystemManager:
                                     await self.audio_manager.play_audio(audio_file)
                                     await self.audio_manager.wait_for_audio_completion()
                         
-                        # Return to listening state
-                        await self.display_manager.update_display('listening')
+                        # Return success without changing display state
                         return True, None, None
                     else:
                         print(f"Failed to {action} tools")
                         return False, None, None
-                        
+                
                 except Exception as e:
                     print(f"Error during tool {action}: {e}")
                     traceback.print_exc()
