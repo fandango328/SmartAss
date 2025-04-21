@@ -490,10 +490,10 @@ class SystemManager:
             # Check if persona out directory exists with images
             out_path_dir = Path(out_path)
             if out_path_dir.exists() and any(out_path_dir.glob('*.png')):
-                # Use transition path to display persona-specific "out" animation
+                # Use transition path to display persona-specific "out" animation with 'system' state
                 await self.display_manager.update_display('system', transition_path=str(out_path_dir))
             else:
-                # Fall back to default persona transition image
+                # Fall back to default persona transition image with 'system' state
                 print(f"Warning: No persona exit animations found at {out_path}")
                 print(f"Using default persona transition image: {default_image}")
                 default_dir = Path(default_image).parent
@@ -553,12 +553,12 @@ class SystemManager:
                     # Check if persona in directory exists with images
                     in_path_dir = Path(in_path)
                     if in_path_dir.exists() and any(in_path_dir.glob('*.png')):
-                        # Use transition path to display persona-specific "in" animation
+                        # Use transition path to display persona-specific "in" animation with 'system' state
                         await self.display_manager.update_display('system', transition_path=str(in_path_dir))
                         # Add a small delay to show the animation
                         await asyncio.sleep(0.5)
                     else:
-                        # Fall back to default persona transition image
+                        # Fall back to default persona transition image with 'system' state
                         print(f"Warning: No persona entry animations found at {in_path}")
                         print(f"Using default persona transition image: {default_image}")
                         default_dir = Path(default_image).parent
@@ -566,7 +566,7 @@ class SystemManager:
                                                                  specific_image=default_image)
                         # Add a small delay to show the animation
                         await asyncio.sleep(0.5)
-                    
+                                            
                     # Step 4: Update configuration
                     try:
                         # Update active persona
