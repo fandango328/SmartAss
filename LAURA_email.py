@@ -3372,6 +3372,98 @@ async def get_random_audio_async(category, context=None):
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, get_random_audio, category, context)
 
+def get_audio_path(category, context=None, persona=None):
+    """
+    Centralized audio path resolution with fallbacks
+    
+    Args:
+        category: Main audio category (wake, tool, timeout, etc.)
+        context: Optional subcategory (loaded, use, etc.)
+        persona: Override active persona (useful for testing)
+    
+    Returns:
+        Path object to the appropriate audio directory
+    """
+    # Use specified persona or the active one
+    active_persona = persona or config.ACTIVE_PERSONA.lower()
+    
+    # Base directory containing all sound categories
+    base_sound_dir = Path(f"/home/user/LAURA/sounds/{active_persona}")
+    
+    # Special case mappings
+    if category == "wake" and context in ["Laura.pmdl", "Wake_up_Laura.pmdl", "GD_Laura.pmdl"]:
+        # Map wake word models to context folders
+        context_map = {
+            "Laura.pmdl": "standard",
+            "Wake_up_Laura.pmdl": "sleepy",
+            "GD_Laura.pmdl": "frustrated"
+        }
+        folder = context_map.get(context, "standard")
+        primary_path = base_sound_dir / "wake_sentences" / folder
+    
+    elif category == "file" and context:
+        primary_path = base_sound_dir / "file_sentences" / context
+    
+    elif category == "tool" and context:
+        if context == "use":
+            primary_path = base_sound_dir / "tool_sentences" / "use"
+        elif context in ["enabled", "disabled"]:
+            primary_path = base_sound_dir / "tool_sentences" / "status" / context
+        else:
+            primary_path = base_sound_dir / "tool_sentences" / context
+    
+    else:
+        # Default to main category folder
+        primary_path = base_sound_dir / f"{category}_sentences"
+        if context and (base_sound_dir / f"{category}_sentences" / context).exists():
+            primary_path = base_sound_dir / f"{category}_sentences" / context
+    
+    # Check if path exists with audio files
+    if primary_path.exists() and (list(primary_path.glob('*.mp3')) or list(primary_path.glob('*.wav'))):
+        return primary_path
+    
+    # Try fallback to parent directory for empty subfolders
+    if context and f"{category}_sentences" in str(primary_path):
+        parent_path = base_sound_dir / f"{category}_sentences"
+        if parent_path.exists() and (list(parent_path.glob('*.mp3')) or list(parent_path.glob('*.wav'))):
+            return parent_path
+    
+    # Ultimate fallback - try Laura's resources if different persona
+    if active_persona != "laura":
+        laura_path = Path(f"/home/user/LAURA/sounds/laura")
+        
+        # Reconstruct the same path structure but with Laura
+        if category == "wake" and context in ["Laura.pmdl", "Wake_up_Laura.pmdl", "GD_Laura.pmdl"]:
+            context_map = {
+                "Laura.pmdl": "standard", 
+                "Wake_up_Laura.pmdl": "sleepy",
+                "GD_Laura.pmdl": "frustrated"
+            }
+            folder = context_map.get(context, "standard")
+            fallback_path = laura_path / "wake_sentences" / folder
+        elif category == "file" and context:
+            fallback_path = laura_path / "file_sentences" / context
+        elif category == "tool" and context:
+            if context == "use":
+                fallback_path = laura_path / "tool_sentences" / "use"
+            elif context in ["enabled", "disabled"]:
+                fallback_path = laura_path / "tool_sentences" / "status" / context
+            else:
+                fallback_path = laura_path / "tool_sentences" / context
+        else:
+            fallback_path = laura_path / f"{category}_sentences"
+            if context:
+                context_path = laura_path / f"{category}_sentences" / context
+                if context_path.exists():
+                    fallback_path = context_path
+        
+        # Check if Laura's path exists with audio files
+        if fallback_path.exists() and (list(fallback_path.glob('*.mp3')) or list(fallback_path.glob('*.wav'))):
+            return fallback_path
+    
+    # Return original path even if empty (will be handled by caller)
+    return primary_path
+
 def get_random_audio(category, context=None):
     """
     Get random audio file from specified category directory with context awareness
@@ -3385,69 +3477,17 @@ def get_random_audio(category, context=None):
         Path to selected audio file or None if not found
     """
     try:
-        # Use the globally defined ACTIVE_PERSONA constant
-        global ACTIVE_PERSONA
+        # Get the appropriate path
+        audio_path = get_audio_path(category, context)
         
-        # Base directory containing all sound categories
-        base_sound_dir = f"/home/user/LAURA/sounds/{ACTIVE_PERSONA.lower()}"
-
-        # Determine the correct path based on category and context
-        if category == "file" and context:
-            # For file category with context (loaded or o)
-            audio_path = Path(f"{base_sound_dir}/file_sentences/{context}")
-            print(f"Looking in file category path: {audio_path}")
-
-        elif category == "tool" and context:
-            if context == "use":
-                # For tool "use" context
-                audio_path = Path(f"{base_sound_dir}/tool_sentences/use")
-            elif context in ["enabled", "disabled"]:
-                # For tool status contexts
-                audio_path = Path(f"{base_sound_dir}/tool_sentences/status/{context}")
-            else:
-                # Default tool context folder
-                audio_path = Path(f"{base_sound_dir}/tool_sentences/{context}")
-            print(f"Looking in tool category path: {audio_path}")
-
-        elif category == "wake" and context in ["Laura.pmdl", "Wake_up_Laura.pmdl", "GD_Laura.pmdl"]:
-            # Map wake word models to context folders
-            context_map = {
-                "Laura.pmdl": "standard",
-                "Wake_up_Laura.pmdl": "sleepy",
-                "GD_Laura.pmdl": "frustrated"
-            }
-            folder = context_map.get(context, "standard")
-            audio_path = Path(f"{base_sound_dir}/wake_sentences/{folder}")
-            #print(f"Looking for wake audio in: {audio_path}")
-
-        else:
-            # Default to main category folder for timeout, calibration, etc.
-            audio_path = Path(f"{base_sound_dir}/{category}_sentences")
-            if context and (Path(f"{audio_path}/{context}")).exists():
-                audio_path = Path(f"{audio_path}/{context}")
-            print(f"Looking for audio in category folder: {audio_path}")
-
         # Find audio files in the specified path
-        audio_files = []
-        if audio_path.exists():
-            audio_files = list(audio_path.glob('*.mp3')) + list(audio_path.glob('*.wav'))
+        audio_files = list(audio_path.glob('*.mp3')) + list(audio_path.glob('*.wav'))
 
         if audio_files:
             chosen_file = str(random.choice(audio_files))
-            #print(f"Found and selected audio file: {chosen_file}")
             return chosen_file
         else:
             print(f"WARNING: No audio files found in {audio_path}")
-
-            # Fallback to parent directory for empty subfolders
-            if context and category + "_sentences" in str(audio_path):
-                parent_path = Path(f"{base_sound_dir}/{category}_sentences")
-                if parent_path.exists():
-                    parent_files = list(parent_path.glob('*.mp3')) + list(parent_path.glob('*.wav'))
-                    if parent_files:
-                        print(f"Found fallback files in parent directory: {parent_path}")
-                        return str(random.choice(parent_files))
-
             return None
 
     except Exception as e:
