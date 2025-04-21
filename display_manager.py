@@ -277,20 +277,6 @@ class DisplayManager:
                             pygame.display.flip()
                             self.state_entry_time = time.time()
                             return
-                        
-                        # Fall back to Laura's tool state images
-                        laura_tool = Path(f"/home/user/LAURA/pygame/laura/system/tools/{tool_state}")
-                        if laura_tool.exists() and any(laura_tool.glob('*.png')):
-                            print(f"Falling back to Laura's tool state image from {laura_tool}")
-                            tool_image = pygame.transform.scale(
-                                pygame.image.load(str(list(laura_tool.glob('*.png'))[0])), 
-                                (512, 512)
-                            )
-                            self.current_image = tool_image
-                            self.screen.blit(self.current_image, (0, 0))
-                            pygame.display.flip()
-                            self.state_entry_time = time.time()
-                            return
                     
                     # If we get here, there's no valid tool state image, use thinking state from current persona
                     print(f"No valid tool state image found, using thinking state for {state}/{specific_image}")
@@ -306,19 +292,6 @@ class DisplayManager:
                         pygame.display.flip()
                         self.state_entry_time = time.time()
                         return
-                        
-                        # Fall back to Laura's tool state images
-                        laura_tool = Path(f"/home/user/LAURA/pygame/laura/system/tools/{tool_state}")
-                        if laura_tool.exists() and any(laura_tool.glob('*.png')):
-                            tool_image = pygame.transform.scale(
-                                pygame.image.load(str(list(laura_tool.glob('*.png'))[0])), 
-                                (512, 512)
-                            )
-                            self.current_image = tool_image
-                            self.screen.blit(self.current_image, (0, 0))
-                            pygame.display.flip()
-                            self.state_entry_time = time.time()
-                            return
                 
                 # Handle special case for calibration
                 if state == 'calibration':
