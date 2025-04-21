@@ -2,6 +2,44 @@ from pathlib import Path
 from vad_settings import load_vad_settings
 import json
 
+# Base resource paths
+PYGAME_BASE_PATH = "/home/user/LAURA/pygame"
+SOUND_BASE_PATH = "/home/user/LAURA/sounds"
+DEFAULT_PERSONA = "laura"  # Fallback persona when active one isn't available
+
+# Function to get persona-specific resource path with fallback
+def get_persona_path(resource_type, persona=None):
+    """
+    Get proper resource path for a persona with fallback to default
+    
+    Args:
+        resource_type: Either 'pygame' or 'sounds'
+        persona: Specific persona or None for active
+    
+    Returns:
+        Path to the persona resources
+    """
+    from pathlib import Path
+    
+    # Determine which persona to use
+    target_persona = persona or ACTIVE_PERSONA.lower()
+    
+    # Select the appropriate base path
+    if resource_type.lower() == 'pygame':
+        base_path = PYGAME_BASE_PATH
+    elif resource_type.lower() in ['sounds', 'audio']:
+        base_path = SOUND_BASE_PATH
+    else:
+        raise ValueError(f"Unknown resource type: {resource_type}")
+    
+    # Check if the persona resources exist
+    persona_path = Path(f"{base_path}/{target_persona}")
+    if persona_path.exists():
+        return persona_path
+    
+    # Fall back to default persona
+    return Path(f"{base_path}/{DEFAULT_PERSONA}")
+
 # Load personalities configuration
 PERSONALITIES_FILE = "personalities.json"
 try:
