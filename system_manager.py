@@ -256,6 +256,12 @@ class SystemManager:
                     
                 try:
                     status_type = 'enabled' if action == 'enable' else 'disabled'
+                    
+                    # Update display with random image from tools state folder
+                    tools_state_path = f"/home/user/LAURA/pygame/{config.ACTIVE_PERSONA.lower()}/system/tools/{status_type}"
+                    await self.display_manager.update_display('system', transition_path=tools_state_path)
+                    
+                    # Setup audio path
                     folder_path = os.path.join(f"/home/user/LAURA/sounds/{config.ACTIVE_PERSONA.lower()}/tool_sentences/status/{status_type}")
                     
                     if action == "enable":
@@ -274,14 +280,17 @@ class SystemManager:
                                 if os.path.exists(audio_file):
                                     await self.audio_manager.play_audio(audio_file)
                                     await self.audio_manager.wait_for_audio_completion()
+                        await self.display_manager.update_display('listening')
                         return True, None, None
                     else:
                         print(f"Failed to {action} tools")
+                        await self.display_manager.update_display('listening')
                         return False, None, None
                 
                 except Exception as e:
                     print(f"Error during tool {action}: {e}")
                     traceback.print_exc()
+                    await self.display_manager.update_display('listening')
                     return False, None, None
 
             elif command_type == "calibration":
