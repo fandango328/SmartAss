@@ -3384,9 +3384,14 @@ def get_audio_path(category, context=None, persona=None):
     Returns:
         Path object to the appropriate audio directory
     """
-    # Use specified persona or the active one
-    active_persona = persona or config.ACTIVE_PERSONA.lower()
-    
+    # Use specified persona or import active one from config
+    if persona:
+        active_persona = persona.lower()
+    else:
+        # Direct import to get current value
+        from config import ACTIVE_PERSONA
+        active_persona = ACTIVE_PERSONA.lower()
+
     # Base directory containing all sound categories
     base_sound_dir = Path(f"/home/user/LAURA/sounds/{active_persona}")
     
