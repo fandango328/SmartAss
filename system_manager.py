@@ -255,15 +255,8 @@ class SystemManager:
                     return False, None, None
                     
                 try:
+                    # Step 1: Update tool state
                     status_type = 'enabled' if action == 'enable' else 'disabled'
-                    
-                    # Update display with random image from tools state folder
-                    tools_state_path = f"/home/user/LAURA/pygame/{config.ACTIVE_PERSONA.lower()}/system/tools/{status_type}"
-                    await self.display_manager.update_display('system', transition_path=tools_state_path)
-                    
-                    # Setup audio path
-                    folder_path = os.path.join(f"/home/user/LAURA/sounds/{config.ACTIVE_PERSONA.lower()}/tool_sentences/status/{status_type}")
-                    
                     if action == "enable":
                         result = self.token_tracker.enable_tools()
                     else:  # disable
@@ -272,25 +265,41 @@ class SystemManager:
                     print(f"Tool {action} result: {result}")
                     
                     if isinstance(result, dict) and result.get("state") == status_type:
-                        print(f"Tools successfully {status_type}")
-                        if os.path.exists(folder_path):
-                            mp3_files = [f for f in os.listdir(folder_path) if f.endswith('.mp3')]
+                        # Step 2: Get and display random image for tool state
+                        image_folder = f"/home/user/LAURA/pygame/{config.ACTIVE_PERSONA.lower()}/system/tools/{status_type}"
+                        if os.path.exists(image_folder):
+                            png_files = [f for f in os.listdir(image_folder) if f.endswith('.png')]
+                            if png_files:
+                                chosen_image = os.path.join(image_folder, random.choice(png_files))
+                                print(f"Selected tool state image: {chosen_image}")
+                                await self.display_manager.update_display('tools', specific_image=chosen_image)
+                            else:
+                                print(f"No PNG files found in {image_folder}")
+                                return False, None, None
+                        else:
+                            print(f"Tool state image folder not found: {image_folder}")
+                            return False, None, None
+
+                        # Step 3: Play audio feedback
+                        audio_folder = os.path.join(f"/home/user/LAURA/sounds/{config.ACTIVE_PERSONA.lower()}/tool_sentences/status/{status_type}")
+                        if os.path.exists(audio_folder):
+                            mp3_files = [f for f in os.listdir(audio_folder) if f.endswith('.mp3')]
                             if mp3_files:
-                                audio_file = os.path.join(folder_path, random.choice(mp3_files))
+                                audio_file = os.path.join(audio_folder, random.choice(mp3_files))
                                 if os.path.exists(audio_file):
                                     await self.audio_manager.play_audio(audio_file)
                                     await self.audio_manager.wait_for_audio_completion()
+
+                        # Step 4: Return to listening state
                         await self.display_manager.update_display('listening')
                         return True, None, None
                     else:
                         print(f"Failed to {action} tools")
-                        await self.display_manager.update_display('listening')
                         return False, None, None
                 
                 except Exception as e:
                     print(f"Error during tool {action}: {e}")
                     traceback.print_exc()
-                    await self.display_manager.update_display('listening')
                     return False, None, None
 
             elif command_type == "calibration":
