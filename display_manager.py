@@ -258,25 +258,33 @@ class DisplayManager:
                 
                 # Handle special case for tools (enabled/disabled/use)
                 if state == 'tools':
-                    # Tool state should be either 'enabled', 'disabled', or 'use' if specified
-                    tool_state = specific_image if specific_image in ['enabled', 'disabled', 'use'] else None
+                    if specific_image:
+                        # The specific_image parameter should be the full path to the image
+                        try:
+                            specific_path = Path(specific_image)
+                            if specific_path.exists() and specific_path.is_file():
+                                tool_image = pygame.transform.scale(
+                                    pygame.image.load(str(specific_path)), 
+                                    (512, 512)
+                                )
+                                self.current_image = tool_image
+                                self.screen.blit(self.current_image, (0, 0))
+                                pygame.display.flip()
+                                self.state_entry_time = time.time()
+                                return
+                            else:
+                                print(f"Warning: Tool state image not found: {specific_image}")
+                        except Exception as e:
+                            print(f"Error loading tool state image: {e}")
                     
-                    if tool_state:
-                        # Use centralized path resolution
-                        tool_path = self._get_image_path('tools', tool_state)
-                        
-                        # Load first PNG from the directory
-                        png_files = list(tool_path.glob('*.png'))
-                        if png_files:
-                            tool_image = pygame.transform.scale(
-                                pygame.image.load(str(png_files[0])), 
-                                (512, 512)
-                            )
-                            self.current_image = tool_image
-                            self.screen.blit(self.current_image, (0, 0))
-                            pygame.display.flip()
-                            self.state_entry_time = time.time()
-                            return
+                    # If we get here, either no specific_image was provided or it failed to load
+                    print("Falling back to thinking state for tools")
+                    if 'thinking' in self.image_cache:
+                        self.current_image = random.choice(self.image_cache['thinking'])
+                        self.screen.blit(self.current_image, (0, 0))
+                        pygame.display.flip()
+                        self.state_entry_time = time.time()
+                        return
                     
                     # If we get here, there's no valid tool state image, use thinking state from current persona
                     print(f"No valid tool state image found, using thinking state for {state}/{specific_image}")
