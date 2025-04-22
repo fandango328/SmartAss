@@ -480,32 +480,45 @@ class TokenManager:
             "tools_used_in_session": self.tools_used_in_session
         }
 
-    def enable_tools(self, query: str = None) -> Dict[str, Any]:
+    def enable_tools(self) -> bool:
+        """Simple tool state enablement."""
         self.tools_enabled = True
-        return {
-            "state": "enabled",
-            "tools_active": True,
-            "mood": "happy"
-        }
+        return True
 
-    def disable_tools(self, reason: str = "manual") -> Dict[str, Any]:
-        was_enabled = self.tools_enabled
+    def disable_tools(self) -> bool:
+        """Simple tool state disablement."""
         self.tools_enabled = False
-        return {
-            "state": "disabled",
-            "tools_active": False,
-            "mood": "casual"
-        }
+        return True
 
     def record_tool_usage(self, tool_name: str) -> Dict[str, Any]:
+        """Records that a tool was used."""
         self.tools_used_in_session = True
-        
         print(f"Tool usage recorded: {tool_name}")
-        
         return {
             "status": "recorded",
             "tool": tool_name
         }
+
+    async def execute_tool(self, tool_name: str, **kwargs) -> Any:
+        """Execute a tool and track its token usage"""
+        try:
+            # Show tool use state
+            await self.system_manager._show_tool_use()
+            
+            # Execute the tool
+            result = await super().execute_tool(tool_name, **kwargs)
+            
+            # Return to previous state
+            await self.system_manager.display_manager.update_display('listening')
+            
+            return result
+            
+        except Exception as e:
+            print(f"Error executing tool {tool_name}: {e}")
+            traceback.print_exc()
+            # Ensure we return to listening state even on error
+            await self.system_manager.display_manager.update_display('listening')
+            raise
 
     def track_query_completion(self, used_tool: bool = False) -> Dict[str, Any]:
         """Only tracks tool usage for audio feedback purposes."""
