@@ -131,26 +131,58 @@ class SystemManager:
         """Allow setting of system manager for tool state display"""
         self.system_manager = system_manager
         
-    def _get_tool_state_path(self, state: str) -> Path:
+    async def _handle_system_state_change(self, state_type: str, action: str, subtype: str = None) -> bool:
         """
-        Get path to tool state directory.
+        Coordinate system state changes with DisplayManager.
         
         Args:
-            state: The tool state ('enabled', 'disabled', 'use')
+            state_type: System state category (tools, document, calibration)
+            action: Action being performed (enable, disable, load, etc.)
+            subtype: Optional subtype for the state change
             
         Returns:
-            Path object for the appropriate state directory
+            bool: Success of the state change
         """
-        # Check persona-specific path first
-        base_path = Path(f"/home/user/LAURA/pygame/{config.ACTIVE_PERSONA.lower()}/system/tools/{state}")
-        
-        # If persona-specific path exists and has PNGs, use it
-        if base_path.exists() and any(base_path.glob('*.png')):
-            return base_path
+        try:
+            # Validate state change with token tracker if needed
+            if state_type == "tools":
+                if action == "enable":
+                    success = self.token_tracker.enable_tools()
+                elif action == "disable":
+                    success = self.token_tracker.disable_tools()
+                else:
+                    return False
+                    
+                if not success:
+                    return False
             
-        # Otherwise fall back to Laura's tools directory
-        laura_path = Path(f"/home/user/LAURA/pygame/laura/system/tools/{state}")
-        return laura_path
+            # Update display with proper system state
+            await self.display_manager.update_display(state_type, specific_image=subtype)
+            
+            # Queue appropriate audio feedback
+            audio_folder = os.path.join(
+                f"/home/user/LAURA/sounds/{config.ACTIVE_PERSONA.lower()}",
+                f"{state_type}_sentences",
+                "status" if state_type == "tools" else "",
+                subtype if subtype else ""
+            )
+            
+            if os.path.exists(audio_folder):
+                mp3_files = [f for f in os.listdir(audio_folder) if f.endswith('.mp3')]
+                if mp3_files:
+                    audio_file = os.path.join(audio_folder, random.choice(mp3_files))
+                    await self.audio_manager.queue_audio(audio_file=audio_file, priority=True)
+                    await self.audio_manager.wait_for_queue_empty()
+            
+            # Return to listening state after completion
+            await self.display_manager.update_display('listening')
+            return True
+                
+        except Exception as e:
+            print(f"Error in system state change: {e}")
+            traceback.print_exc()
+            await self.display_manager.update_display('listening')
+            return False
 
     def _normalize_command_input(self, transcript: str) -> str:
         """
