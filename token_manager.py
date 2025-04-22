@@ -634,3 +634,119 @@ class TokenManager:
         
         return bool(relevant_tools), relevant_tools
     
+
+
+    def track_query_completion(self, used_tool: bool = False) -> Dict[str, Any]:
+        """Only tracks tool usage for audio feedback purposes."""
+        if not self.tools_enabled or not used_tool:
+            return {
+                "state_changed": False,
+                "tools_active": self.tools_enabled,
+                "mood": "casual"
+            }
+                    
+        # Play tool use audio when a tool is actually used
+        try:
+            audio_file = random.choice(os.listdir(SOUND_PATHS['tool']['use']))
+            AudioManager.play_audio(os.path.join(SOUND_PATHS['tool']['use'], audio_file))
+        except Exception as e:
+            print(f"Error playing tool use audio: {e}")
+        
+        return {
+            "state_changed": False,
+            "tools_active": True,
+            "mood": "focused"
+        }
+
+    def tools_are_active(self) -> bool:
+        return self.tools_enabled
+
+    def handle_tool_command(self, query: str) -> Tuple[bool, Dict[str, Any]]:
+        """
+        Handle tool enable/disable commands
+        Returns (was_command, response_dict)
+        """
+        try:
+            query_lower = query.lower().strip()
+            
+            # Use existing enable/disable commands from SYSTEM_STATE_COMMANDS
+            enable_commands = SYSTEM_STATE_COMMANDS["tool"]["enable"]
+            disable_commands = SYSTEM_STATE_COMMANDS["tool"]["disable"]
+            
+            has_enable = any(cmd.lower() in query_lower for cmd in SYSTEM_STATE_COMMANDS["tool"]["enable"])
+            has_disable = any(cmd.lower() in query_lower for cmd in SYSTEM_STATE_COMMANDS["tool"]["disable"])
+            
+            if has_enable and has_disable:
+                # Use last mentioned command
+                last_enable_pos = max((query_lower.rfind(cmd.lower()) 
+                                   for cmd in enable_commands), default=-1)
+                last_disable_pos = max((query_lower.rfind(cmd.lower()) 
+                                    for cmd in disable_commands), default=-1)
+                
+                return True, (self.disable_tools() if last_disable_pos > last_enable_pos 
+                            else self.enable_tools())
+                
+            elif has_enable:
+                return True, self.enable_tools()
+            elif has_disable:
+                return True, self.disable_tools()
+                    
+            return False, None
+                    
+        except Exception as e:
+            print(f"Error in handle_tool_command: {e}")
+            return False, {"success": False, "message": str(e), "state": "error"}
+
+    def tools_are_active(self):
+        """Simple check if tools are enabled - used by generate_response"""
+        return self.tools_enabled
+
+
+    def get_tools_for_query(self, query: str) -> Tuple[bool, List[dict]]:
+        """
+        Determine if tools are needed and which ones are relevant for a query.
+        
+        Args:
+            query: User's voice query text
+            
+        Returns:
+            Tuple containing:
+                - bool: Whether any tools are needed for this query
+                - List[dict]: List of relevant tool definitions
+        """
+        query_lower = query.lower()
+        relevant_tools = []
+        
+        # Check if this is ONLY a tool command
+        is_enable = any(phrase in query_lower 
+                       for phrase in SYSTEM_STATE_COMMANDS["tool"]["enable"])
+        is_disable = any(phrase in query_lower 
+                        for phrase in SYSTEM_STATE_COMMANDS["tool"]["disable"])
+        
+        if is_enable or is_disable:
+            # Remove the tool command part from query for further analysis
+            for phrase in (SYSTEM_STATE_COMMANDS["tool"]["enable"] + 
+                          SYSTEM_STATE_COMMANDS["tool"]["disable"]):
+                query_lower = query_lower.replace(phrase, '').strip()
+                
+            # If nothing left after removing tool command, return early
+            if not query_lower:
+                return False, []
+        
+        # Continue with tool analysis on remaining query
+        for category, keywords in self.TOOL_CATEGORY_KEYWORDS.items():
+            if any(word in query_lower for word in keywords):
+                category_tools = get_tools_by_category(category)
+                relevant_tools.extend(category_tools)
+        
+        # Remove duplicate tools while preserving order
+        relevant_tools = list({tool['name']: tool for tool in relevant_tools}.values())
+        
+        # Debug logging
+        print(f"\nTool Analysis:")
+        print(f"Query: {query_lower[:50]}...")
+        print(f"Contains Tool Command: {is_enable or is_disable}")
+        print(f"Tools Found: {[tool['name'] for tool in relevant_tools]}")
+        
+        return bool(relevant_tools), relevant_tools
+    
