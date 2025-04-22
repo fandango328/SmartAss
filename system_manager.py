@@ -336,28 +336,40 @@ class SystemManager:
             days = [d.strip().lower()[:3] for d in day_input.split(',')]
             return [day_mapping[d] for d in days if d in day_mapping]
 
-    async def handle_command(self, command_type: str, action: str, arguments: str = None) -> Tuple[bool, Optional[str], Optional[str]]:
-        """
-        Execute a command and provide audio feedback
-        Returns True if command succeeded, False if it failed
-        """
+    async def handle_command(self, command_type: str, action: str, arguments: str = None) -> bool:
+        """Execute command with queued audio feedback"""
         try:
-            if command_type == "persona":
-                return await self._handle_persona_command(action, arguments)
-
-            if command_type == "document":
-                if action == "load":
-                    load_success = await self.document_manager.load_all_files(clear_existing=False)
-                    folder_path = os.path.join(f"/home/user/LAURA/sounds/{config.ACTIVE_PERSONA.lower()}/file_sentences/{'loaded' if load_success else 'error'}")
-                    if os.path.exists(folder_path):
-                        mp3_files = [f for f in os.listdir(folder_path) if f.endswith('.mp3')]
+            if command_type == "tool":
+                if action not in ["enable", "disable"]:
+                    return False
+                    
+                if action == "enable":
+                    success = self.token_tracker.enable_tools()
+                else:
+                    success = self.token_tracker.disable_tools()
+                    
+                if success:
+                    audio_folder = os.path.join(
+                        f"/home/user/LAURA/sounds/{config.ACTIVE_PERSONA.lower()}/tool_sentences/status/{action}d"
+                    )
+                    if os.path.exists(audio_folder):
+                        mp3_files = [f for f in os.listdir(audio_folder) if f.endswith('.mp3')]
                         if mp3_files:
-                            audio_file = os.path.join(folder_path, random.choice(mp3_files))
-                            if os.path.exists(audio_file):
-                                await self.audio_manager.play_audio(audio_file)
-                                await self.audio_manager.wait_for_audio_completion()
-                    if not load_success:
-                        return False, None, None
+                            audio_file = os.path.join(audio_folder, random.choice(mp3_files))
+                            await self.audio_manager.queue_audio(audio_file=audio_file, priority=True)
+                return success
+
+            elif command_type == "document":
+                if action == "load":
+                    success = await self.document_manager.load_all_files(clear_existing=False)
+                    if success:
+                        folder_path = os.path.join(f"/home/user/LAURA/sounds/{config.ACTIVE_PERSONA.lower()}/file_sentences/loaded")
+                        if os.path.exists(folder_path):
+                            mp3_files = [f for f in os.listdir(folder_path) if f.endswith('.mp3')]
+                            if mp3_files:
+                                audio_file = os.path.join(folder_path, random.choice(mp3_files))
+                                await self.audio_manager.queue_audio(audio_file=audio_file)
+                    return success
                 else:  # offload
                     await self.document_manager.offload_all_files()
                     folder_path = os.path.join(f"/home/user/LAURA/sounds/{config.ACTIVE_PERSONA.lower()}/file_sentences/offloaded")
@@ -365,17 +377,8 @@ class SystemManager:
                         mp3_files = [f for f in os.listdir(folder_path) if f.endswith('.mp3')]
                         if mp3_files:
                             audio_file = os.path.join(folder_path, random.choice(mp3_files))
-                            if os.path.exists(audio_file):
-                                await self.audio_manager.play_audio(audio_file)
-                                await self.audio_manager.wait_for_audio_completion()
-
-            elif command_type == "tool":
-                if action not in ["enable", "disable"]:
-                    print(f"Invalid tool action: {action}")
-                    return False, None, None
-                    
-                success = await self._handle_tool_state_change(action)
-                return success, None, None
+                            await self.audio_manager.queue_audio(audio_file=audio_file)
+                    return True
 
             elif command_type == "calibration":
                 success = await self._run_calibration()
@@ -385,55 +388,45 @@ class SystemManager:
                         mp3_files = [f for f in os.listdir(folder_path) if f.endswith('.mp3')]
                         if mp3_files:
                             audio_file = os.path.join(folder_path, random.choice(mp3_files))
-                            if os.path.exists(audio_file):
-                                await self.audio_manager.play_audio(audio_file)
-                                await self.audio_manager.wait_for_audio_completion()
+                            await self.audio_manager.queue_audio(audio_file=audio_file)
+                return success
 
             elif command_type == "reminder":
                 return await self._handle_reminder_command(action, arguments)
 
-            await self.display_manager.update_display('listening')
-            return True, None, None
+            return False
 
         except Exception as e:
-            error_msg = f"Command error: {str(e)}"
-            print(error_msg)
+            print(f"Command error: {str(e)}")
             print(f"Traceback: {traceback.format_exc()}")
-            return False, None, None
+            return False
+        
+    async def _show_tool_use(self) -> None:
+        """
+        Start tool audio playback for tool execution.
+        Returns before audio completion to allow concurrent processing.
+        """
+        try:
+            # Start audio playback first (NON-BLOCKING)
+            audio_task = None
+            audio_folder = os.path.join(
+                f"/home/user/LAURA/sounds/{config.ACTIVE_PERSONA.lower()}/tool_sentences/use"
+            )
+            if os.path.exists(audio_folder):
+                mp3_files = [f for f in os.listdir(audio_folder) if f.endswith('.mp3')]
+                if mp3_files:
+                    audio_file = os.path.join(audio_folder, random.choice(mp3_files))
+                    # Create task but don't await it
+                    audio_task = asyncio.create_task(self.audio_manager.play_audio(audio_file))
 
-	async def _show_tool_use(self) -> None:
-		"""
-		Display tool use state and start tool audio playback.
-		Returns before audio completion to allow concurrent processing.
-		"""
-		try:
-			# Start audio playback first (NON-BLOCKING)
-			audio_task = None
-			audio_folder = os.path.join(
-				f"/home/user/LAURA/sounds/{config.ACTIVE_PERSONA.lower()}/tool_sentences/use"
-			)
-			if os.path.exists(audio_folder):
-				mp3_files = [f for f in os.listdir(audio_folder) if f.endswith('.mp3')]
-				if mp3_files:
-					audio_file = os.path.join(audio_folder, random.choice(mp3_files))
-					# Create task but don't await it
-					audio_task = asyncio.create_task(self.audio_manager.play_audio(audio_file))
+            # Store audio task for later checking
+            if audio_task:
+                # Store task reference for main process to check
+                self.current_tool_audio = audio_task
 
-			# Update display state immediately
-			use_path = self._get_tool_state_path("use")
-			if use_path.exists():
-				png_files = list(use_path.glob('*.png'))
-				if png_files:
-					await self.display_manager.update_display('tools', specific_image=str(png_files[0]))
-
-			# Store audio task for later checking
-			if audio_task:
-				# Store task reference for main process to check
-				self.current_tool_audio = audio_task
-
-		except Exception as e:
-			print(f"Error showing tool use state: {e}")
-			traceback.print_exc()
+        except Exception as e:
+            print(f"Error starting tool audio: {e}")
+            traceback.print_exc()
 
     async def _run_calibration(self) -> bool:
         """
