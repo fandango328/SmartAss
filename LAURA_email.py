@@ -1608,119 +1608,71 @@ async def handle_system_command(transcript):
 async def process_response_content(content):
     """
     Process API response content for voice generation and chat log storage.
-    Handles mood detection, content formatting, and ensures complete message processing.
-
+    
     Args:
-        content: Raw response from API (can be str or structured content blocks)
+        content: Raw response from API (must be text only)
     Returns:
         str: Formatted message ready for voice generation
     """
     global chat_log
-
+    
     print("DEBUG - Starting response content processing")
-
-    # Step 1: Parse content into usable text
-    if isinstance(content, (bytes, bytearray)):
-        print("WARNING: Received binary content in process_response_content")
-        return "I'm sorry, there was an error processing the response."
+    
+    try:
+        # Validate and sanitize content first
+        text = system_manager._validate_llm_response(content)
         
-    if isinstance(content, str):
-        # Validate reasonable length
-        if len(content) > 10000:
-            print(f"WARNING: Content too long ({len(content)} chars), truncating")
-            text = content[:10000] + "..."
+        # Format message for voice generation
+        formatted_message = text
+        
+        # Convert all newlines to spaces
+        formatted_message = formatted_message.replace('\n', ' ')
+        
+        # Convert list markers to natural speech transitions
+        formatted_message = re.sub(r'(\d+)\.\s*', r'Number \1: ', formatted_message)
+        formatted_message = re.sub(r'^\s*-\s*', 'Also, ', formatted_message)
+        
+        # Clean up multiple spaces
+        formatted_message = re.sub(r'\s+', ' ', formatted_message)
+        
+        # Add natural pauses after sentences
+        formatted_message = re.sub(r'(?<=[.!?])\s+(?=[A-Z])', '. ', formatted_message)
+        
+        # Parse mood and update display state
+        mood_match = re.match(r'^\[(.*?)\]([\s\S]*)', formatted_message, re.IGNORECASE)
+        if mood_match:
+            raw_mood = mood_match.group(1)
+            clean_message = mood_match.group(2)
+            mapped_mood = map_mood(raw_mood)
+            if mapped_mood:
+                await display_manager.update_display('speaking', mood=mapped_mood)
+                print(f"DEBUG - Mood detected: {mapped_mood}")
+                
+            # Save message with mood intact
+            assistant_message = {"role": "assistant", "content": formatted_message}
+            chat_log.append(assistant_message)
+            save_to_log_file(assistant_message)
+            
+            # Strip mood for voice generation
+            formatted_message = clean_message
         else:
-            text = content
-        print(f"DEBUG - String content: {text[:50]}...")        
+            # No mood detected
+            assistant_message = {"role": "assistant", "content": formatted_message}
+            chat_log.append(assistant_message)
+            save_to_log_file(assistant_message)
         
-    elif hasattr(content, 'text'):
-        # Direct access to text attribute (common in newer API responses)
-        text = content.text
-        print(f"DEBUG - Direct text attribute: {text[:50]}...")
-    elif isinstance(content, list):
-        # Handle content blocks from API response
-        text = ""
-        print(f"DEBUG - Content is a list with {len(content)} items")
-        for content_block in content:
-            if hasattr(content_block, 'type') and content_block.type == "text":
-                text += content_block.text
-                print(f"DEBUG - Added text block: {content_block.text[:30]}...")
-            elif isinstance(content_block, dict) and content_block.get('type') == 'text':
-                text += content_block.get('text', '')
-                print(f"DEBUG - Added dict text: {content_block.get('text', '')[:30]}...")
-            elif isinstance(content_block, str):
-                text += content_block
-                print(f"DEBUG - Added string item: {content_block[:30]}...")
+        # Final cleanup
+        formatted_message = formatted_message.strip()
         
-        if not text:
-            print("DEBUG - No valid text content found in list content")
-            return "I processed your request but couldn't generate a proper response."
-    else:
-        print(f"DEBUG - Unhandled content type: {type(content)}")
-        # Try direct string conversion as last resort
-        try:
-            text = str(content)
-            print(f"DEBUG - Converted to string: {text[:50]}...")
-        except:
-            print("DEBUG - Failed to convert content to string")
-            return "No valid response content"
-
-    # Step 2: Format message for voice generation BEFORE mood extraction
-    # Convert all formatting to natural speech patterns
-    formatted_message = text
-
-    # Convert all newlines to spaces for continuous speech
-    formatted_message = formatted_message.replace('\n', ' ')
-
-    # Convert list markers to natural speech transitions
-    formatted_message = re.sub(r'(\d+)\.\s*', r'Number \1: ', formatted_message)
-    formatted_message = re.sub(r'^\s*-\s*', 'Also, ', formatted_message)
-
-    # Clean up any multiple spaces from formatting
-    formatted_message = re.sub(r'\s+', ' ', formatted_message)
-
-    # Add natural pauses after sentences
-    formatted_message = re.sub(r'(?<=[.!?])\s+(?=[A-Z])', '. ', formatted_message)
-
-    # Step 3: Parse mood from the formatted message
-    # Using [\s\S]* to capture ALL content including newlines
-    mood_match = re.match(r'^\[(.*?)\]([\s\S]*)', formatted_message, re.IGNORECASE)
-    if mood_match:
-        raw_mood = mood_match.group(1)         # Extract mood from [mood]
-        clean_message = mood_match.group(2)     # Get complete message content
-        mapped_mood = map_mood(raw_mood)
-        if mapped_mood:
-            await display_manager.update_display('speaking', mood=mapped_mood)
-            print(f"DEBUG - Mood detected: {mapped_mood}")
-
-        # Save the formatted message with mood to logs
-        assistant_message = {"role": "assistant", "content": formatted_message}
-        chat_log.append(assistant_message)
-
-        # Save to persistent storage with mood intact
-        print(f"DEBUG ASSISTANT MESSAGE: {type(assistant_message)} - {assistant_message}")
-        print(f"DEBUG ASSISTANT CONTENT: {type(assistant_message['content'])} - {formatted_message[:100]}")
-        save_to_log_file(assistant_message)
-
-        # Now strip mood for voice generation
-        formatted_message = clean_message
-    else:
-        clean_message = formatted_message
-        print("DEBUG - No mood detected in message")
-
-        # Save the formatted message to logs
-        assistant_message = {"role": "assistant", "content": formatted_message}
-        chat_log.append(assistant_message)
-        save_to_log_file(assistant_message)
-
-    # Final cleanup for voice generation
-    formatted_message = formatted_message.strip()
-
-    print(f"DEBUG - Formatted message for voice (full):\n{formatted_message}\n")
-    print(f"DEBUG - Assistant response added to chat_log and saved to file")
-    print(f"DEBUG - Chat_log now has {len(chat_log)} messages")
-
-    return formatted_message
+        print(f"DEBUG - Formatted message for voice (full):\n{formatted_message}\n")
+        print(f"DEBUG - Chat_log now has {len(chat_log)} messages")
+        
+        return formatted_message
+        
+    except Exception as e:
+        print(f"Error in process_response_content: {e}")
+        traceback.print_exc()
+        return "I apologize, but I encountered an error processing the response."
 
 async def generate_response(query):
     global chat_log, last_interaction, last_interaction_check, token_tracker
@@ -3237,8 +3189,15 @@ def cancel_calendar_event(event_id, notify_attendees=True, cancellation_message=
 
 def sanitize_messages_for_api(chat_log):
     """
-    Simple function that copies all messages and ensures the last one is from the user.
-    No pair validation, no alternating requirements.
+    Sanitize chat log messages for API consumption.
+    Ensures messages have required fields and proper structure.
+    Handles both text messages and tool interaction messages.
+    
+    Args:
+        chat_log: List of conversation messages
+        
+    Returns:
+        list: Sanitized messages ready for API consumption
     """
     if not chat_log:
         return []
@@ -3246,28 +3205,42 @@ def sanitize_messages_for_api(chat_log):
     # Copy all messages with valid structure
     sanitized = []
     for msg in chat_log:
-        if "role" in msg and "content" in msg:
-            # Only include if it has the required fields
+        if "role" not in msg or "content" not in msg:
+            continue
+            
+        # Handle tool interaction messages (list type content)
+        if isinstance(msg["content"], list):
+            valid_blocks = []
+            for block in msg["content"]:
+                if not isinstance(block, dict):
+                    continue
+                    
+                # Validate tool use blocks
+                if block.get("type") == "tool_use":
+                    if all(k in block for k in ["id", "name", "input"]):
+                        valid_blocks.append(block)
+                # Validate tool result blocks        
+                elif block.get("type") == "tool_result":
+                    if all(k in block for k in ["tool_use_id", "content"]):
+                        valid_blocks.append(block)
+                        
+            if valid_blocks:
+                sanitized.append({
+                    "role": msg["role"],
+                    "content": valid_blocks
+                })
+                
+        # Handle regular text messages
+        elif isinstance(msg["content"], str):
             sanitized.append({
                 "role": msg["role"],
                 "content": msg["content"]
             })
 
-    # Debug output
-    print(f"DEBUG - Sanitized message history: {len(chat_log)} messages -> {len(sanitized)} messages")
-    print(f"DEBUG - First message: {sanitized[0]['role'] if sanitized else 'none'}")
-    print(f"DEBUG - Last message: {sanitized[-1]['role'] if sanitized else 'none'}")
-    if sanitized:
-        last_msg = sanitized[-1]
-        if isinstance(last_msg['content'], str):
-            print(f"DEBUG - Last message content preview: {last_msg['content'][:100]}")
-        elif isinstance(last_msg['content'], list):
-            print(f"DEBUG - Last message contains {len(last_msg['content'])} content blocks")
-
-    # Final check: If the last message isn't from user, we might need to handle that elsewhere
+    # Check if last message is from user
     if sanitized and sanitized[-1]["role"] != "user":
-        print("WARNING: Last message is not from user - API may reject this request")
-
+        return sanitized[:-1]  # Remove last non-user message
+        
     return sanitized
 
 def find_calendar_event(description, time_range_days=7):
