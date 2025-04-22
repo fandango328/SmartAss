@@ -1620,9 +1620,19 @@ async def process_response_content(content):
     print("DEBUG - Starting response content processing")
 
     # Step 1: Parse content into usable text
+    if isinstance(content, (bytes, bytearray)):
+        print("WARNING: Received binary content in process_response_content")
+        return "I'm sorry, there was an error processing the response."
+        
     if isinstance(content, str):
-        text = content
-        print(f"DEBUG - String content: {text[:50]}...")
+        # Validate reasonable length
+        if len(content) > 10000:
+            print(f"WARNING: Content too long ({len(content)} chars), truncating")
+            text = content[:10000] + "..."
+        else:
+            text = content
+        print(f"DEBUG - String content: {text[:50]}...")        
+        
     elif hasattr(content, 'text'):
         # Direct access to text attribute (common in newer API responses)
         text = content.text
@@ -2072,14 +2082,63 @@ async def generate_response(query):
                         print(f"Token tracking error in tool response: {token_err}")
 
                     # Process the final response content with error checking
-                    if not final_response.content:
+                    if not final_response or not final_response.content:
                         error_msg = "I'm sorry, I couldn't process the tool result properly."
                         print("API Error: Empty content in tool response")
                         await display_manager.update_display('speaking', mood='disappointed')
                         return error_msg
 
-                    # Start response content processing
-                    processed_content = await process_response_content(final_response.content)
+                    # Validate response content
+                    try:
+                        content = final_response.content
+                        
+                        # Handle content types
+                        if isinstance(content, (bytes, bytearray)):
+                            print("ERROR: Received binary response content")
+                            await display_manager.update_display('speaking', mood='disappointed')
+                            return "I'm sorry, I received an invalid response format."
+                            
+                        # If content is a list, join text blocks
+                        if isinstance(content, list):
+                            text_content = ""
+                            for block in content:
+                                if hasattr(block, 'text'):
+                                    text_content += block.text
+                                elif isinstance(block, dict) and 'text' in block:
+                                    text_content += block['text']
+                            content = text_content
+                            
+                        # Convert to string if needed
+                        if not isinstance(content, str):
+                            content = str(content)
+                            
+                        # Check for binary data indicators
+                        if 'LAME3' in content or '\xFF\xFB' in content:
+                            print("ERROR: Detected binary audio data in response")
+                            await display_manager.update_display('speaking', mood='disappointed')
+                            return "I'm sorry, I received an invalid response format."
+                            
+                        # Enforce length limit
+                        if len(content) > 10000:
+                            print(f"WARNING: Response content too long ({len(content)} chars), truncating")
+                            content = content[:10000] + "..."
+
+                        # Process the validated content
+                        processed_content = await process_response_content(content)
+
+                    except Exception as e:
+                        print(f"Error validating response content: {e}")
+                        traceback.print_exc()
+                        await display_manager.update_display('speaking', mood='disappointed')
+                        return "I'm sorry, there was an error processing the response."
+                            
+                        # Start response content processing
+                        processed_content = await process_response_content(content_str)
+                        
+                    except Exception as content_err:
+                        print(f"Error validating response content: {content_err}")
+                        await display_manager.update_display('speaking', mood='disappointed')
+                        return "I'm sorry, there was an error processing the response."
 
                     # Start TTS generation request (non-blocking)
                     tts_task = asyncio.create_task(tts_handler.generate_audio(processed_content))
@@ -2705,14 +2764,13 @@ async def generate_voice(chat):
         chat (str): Pre-formatted text from process_response_content
                    Should already have newlines and spaces normalized
     """
-    # Skip voice generation for control signals like [CONTINUE]
-    if chat == "[CONTINUE]":
-        print(f"DEBUG - GENERATE_VOICE skipping control signal: '{chat}'")
+    # Skip voice generation for control signals
+    if not chat or chat == "[CONTINUE]":
+        print(f"DEBUG - GENERATE_VOICE skipping: '{chat}'")
         return
 
     print(f"DEBUG - GENERATE_VOICE received chat: '{chat[:50]}...'")
     try:
-        print(f"DEBUG - GENERATE_VOICE RECEIVED: '{chat[:50]}...' (Length: {len(chat)})")
         print(f"DEBUG - Content type: {type(chat)}")
 
         # Verify input is properly formatted
@@ -2720,24 +2778,34 @@ async def generate_voice(chat):
             print(f"WARNING: Unexpected content type in generate_voice: {type(chat)}")
             chat = str(chat)
 
-        # No need for newline handling since process_response_content already did it
-        # Just add a final normalization pass for safety
+        # Normalize the text
         chat = ' '.join(chat.split())
+        
+        if not chat.strip():
+            print("WARNING: Empty text after normalization")
+            return
 
         print(f"Sending to TTS: {chat[:50]}..." if len(chat) > 50 else f"Sending to TTS: {chat}")
 
-        # Use SystemManager's TTS handler for voice generation
-        audio = system_manager.tts_handler.generate_audio(chat)
+        # Generate audio with error handling
+        try:
+            audio = system_manager.tts_handler.generate_audio(chat)
+            if not audio:
+                raise Exception("TTS handler returned empty audio data")
+        except Exception as tts_error:
+            print(f"Error in TTS generation: {tts_error}")
+            raise
+
+        # Save and play the audio
         with open(AUDIO_FILE, "wb") as f:
             f.write(audio)
 
-        # Play the generated audio
         await audio_manager.play_audio(AUDIO_FILE)
 
     except Exception as e:
         print(f"Error in generate_voice: {e}")
         traceback.print_exc()
-        raise  # Re-raise to allow proper error handling by caller
+        # Don't re-raise - let the caller handle the error state
 
 def get_location(format: str) -> str:
     print("DEBUG: Entering get_location function")
