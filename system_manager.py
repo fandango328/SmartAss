@@ -126,6 +126,27 @@ class SystemManager:
         # Debug flag for command detection
         self.debug_detection = False  # Set to True to see matching details
 
+    def _get_tool_state_path(self, state: str) -> Path:
+        """
+        Get path to tool state directory.
+        
+        Args:
+            state: The tool state ('enabled', 'disabled', 'use')
+            
+        Returns:
+            Path object for the appropriate state directory
+        """
+        # Check persona-specific path first
+        base_path = Path(f"/home/user/LAURA/pygame/{config.ACTIVE_PERSONA.lower()}/system/tools/{state}")
+        
+        # If persona-specific path exists and has PNGs, use it
+        if base_path.exists() and any(base_path.glob('*.png')):
+            return base_path
+            
+        # Otherwise fall back to Laura's tools directory
+        laura_path = Path(f"/home/user/LAURA/pygame/laura/system/tools/{state}")
+        return laura_path
+
     def _normalize_command_input(self, transcript: str) -> str:
         """
         Normalize command input to handle natural language variations
@@ -158,6 +179,101 @@ class SystemManager:
 
         return normalized
 
+    def detect_command(self, transcript: str) -> Tuple[bool, Optional[str], Optional[str], Optional[str]]:
+        """
+        Check if the user's words match any of our command patterns
+        Returns:
+        - is this a command? (True/False)
+        - what type of command? (document/tool/calibration/reminder/persona)
+        - what action to take? (load/offload/enable/disable/switch)
+        - arguments for the command (if any)
+        """
+        normalized_transcript = self._normalize_command_input(transcript)
+        print(f"DEBUG - Normalized transcript: '{normalized_transcript}'")
+        
+        # Load available personas for command context
+        try:
+            with open("personalities.json", 'r') as f:
+                personas_data = json.load(f)
+                available_personas = [p.lower() for p in personas_data.get("personas", {}).keys()]
+        except Exception as e:
+            print(f"Error loading personas: {e}")
+            available_personas = []
+        
+        # For persona commands, check if any persona name exists in the transcript
+        persona_found = None
+        for persona in available_personas:
+            if persona in normalized_transcript.lower():
+                persona_found = persona
+                break
+        
+        # Handle all commands including persona
+        for command_type, actions in self.command_patterns.items():
+            for action, patterns in actions.items():
+                for pattern in patterns:
+                    if pattern in normalized_transcript:
+                        # Extract arguments after the pattern if any
+                        start_idx = normalized_transcript.find(pattern) + len(pattern)
+                        args = normalized_transcript[start_idx:].strip()
+                        
+                        # Special handling for persona commands - only trigger if valid persona found
+                        if command_type == "persona":
+                            if persona_found:
+                                print(f"DEBUG - Matched persona command with target: {persona_found}")
+                                return True, command_type, action, persona_found
+                            else:
+                                print(f"DEBUG - Persona command matched but no valid persona found")
+                                return False, None, None, None
+                        
+                        return True, command_type, action, args if args else None
+        
+        print("DEBUG - No command pattern matched")
+        return False, None, None, None
+
+    async def _handle_tool_state_change(self, state: str) -> bool:
+        """
+        Handle tool state changes with coordinated display and audio updates.
+        
+        Args:
+            state: The desired tool state ('enable' or 'disable')
+            
+        Returns:
+            bool: Success of the state change
+        """
+        try:
+            # Update token manager state
+            if state == "enable":
+                success = self.token_tracker.enable_tools()
+            else:
+                success = self.token_tracker.disable_tools()
+                
+            if not success:
+                return False
+                
+            # Get appropriate image path and update display
+            image_path = self._get_tool_state_path(f"{state}d")  # enabled or disabled
+            await self.display_manager.update_display('tools', specific_image=str(image_path / next(image_path.glob('*.png'))))
+            
+            # Play audio feedback
+            audio_folder = os.path.join(
+                f"/home/user/LAURA/sounds/{config.ACTIVE_PERSONA.lower()}/tool_sentences/status/{state}d"
+            )
+            if os.path.exists(audio_folder):
+                mp3_files = [f for f in os.listdir(audio_folder) if f.endswith('.mp3')]
+                if mp3_files:
+                    audio_file = os.path.join(audio_folder, random.choice(mp3_files))
+                    await self.audio_manager.play_audio(audio_file)
+                    await self.audio_manager.wait_for_audio_completion()
+            
+            # Return to listening state
+            await self.display_manager.update_display('listening')
+            return True
+            
+        except Exception as e:
+            print(f"Error in tool state change: {e}")
+            traceback.print_exc()
+            return False
+
     def has_command_components(self, transcript: str, required_words: list, max_word_gap: int = 2) -> bool:
         """
         Check if command words appear within 2 words of each other in the transcript
@@ -189,7 +305,6 @@ class SystemManager:
 
         return all(positions[i+1] - positions[i] <= 2
                   for i in range(len(positions)-1))
-
 
     def _parse_schedule_days(self, day_input: str) -> list:
         """
@@ -254,53 +369,8 @@ class SystemManager:
                     print(f"Invalid tool action: {action}")
                     return False, None, None
                     
-                try:
-                    # Step 1: Update tool state
-                    status_type = 'enabled' if action == 'enable' else 'disabled'
-                    if action == "enable":
-                        result = self.token_tracker.enable_tools()
-                    else:  # disable
-                        result = self.token_tracker.disable_tools()
-                    
-                    print(f"Tool {action} result: {result}")
-                    
-                    if isinstance(result, dict) and result.get("state") == status_type:
-                        # Step 2: Get and display random image for tool state
-                        image_folder = f"/home/user/LAURA/pygame/{config.ACTIVE_PERSONA.lower()}/system/tools/{status_type}"
-                        if os.path.exists(image_folder):
-                            png_files = [f for f in os.listdir(image_folder) if f.endswith('.png')]
-                            if png_files:
-                                chosen_image = os.path.join(image_folder, random.choice(png_files))
-                                print(f"Selected tool state image: {chosen_image}")
-                                await self.display_manager.update_display('tools', specific_image=chosen_image)
-                            else:
-                                print(f"No PNG files found in {image_folder}")
-                                return False, None, None
-                        else:
-                            print(f"Tool state image folder not found: {image_folder}")
-                            return False, None, None
-
-                        # Step 3: Play audio feedback
-                        audio_folder = os.path.join(f"/home/user/LAURA/sounds/{config.ACTIVE_PERSONA.lower()}/tool_sentences/status/{status_type}")
-                        if os.path.exists(audio_folder):
-                            mp3_files = [f for f in os.listdir(audio_folder) if f.endswith('.mp3')]
-                            if mp3_files:
-                                audio_file = os.path.join(audio_folder, random.choice(mp3_files))
-                                if os.path.exists(audio_file):
-                                    await self.audio_manager.play_audio(audio_file)
-                                    await self.audio_manager.wait_for_audio_completion()
-
-                        # Step 4: Return to listening state
-                        await self.display_manager.update_display('listening')
-                        return True, None, None
-                    else:
-                        print(f"Failed to {action} tools")
-                        return False, None, None
-                
-                except Exception as e:
-                    print(f"Error during tool {action}: {e}")
-                    traceback.print_exc()
-                    return False, None, None
+                success = await self._handle_tool_state_change(action)
+                return success, None, None
 
             elif command_type == "calibration":
                 success = await self._run_calibration()
@@ -325,6 +395,20 @@ class SystemManager:
             print(error_msg)
             print(f"Traceback: {traceback.format_exc()}")
             return False, None, None
+
+    async def _show_tool_use(self) -> None:
+        """
+        Display tool use state and return to previous state when complete.
+        """
+        try:
+            # Get and display tool use state image
+            use_path = self._get_tool_state_path("use")
+            if use_path.exists() and any(use_path.glob('*.png')):
+                await self.display_manager.update_display('tools', specific_image=str(use_path / next(use_path.glob('*.png'))))
+
+        except Exception as e:
+            print(f"Error showing tool use state: {e}")
+            traceback.print_exc()
 
     async def _run_calibration(self) -> bool:
         """
@@ -431,58 +515,6 @@ class SystemManager:
             print(f"Traceback: {traceback.format_exc()}")
             return False
 
-
-    def detect_command(self, transcript: str) -> Tuple[bool, Optional[str], Optional[str], Optional[str]]:
-        """
-        Check if the user's words match any of our command patterns
-        Returns:
-        - is this a command? (True/False)
-        - what type of command? (document/tool/calibration/reminder/persona)
-        - what action to take? (load/offload/enable/disable/switch)
-        - arguments for the command (if any)
-        """
-        normalized_transcript = self._normalize_command_input(transcript)
-        print(f"DEBUG - Normalized transcript: '{normalized_transcript}'")
-        
-        # Load available personas for command context
-        try:
-            with open("personalities.json", 'r') as f:
-                personas_data = json.load(f)
-                available_personas = [p.lower() for p in personas_data.get("personas", {}).keys()]
-        except Exception as e:
-            print(f"Error loading personas: {e}")
-            available_personas = []
-        
-        # For persona commands, check if any persona name exists in the transcript
-        persona_found = None
-        for persona in available_personas:
-            if persona in normalized_transcript.lower():
-                persona_found = persona
-                break
-        
-        # Handle all commands including persona
-        for command_type, actions in self.command_patterns.items():
-            for action, patterns in actions.items():
-                for pattern in patterns:
-                    if pattern in normalized_transcript:
-                        # Extract arguments after the pattern if any
-                        start_idx = normalized_transcript.find(pattern) + len(pattern)
-                        args = normalized_transcript[start_idx:].strip()
-                        
-                        # Special handling for persona commands - only trigger if valid persona found
-                        if command_type == "persona":
-                            if persona_found:
-                                print(f"DEBUG - Matched persona command with target: {persona_found}")
-                                return True, command_type, action, persona_found
-                            else:
-                                print(f"DEBUG - Persona command matched but no valid persona found")
-                                return False, None, None, None
-                        
-                        return True, command_type, action, args if args else None
-        
-        print("DEBUG - No command pattern matched")
-        return False, None, None, None
-
     async def _handle_persona_command(self, action: str, arguments: str = None) -> bool:
         """Handle persona-related commands with transition animations and audio sync"""
         try:
@@ -536,7 +568,7 @@ class SystemManager:
                 if normalized_input in personas_data.get("personas", {}):
                     target_persona = normalized_input
                 else:
-                    for key in personas_data.get("personas", {}):
+                    for key in personas_data.get("personas", {}).keys():
                         if key.lower() == normalized_input:
                             target_persona = key
                             break
@@ -628,4 +660,3 @@ class SystemManager:
             print(f"ERROR: Persona command failed: {e}")
             traceback.print_exc()
             return False
-            
