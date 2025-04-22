@@ -123,38 +123,60 @@ class DisplayManager:
         if missing_states:
             raise RuntimeError(f"Failed to load required states: {', '.join(missing_states)}")
 
-    def _get_image_path(self, state_type, specific_type=None):
+    def _get_system_image_path(self, state_type: str, subtype: str = None, specific_file: str = None) -> Path:
         """
-        Centralized image path resolution with fallbacks
+        Enhanced path resolution for system states with proper fallback chain.
         
         Args:
             state_type: Primary category (tools, calibration, document)
-            specific_type: Subcategory (enabled, disabled, load, etc.)
-        
+            subtype: Optional subcategory (enabled, disabled, load, etc.)
+            specific_file: Optional specific file to look for
+            
         Returns:
-            Path object to the appropriate image or directory
+            Path object to appropriate image/directory with fallback chain
         """
-        # First try persona-specific path
-        if specific_type:
-            primary_path = Path(f"{self.base_path}/system/{state_type}/{specific_type}")
+        paths_to_try = []
+        
+        # Build primary path
+        if subtype:
+            primary = self.base_path / 'system' / state_type / subtype
         else:
-            primary_path = Path(f"{self.base_path}/{state_type}")
+            primary = self.base_path / 'system' / state_type
+        paths_to_try.append(primary)
         
-        # Check if primary path exists with images
-        if primary_path.exists() and any(primary_path.glob('*.png')):
-            return primary_path
-        
-        # Fall back to Laura's resources
-        if specific_type:
-            fallback_path = Path(f"/home/user/LAURA/pygame/laura/system/{state_type}/{specific_type}")
+        # Add Laura fallback paths
+        laura_base = Path('/home/user/LAURA/pygame/laura')
+        if subtype:
+            laura_path = laura_base / 'system' / state_type / subtype
         else:
-            fallback_path = Path(f"/home/user/LAURA/pygame/laura/{state_type}")
+            laura_path = laura_base / 'system' / state_type
+        paths_to_try.append(laura_path)
         
-        if fallback_path.exists() and any(fallback_path.glob('*.png')):
-            return fallback_path
+        # If we're looking for a specific file
+        if specific_file:
+            for base_path in paths_to_try:
+                specific_path = base_path / specific_file
+                if specific_path.exists():
+                    return specific_path
         
-        # If all else fails, return the thinking state as last resort
-        return Path(f"{self.base_path}/thinking")
+        # Otherwise look for any valid PNG in the directories
+        for path in paths_to_try:
+            if path.exists():
+                png_files = list(path.glob('*.png'))
+                if png_files:
+                    return path
+        
+        # Ultimate fallback - thinking state
+        thinking_path = self.base_path / 'thinking'
+        if thinking_path.exists() and any(thinking_path.glob('*.png')):
+            return thinking_path
+            
+        # If even thinking isn't available, use Laura's thinking
+        laura_thinking = laura_base / 'thinking'
+        if laura_thinking.exists() and any(laura_thinking.glob('*.png')):
+            return laura_thinking
+            
+        raise RuntimeError(f"No valid image path found for {state_type}/{subtype}")
         
     async def rotate_background(self):
         while not self.initialized:
@@ -243,140 +265,98 @@ class DisplayManager:
                 return False
              
     async def update_display(self, state, mood=None, transition_path=None, specific_image=None):
+        """
+        Update display state with proper system directory handling and transitions.
+        
+        Args:
+            state: Display state to transition to
+            mood: Optional mood for speaking state
+            transition_path: Optional path for transition animations
+            specific_image: Optional specific image to display
+        """
         async with self.state_lock:
             if mood is None:
                 mood = self.current_mood
 
-            # Skip no-change updates unless it's a transition with a specific path
-            if state == self.current_state and mood == self.current_mood and transition_path is None and specific_image is None:
-                return  # No change needed
-            
+            # Skip no-change updates unless it's a transition
+            if (state == self.current_state and 
+                mood == self.current_mood and 
+                transition_path is None and 
+                specific_image is None):
+                return
+
             try:
                 self.last_state = self.current_state
                 self.current_state = state
                 self.current_mood = mood
-                
-                # Handle tool state displays using specific images
-                if state == 'tools' and specific_image:
+
+                # Handle system states (tools, calibration, documents)
+                if state in ['tools', 'calibration', 'document']:
                     try:
-                        specific_path = Path(specific_image)
-                        if specific_path.exists() and specific_path.is_file():
-                            tool_image = pygame.transform.scale(
-                                pygame.image.load(str(specific_path)), 
+                        # Determine system state type and subtype
+                        if state == 'tools':
+                            state_type = 'tools'
+                            subtype = specific_image if specific_image in ['enabled', 'disabled', 'use'] else None
+                        elif state == 'calibration':
+                            state_type = 'calibration'
+                            subtype = None
+                        else:  # document
+                            state_type = 'document'
+                            subtype = specific_image if specific_image in ['load', 'unload'] else None
+
+                        # Get appropriate image path
+                        image_path = self._get_system_image_path(state_type, subtype)
+                        
+                        # Load and display image
+                        if image_path.is_file():
+                            system_image = pygame.transform.scale(
+                                pygame.image.load(str(image_path)),
                                 (512, 512)
                             )
-                            self.current_image = tool_image
-                            self.screen.blit(self.current_image, (0, 0))
-                            pygame.display.flip()
-                            self.state_entry_time = time.time()
-                            return
-                    except Exception as e:
-                        print(f"Error loading tool state image: {e}")
+                        else:
+                            # If path is directory, take first PNG
+                            png_files = list(image_path.glob('*.png'))
+                            if not png_files:
+                                raise FileNotFoundError(f"No PNG files found in {image_path}")
+                            system_image = pygame.transform.scale(
+                                pygame.image.load(str(png_files[0])),
+                                (512, 512)
+                            )
                         
-                    # Fall back to thinking state
-                    if 'thinking' in self.image_cache:
-                        self.current_image = random.choice(self.image_cache['thinking'])
+                        self.current_image = system_image
                         self.screen.blit(self.current_image, (0, 0))
                         pygame.display.flip()
                         self.state_entry_time = time.time()
                         return
-                    
-                    # If we get here, there's no valid tool state image, use thinking state from current persona
-                    print(f"No valid tool state image found, using thinking state for {state}/{specific_image}")
-                    thinking_path = Path(f"{self.base_path}/thinking")
-                    if thinking_path.exists() and any(thinking_path.glob('*.png')):
-                        print(f"Using persona's thinking state as fallback for tools")
-                        thinking_image = pygame.transform.scale(
-                            pygame.image.load(str(list(thinking_path.glob('*.png'))[0])), 
-                            (512, 512)
-                        )
-                        self.current_image = thinking_image
-                        self.screen.blit(self.current_image, (0, 0))
-                        pygame.display.flip()
-                        self.state_entry_time = time.time()
-                        return
-
-                # Handle special case for system state (persona transitions, etc.)
-                if state == 'system':
-                    # If a transition path is specified, use it directly without looking for tool images
-                    if transition_path is not None:
+                        
+                    except Exception as e:
+                        print(f"Error handling system state {state}: {e}")
+                        # Fall through to normal state handling
+                
+                # Handle persona transitions
+                if transition_path is not None:
+                    try:
                         transition_path = Path(transition_path)
                         if transition_path.exists():
+                            # Handle specific transition image if provided
+                            if specific_image:
+                                specific_path = Path(specific_image)
+                                if specific_path.exists() and specific_path.is_file():
+                                    transition_image = pygame.transform.scale(
+                                        pygame.image.load(str(specific_path)),
+                                        (512, 512)
+                                    )
+                                    self.current_image = transition_image
+                                    self.screen.blit(self.current_image, (0, 0))
+                                    pygame.display.flip()
+                                    self.state_entry_time = time.time()
+                                    return
+                            
+                            # Otherwise use first image from transition directory
                             png_files = list(transition_path.glob('*.png'))
                             if png_files:
-                                # Use the first image (or specific image if provided)
-                                if specific_image:
-                                    specific_path = Path(specific_image)
-                                    if specific_path.exists() and specific_path.is_file():
-                                        image_path = specific_path
-                                    else:
-                                        image_path = png_files[0]
-                                else:
-                                    image_path = png_files[0]
-                                
-                                system_image = pygame.transform.scale(
-                                    pygame.image.load(str(image_path)), 
-                                    (512, 512)
-                                )
-                                self.current_image = system_image
-                                self.screen.blit(self.current_image, (0, 0))
-                                pygame.display.flip()
-                                self.state_entry_time = time.time()
-                                return
-                            else:
-                                print(f"Warning: No PNG files found in system transition path: {transition_path}")
-                        else:
-                            print(f"Warning: System transition path not found: {transition_path}")
-                
-                # Handle special case for calibration
-                if state == 'calibration':
-                    # Use centralized path resolution
-                    calib_path = self._get_image_path('calibration')
-                    
-                    # Load first PNG from the directory
-                    png_files = list(calib_path.glob('*.png'))
-                    if png_files:
-                        calib_image = pygame.transform.scale(
-                            pygame.image.load(str(png_files[0])), 
-                            (512, 512)
-                        )
-                        self.current_image = calib_image
-                        self.screen.blit(self.current_image, (0, 0))
-                        pygame.display.flip()
-                        self.state_entry_time = time.time()
-                        return
-                
-                # Handle special case for document operations
-                if state == 'document':
-                    # doctype should be either 'load' or 'unload'
-                    doctype = specific_image if specific_image in ['load', 'unload'] else 'load'
-                    
-                    # Use centralized path resolution
-                    doc_path = self._get_image_path('document', doctype)
-                    
-                    # Load first PNG from the directory
-                    png_files = list(doc_path.glob('*.png'))
-                    if png_files:
-                        doc_image = pygame.transform.scale(
-                            pygame.image.load(str(png_files[0])), 
-                            (512, 512)
-                        )
-                        self.current_image = doc_image
-                        self.screen.blit(self.current_image, (0, 0))
-                        pygame.display.flip()
-                        self.state_entry_time = time.time()
-                        return
-                        
-                # Handle special case for persona transitions
-                if transition_path is not None:
-                    # If a specific image is provided, use that directly
-                    if specific_image is not None:
-                        specific_path = Path(specific_image)
-                        if specific_path.exists() and specific_path.is_file():
-                            try:
-                                # Load and display the specific image
                                 transition_image = pygame.transform.scale(
-                                    pygame.image.load(str(specific_path)), 
+                                    pygame.image.load(str(png_files[0])),
                                     (512, 512)
                                 )
                                 self.current_image = transition_image
@@ -384,32 +364,11 @@ class DisplayManager:
                                 pygame.display.flip()
                                 self.state_entry_time = time.time()
                                 return
-                            except Exception as e:
-                                print(f"Error loading specific image {specific_image}: {e}")
-                                # Continue with directory handling
-                    
-                    # Load and display transition image(s) directly from the path
-                    transition_path = Path(transition_path)
-                    if transition_path.exists():
-                        png_files = list(transition_path.glob('*.png'))
-                        if png_files:
-                            # If we have multiple images, use the first one for now
-                            transition_image = pygame.transform.scale(
-                                pygame.image.load(str(png_files[0])), 
-                                (512, 512)
-                            )
-                            self.current_image = transition_image
-                            self.screen.blit(self.current_image, (0, 0))
-                            pygame.display.flip()
-                            self.state_entry_time = time.time()
-                            return
-                        else:
-                            print(f"Warning: No PNG files found in transition path: {transition_path}")
-                    else:
-                        print(f"Warning: Transition path not found: {transition_path}")
-                        # Continue with normal state handling
-                
-                # Normal state handling (unchanged)
+                    except Exception as e:
+                        print(f"Error handling transition: {e}")
+                        # Fall through to normal state handling
+
+                # Normal state handling
                 if state == 'speaking':
                     if mood not in self.image_cache[state]:
                         print(f"Warning: Invalid mood '{mood}', using casual mood")
@@ -420,16 +379,25 @@ class DisplayManager:
                 else:
                     print(f"Error: Invalid state '{state}'")
                     return
-                
+
                 self.screen.blit(self.current_image, (0, 0))
                 pygame.display.flip()
                 
                 self.state_entry_time = time.time()
                 if state in ['idle', 'sleep']:
                     self.last_image_change = self.state_entry_time
-            
+
             except Exception as e:
                 print(f"Error updating display: {e}")
+                traceback.print_exc()
+                # Try to recover to thinking state
+                try:
+                    if 'thinking' in self.image_cache:
+                        self.current_image = random.choice(self.image_cache['thinking'])
+                        self.screen.blit(self.current_image, (0, 0))
+                        pygame.display.flip()
+                except:
+                    pass
 
     async def play_transition_sequence(self, transition_path, frame_delay=0.1):
         """
