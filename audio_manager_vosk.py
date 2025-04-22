@@ -12,7 +12,8 @@ class AudioManager:
     def __init__(self, pv_access_key=None):  # Keep param for compatibility, but don't use it
         self.pa = pyaudio.PyAudio()
         self.audio_stream = None
-        self.is_speaking = False
+        self.is_speaking = False  # For tracking speech generation
+        self.is_playing = False   # For tracking audio playback
         self.is_listening = False
         self.current_process = None  # Store current audio playback process
         self.audio_complete = Event()
@@ -34,6 +35,8 @@ class AudioManager:
         self.sample_rate = 16000
         self.frame_length = 2048  # Optimal chunk size for processing
         
+        # Initialize audio queue system
+        self.__init_audio_queue()
         print(f"AudioManager initialized: frame_length={self.frame_length}, sample_rate={self.sample_rate}")
 
     async def initialize_input(self):
@@ -95,6 +98,7 @@ class AudioManager:
                 await self.stop_current_audio()
             
             self.is_speaking = True
+            self.is_playing = True
             self.audio_complete.clear()
             
             try:
@@ -125,6 +129,7 @@ class AudioManager:
             finally:
                 self.current_process = None
                 self.is_speaking = False
+                self.is_playing = False
                 self.audio_complete.set()
                 await self.audio_state_changed.put(('audio_completed', True))
 
@@ -139,6 +144,7 @@ class AudioManager:
             finally:
                 self.current_process = None
                 self.is_speaking = False
+                self.is_playing = False
                 self.audio_complete.set()
                 await self.audio_state_changed.put(('audio_completed', True))
 
@@ -169,6 +175,7 @@ class AudioManager:
         """Reset audio state between interactions"""
         await self.stop_listening()
         self.is_speaking = False
+        self.is_playing = False
         self.is_listening = False
         self.audio_complete.set()
 
@@ -187,6 +194,7 @@ class AudioManager:
                 state, value = await self.audio_state_changed.get()
                 if state == 'audio_completed':
                     self.is_speaking = False
+                    self.is_playing = False
                 elif state == 'input_initialized':
                     self.is_listening = True
             except Exception as e:
@@ -205,3 +213,58 @@ class AudioManager:
         except Exception as e:
             print(f"Error reading audio frame: {e}")
             return None
+
+    def __init_audio_queue(self):
+        """Initialize audio queue system"""
+        self.audio_queue = asyncio.Queue()
+        self.queue_processor_task = None
+
+    async def queue_audio(self, audio_file=None, generated_text=None, priority=False):
+        """Add audio to play queue"""
+        if not hasattr(self, 'audio_queue'):
+            self.__init_audio_queue()
+            
+        if priority:
+            # Create new priority queue
+            temp_queue = asyncio.Queue()
+            await temp_queue.put((audio_file, generated_text))
+            # Transfer existing items
+            while not self.audio_queue.empty():
+                item = await self.audio_queue.get()
+                await temp_queue.put(item)
+            self.audio_queue = temp_queue
+        else:
+            await self.audio_queue.put((audio_file, generated_text))
+            
+        # Start queue processor if not running
+        if not self.queue_processor_task or self.queue_processor_task.done():
+            self.queue_processor_task = asyncio.create_task(self.process_audio_queue())
+
+    async def process_audio_queue(self):
+        """Process queued audio items"""
+        while True:
+            try:
+                audio_file, generated_text = await self.audio_queue.get()
+                
+                # Use existing play_audio method
+                if audio_file:
+                    await self.play_audio(audio_file)
+                elif generated_text:
+                    # Handle generated text through existing pipeline
+                    # This would connect to your existing TTS system
+                    pass
+                    
+                self.audio_queue.task_done()
+                
+                # Exit if queue is empty
+                if self.audio_queue.empty():
+                    break
+                    
+            except Exception as e:
+                print(f"Error processing audio queue: {e}")
+                continue
+
+    async def wait_for_queue_empty(self):
+        """Wait for all queued audio to complete"""
+        if hasattr(self, 'audio_queue'):
+            await self.audio_queue.join()
