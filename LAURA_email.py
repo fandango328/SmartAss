@@ -3993,8 +3993,8 @@ async def run_main_loop():
                         wake_audio = get_random_audio('wake', detected_model)
 
                         if wake_audio:
-                            await audio_manager.play_audio(wake_audio)
-                            await audio_manager.wait_for_audio_completion()
+                            await audio_manager.queue_audio(audio_file=wake_audio, priority=True)
+                            await audio_manager.wait_for_queue_empty()
 
                     # Transition to listening state and pause wake word detection
                     await display_manager.update_display('listening')
@@ -4020,7 +4020,7 @@ async def run_main_loop():
                         continue
 
                     # Process the transcript
-                    await audio_manager.wait_for_audio_completion()
+                    await audio_manager.wait_for_queue_empty()
                     transcript_lower = transcript.lower().strip()
 
                     # Check for system commands
@@ -4029,63 +4029,77 @@ async def run_main_loop():
                         print(f"\nDEBUG: System command detected: {command_result}")
                         is_command, command_type, action, arguments = command_result
                         if is_command:
-                            success = await system_manager.handle_command(command_type, action, arguments)
-                            if success:
-                                await display_manager.update_display('listening')
-                                follow_up = await capture_speech(is_follow_up=True)
-
-                                while follow_up:
-                                    cmd_result = system_manager.detect_command(follow_up)
-                                    if cmd_result and cmd_result[0]:
-                                        is_cmd, cmd_type, action, args = cmd_result
-                                        success = await system_manager.handle_command(cmd_type, action, args)
-
-                                        if success:
-                                            await display_manager.update_display('listening')
-                                            follow_up = await capture_speech(is_follow_up=True)
+                            try:
+                                await display_manager.update_display('tools', status='processing')
+                                success = await system_manager.handle_command(command_type, action, arguments)
+                                
+                                # Wait for any queued audio to complete
+                                await audio_manager.wait_for_queue_empty()
+                                
+                                if success:
+                                    await display_manager.update_display('listening')
+                                    
+                                    # Handle follow-up conversation
+                                    follow_up = await capture_speech(is_follow_up=True)
+                                    while follow_up:
+                                        cmd_result = system_manager.detect_command(follow_up)
+                                        if cmd_result and cmd_result[0]:
+                                            is_cmd, cmd_type, action, args = cmd_result
+                                            await display_manager.update_display('tools', status='processing')
+                                            success = await system_manager.handle_command(cmd_type, action, args)
+                                            await audio_manager.wait_for_queue_empty()
+                                            
+                                            if success:
+                                                await display_manager.update_display('listening')
+                                                follow_up = await capture_speech(is_follow_up=True)
+                                                continue
+                                            break
+                                        
+                                        # Handle non-command follow-up
+                                        user_message = {"role": "user", "content": follow_up}
+                                        if not any(msg["role"] == "user" and msg["content"] == follow_up 
+                                                 for msg in chat_log[-2:]):
+                                            chat_log.append(user_message)
+                                        
+                                        await display_manager.update_display('thinking')
+                                        formatted_response = await generate_response(follow_up)
+                                        
+                                        if formatted_response == "[CONTINUE]":
+                                            print("DEBUG - Detected control signal in follow-up, continuing")
                                             continue
-                                        else:
+                                            
+                                        try:
+                                            await display_manager.update_display('speaking')
+                                            await generate_voice(formatted_response)
+                                            
+                                            # Check notifications before state transition
+                                            if await notification_manager.has_pending_notifications():
+                                                await notification_manager.process_pending_notifications()
+                                                
+                                            if isinstance(formatted_response, str) and has_conversation_hook(formatted_response):
+                                                await audio_manager.wait_for_queue_empty()
+                                                await display_manager.update_display('listening')
+                                                await handle_conversation_loop(formatted_response)
+                                                break
+                                            else:
+                                                await audio_manager.wait_for_queue_empty()
+                                                break
+                                        except Exception as voice_error:
+                                            print(f"Error during follow-up voice generation: {voice_error}")
+                                            await display_manager.update_display('sleep')
                                             break
-
-                                    user_message = {"role": "user", "content": follow_up}
-                                    if not any(msg["role"] == "user" and msg["content"] == follow_up for msg in chat_log[-2:]):
-                                        chat_log.append(user_message)
-
-                                    await display_manager.update_display('thinking')
-                                    formatted_response = await generate_response(follow_up)
-
-                                    if formatted_response == "[CONTINUE]":
-                                        print("DEBUG - Detected control signal in follow-up, continuing")
-                                        continue
-
-                                    try:
-                                        await display_manager.update_display('speaking')
-                                        await generate_voice(formatted_response)
-
-                                        # Check notifications before state transition
-                                        if await notification_manager.has_pending_notifications():
-                                            await notification_manager.process_pending_notifications()
-
-                                        if isinstance(formatted_response, str) and has_conversation_hook(formatted_response):
-                                            await audio_manager.wait_for_audio_completion()
-                                            await display_manager.update_display('listening')
-                                            await handle_conversation_loop(formatted_response)
-                                            break
-                                        else:
-                                            await audio_manager.wait_for_audio_completion()
-                                            break
-                                    except Exception as voice_error:
-                                        print(f"Error during follow-up voice generation: {voice_error}")
-                                        await display_manager.update_display('sleep')
-                                        break
-                            else:
+                                else:
+                                    await display_manager.update_display('sleep')
+                            except Exception as e:
+                                print(f"Error handling command: {e}")
+                                traceback.print_exc()
                                 await display_manager.update_display('sleep')
                             continue
 
                     # Normal conversation flow
                     try:
                         # Make sure any previous audio has completed
-                        await audio_manager.wait_for_audio_completion()
+                        await audio_manager.wait_for_queue_empty()
                         
                         # Set thinking state and generate response
                         await display_manager.update_display('thinking')
@@ -4096,14 +4110,14 @@ async def run_main_loop():
                             continue
 
                         # Ensure audio is complete before state transitions
-                        await audio_manager.wait_for_audio_completion()
+                        await audio_manager.wait_for_queue_empty()
                         
                         # Transition to speaking state
                         await display_manager.update_display('speaking')
                         await generate_voice(formatted_response)
 
                         # Wait for speech to complete
-                        await audio_manager.wait_for_audio_completion()
+                        await audio_manager.wait_for_queue_empty()
 
                         # Check and process any pending notifications
                         if await notification_manager.has_pending_notifications():
@@ -4115,6 +4129,7 @@ async def run_main_loop():
 
                     except Exception as voice_error:
                         print(f"Error during voice generation: {voice_error}")
+                        traceback.print_exc()
                         await display_manager.update_display('sleep')
                         continue
 
