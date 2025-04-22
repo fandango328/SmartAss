@@ -4030,7 +4030,7 @@ async def run_main_loop():
                         is_command, command_type, action, arguments = command_result
                         if is_command:
                             try:
-                                await display_manager.update_display('tools', status='processing')
+                                await display_manager.update_display('tools')
                                 success = await system_manager.handle_command(command_type, action, arguments)
                                 
                                 # Wait for any queued audio to complete
@@ -4045,7 +4045,7 @@ async def run_main_loop():
                                         cmd_result = system_manager.detect_command(follow_up)
                                         if cmd_result and cmd_result[0]:
                                             is_cmd, cmd_type, action, args = cmd_result
-                                            await display_manager.update_display('tools', status='processing')
+                                            await display_manager.update_display('tools')
                                             success = await system_manager.handle_command(cmd_type, action, args)
                                             await audio_manager.wait_for_queue_empty()
                                             
