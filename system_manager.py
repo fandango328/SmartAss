@@ -46,6 +46,8 @@ class SystemManager:
         self.document_manager = document_manager
         self.notification_manager = notification_manager
         self.token_tracker = token_tracker
+        if hasattr(token_tracker, 'set_system_manager'):
+            token_tracker.set_system_manager(self)
         
         # Initialize TTS handler
         from secret import ELEVENLABS_KEY
@@ -125,7 +127,10 @@ class SystemManager:
 
         # Debug flag for command detection
         self.debug_detection = False  # Set to True to see matching details
-
+    def set_system_manager(self, system_manager):
+        """Allow setting of system manager for tool state display"""
+        self.system_manager = system_manager
+        
     def _get_tool_state_path(self, state: str) -> Path:
         """
         Get path to tool state directory.
@@ -398,13 +403,34 @@ class SystemManager:
 
     async def _show_tool_use(self) -> None:
         """
-        Display tool use state and return to previous state when complete.
+        Display tool use state during tool execution.
         """
         try:
-            # Get and display tool use state image
+            # Get tool use state path
             use_path = self._get_tool_state_path("use")
-            if use_path.exists() and any(use_path.glob('*.png')):
-                await self.display_manager.update_display('tools', specific_image=str(use_path / next(use_path.glob('*.png'))))
+            
+            # Find all PNG files in the directory
+            if use_path.exists():
+                png_files = list(use_path.glob('*.png'))
+                if png_files:
+                    # Get the first PNG file and construct proper path
+                    image_path = png_files[0]
+                    await self.display_manager.update_display('tools', specific_image=str(image_path))
+                else:
+                    print(f"No PNG files found in tool use state directory: {use_path}")
+            else:
+                print(f"Tool use state directory not found: {use_path}")
+                
+            # Play tool use audio if available
+            audio_folder = os.path.join(
+                f"/home/user/LAURA/sounds/{config.ACTIVE_PERSONA.lower()}/tool_sentences/use"
+            )
+            if os.path.exists(audio_folder):
+                mp3_files = [f for f in os.listdir(audio_folder) if f.endswith('.mp3')]
+                if mp3_files:
+                    audio_file = os.path.join(audio_folder, random.choice(mp3_files))
+                    await self.audio_manager.play_audio(audio_file)
+                    await self.audio_manager.wait_for_audio_completion()
 
         except Exception as e:
             print(f"Error showing tool use state: {e}")
