@@ -401,40 +401,39 @@ class SystemManager:
             print(f"Traceback: {traceback.format_exc()}")
             return False, None, None
 
-    async def _show_tool_use(self) -> None:
-        """
-        Display tool use state during tool execution.
-        """
-        try:
-            # Get tool use state path
-            use_path = self._get_tool_state_path("use")
-            
-            # Find all PNG files in the directory
-            if use_path.exists():
-                png_files = list(use_path.glob('*.png'))
-                if png_files:
-                    # Get the first PNG file and construct proper path
-                    image_path = png_files[0]
-                    await self.display_manager.update_display('tools', specific_image=str(image_path))
-                else:
-                    print(f"No PNG files found in tool use state directory: {use_path}")
-            else:
-                print(f"Tool use state directory not found: {use_path}")
-                
-            # Play tool use audio if available
-            audio_folder = os.path.join(
-                f"/home/user/LAURA/sounds/{config.ACTIVE_PERSONA.lower()}/tool_sentences/use"
-            )
-            if os.path.exists(audio_folder):
-                mp3_files = [f for f in os.listdir(audio_folder) if f.endswith('.mp3')]
-                if mp3_files:
-                    audio_file = os.path.join(audio_folder, random.choice(mp3_files))
-                    await self.audio_manager.play_audio(audio_file)
-                    await self.audio_manager.wait_for_audio_completion()
+	async def _show_tool_use(self) -> None:
+		"""
+		Display tool use state and start tool audio playback.
+		Returns before audio completion to allow concurrent processing.
+		"""
+		try:
+			# Start audio playback first (NON-BLOCKING)
+			audio_task = None
+			audio_folder = os.path.join(
+				f"/home/user/LAURA/sounds/{config.ACTIVE_PERSONA.lower()}/tool_sentences/use"
+			)
+			if os.path.exists(audio_folder):
+				mp3_files = [f for f in os.listdir(audio_folder) if f.endswith('.mp3')]
+				if mp3_files:
+					audio_file = os.path.join(audio_folder, random.choice(mp3_files))
+					# Create task but don't await it
+					audio_task = asyncio.create_task(self.audio_manager.play_audio(audio_file))
 
-        except Exception as e:
-            print(f"Error showing tool use state: {e}")
-            traceback.print_exc()
+			# Update display state immediately
+			use_path = self._get_tool_state_path("use")
+			if use_path.exists():
+				png_files = list(use_path.glob('*.png'))
+				if png_files:
+					await self.display_manager.update_display('tools', specific_image=str(png_files[0]))
+
+			# Store audio task for later checking
+			if audio_task:
+				# Store task reference for main process to check
+				self.current_tool_audio = audio_task
+
+		except Exception as e:
+			print(f"Error showing tool use state: {e}")
+			traceback.print_exc()
 
     async def _run_calibration(self) -> bool:
         """
