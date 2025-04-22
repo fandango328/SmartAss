@@ -256,29 +256,24 @@ class DisplayManager:
                 self.current_state = state
                 self.current_mood = mood
                 
-                # Handle special case for tools (enabled/disabled/use)
-                if state == 'tools':
-                    if specific_image:
-                        # The specific_image parameter should be the full path to the image
-                        try:
-                            specific_path = Path(specific_image)
-                            if specific_path.exists() and specific_path.is_file():
-                                tool_image = pygame.transform.scale(
-                                    pygame.image.load(str(specific_path)), 
-                                    (512, 512)
-                                )
-                                self.current_image = tool_image
-                                self.screen.blit(self.current_image, (0, 0))
-                                pygame.display.flip()
-                                self.state_entry_time = time.time()
-                                return
-                            else:
-                                print(f"Warning: Tool state image not found: {specific_image}")
-                        except Exception as e:
-                            print(f"Error loading tool state image: {e}")
-                    
-                    # If we get here, either no specific_image was provided or it failed to load
-                    print("Falling back to thinking state for tools")
+                # Handle tool state displays using specific images
+                if state == 'tools' and specific_image:
+                    try:
+                        specific_path = Path(specific_image)
+                        if specific_path.exists() and specific_path.is_file():
+                            tool_image = pygame.transform.scale(
+                                pygame.image.load(str(specific_path)), 
+                                (512, 512)
+                            )
+                            self.current_image = tool_image
+                            self.screen.blit(self.current_image, (0, 0))
+                            pygame.display.flip()
+                            self.state_entry_time = time.time()
+                            return
+                    except Exception as e:
+                        print(f"Error loading tool state image: {e}")
+                        
+                    # Fall back to thinking state
                     if 'thinking' in self.image_cache:
                         self.current_image = random.choice(self.image_cache['thinking'])
                         self.screen.blit(self.current_image, (0, 0))
