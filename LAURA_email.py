@@ -1910,15 +1910,17 @@ async def generate_response(query):
         # Tool handling section...
         if response.stop_reason == "tool_use":
             print(f"DEBUG: Tool use detected! Tools active: {token_tracker.tools_are_active()}")
-            await display_manager.update_display('tools', specific_image='use')
-
-            # Use context-aware tool audio
+            
+            # Start tool audio playback first (non-blocking)
+            audio_task = None
             tool_audio = get_random_audio('tool', 'use')
             if tool_audio:
-                await audio_manager.play_audio(tool_audio)
-                await audio_manager.wait_for_audio_completion()  # Wait for tool audio to complete
+                audio_task = asyncio.create_task(audio_manager.play_audio(tool_audio))
             else:
                 print("WARNING: No tool audio files found, skipping audio")
+
+            # Update display state immediately
+            await display_manager.update_display('tools', specific_image='use')
 
             print("DEBUG: Adding assistant response to chat log with content types:")
             for block in response.content:
@@ -2001,7 +2003,6 @@ async def generate_response(query):
                                 tool_response = "Unsupported query type"
                         elif tool_call.name == "calibrate_voice_detection":
                             calibration_success = await run_vad_calibration()
-
                             if calibration_success:
                                 tool_response = "Voice detection calibration completed successfully. Your microphone settings have been optimized."
                             else:
@@ -2040,24 +2041,11 @@ async def generate_response(query):
                     "content": tool_results
                 })
 
-                print("\nDEBUG: Chat log structure before final API call:")
-                for i, message in enumerate(chat_log[-3:]):  # Just show last 3 messages
-                    print(f"Message {i} role: {message['role']}")
-                    if isinstance(message['content'], list):
-                        for j, content_item in enumerate(message['content']):
-                            if isinstance(content_item, dict):
-                                print(f"  Content item {j} type: {content_item.get('type')}")
-                                if content_item.get('type') == 'tool_use':
-                                    print(f"    Tool use ID: {content_item.get('id')}")
-                                elif content_item.get('type') == 'tool_result':
-                                    print(f"    Tool result for ID: {content_item.get('tool_use_id')}")
-
-                # Get final response after tool use
                 try:
                     # Make final API call to process tool results
                     final_response = anthropic_client.messages.create(
                         model=ANTHROPIC_MODEL,
-                        system=system_content,  # Include system content in follow-up call
+                        system=system_content,
                         messages=chat_log,
                         max_tokens=1024,
                         temperature=0.7
@@ -2067,8 +2055,6 @@ async def generate_response(query):
                     try:
                         tool_messages = chat_log[-2:] if len(chat_log) >= 2 else chat_log
                         tool_input_count = token_tracker.count_message_tokens(tool_messages)
-
-                        # Extract text from final response
                         final_response_text = ""
                         if isinstance(final_response.content, list):
                             for block in final_response.content:
@@ -2092,14 +2078,36 @@ async def generate_response(query):
                         await display_manager.update_display('speaking', mood='disappointed')
                         return error_msg
 
-                    # Wait for any pending audio to complete before changing state
-                    await audio_manager.wait_for_audio_completion()
-
-                    # Ensure the display is set to the current character's speaking state
-                    await display_manager.update_display('speaking', mood='casual')
-
-                    # Process the response content and return it
+                    # Start response content processing
                     processed_content = await process_response_content(final_response.content)
+
+                    # Start TTS generation request (non-blocking)
+                    tts_task = asyncio.create_task(tts_handler.generate_audio(processed_content))
+
+                    # Wait for pre-recorded audio to complete if it's still playing
+                    if audio_task and not audio_task.done():
+                        try:
+                            await audio_task
+                        except Exception as e:
+                            print(f"Warning: Error waiting for tool audio completion: {e}")
+
+                    # Add mandatory buffer after pre-recorded audio completion
+                    await asyncio.sleep(0.5)  # 500ms minimum buffer
+
+                    # Wait for TTS generation to complete if it hasn't already
+                    try:
+                        audio_data = await tts_task
+                        with open(AUDIO_FILE, "wb") as f:
+                            f.write(audio_data)
+                    except Exception as e:
+                        print(f"Error in TTS generation: {e}")
+                        await display_manager.update_display('speaking', mood='disappointed')
+                        return "Sorry, there was an error generating the voice response"
+
+                    # Update display and play the TTS response
+                    await display_manager.update_display('speaking', mood='casual')
+                    await audio_manager.play_audio(AUDIO_FILE)
+
                     return processed_content
 
                 except Exception as final_api_err:
@@ -2107,26 +2115,26 @@ async def generate_response(query):
                     await display_manager.update_display('speaking', mood='disappointed')
                     return f"Sorry, there was an error after using tools: {str(final_api_err)}"
 
-        # Non-tool response processing
-        else:
-            print(f"DEBUG: Returning response. Tools active: {token_tracker.tools_are_active()}, Tools used in session: {token_tracker.tools_used_in_session}")
+            # Non-tool response processing
+            else:
+                print(f"DEBUG: Returning response. Tools active: {token_tracker.tools_are_active()}, Tools used in session: {token_tracker.tools_used_in_session}")
 
-            try:
-                # Process the response content
-                formatted_response = await process_response_content(response.content)
+                try:
+                    # Process the response content
+                    formatted_response = await process_response_content(response.content)
 
-                # Debug logging
-                print(f"DEBUG - Response processed:")
-                print(f"  Type: {type(formatted_response)}")
-                print(f"  Length: {len(formatted_response) if isinstance(formatted_response, str) else 'N/A'}")
-                print(f"  Preview: {formatted_response[:100] if isinstance(formatted_response, str) else formatted_response}")
+                    # Debug logging
+                    print(f"DEBUG - Response processed:")
+                    print(f"  Type: {type(formatted_response)}")
+                    print(f"  Length: {len(formatted_response) if isinstance(formatted_response, str) else 'N/A'}")
+                    print(f"  Preview: {formatted_response[:100] if isinstance(formatted_response, str) else formatted_response}")
 
-                return formatted_response
+                    return formatted_response
 
-            except Exception as process_error:
-                print(f"Error processing response content: {process_error}")
-                traceback.print_exc()
-                return "Sorry, there was an error processing the response"
+                except Exception as process_error:
+                    print(f"Error processing response content: {process_error}")
+                    traceback.print_exc()
+                    return "Sorry, there was an error processing the response"
 
     except (APIError, APIConnectionError, BadRequestError, InternalServerError) as e:
         error_msg = ("I apologize, but the service is temporarily overloaded. Please try again in a moment."
