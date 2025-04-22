@@ -2081,14 +2081,13 @@ async def generate_response(query):
                     except Exception as token_err:
                         print(f"Token tracking error in tool response: {token_err}")
 
-                    # Process the final response content with error checking
+                    # Validate and process response content
                     if not final_response or not final_response.content:
                         error_msg = "I'm sorry, I couldn't process the tool result properly."
                         print("API Error: Empty content in tool response")
                         await display_manager.update_display('speaking', mood='disappointed')
                         return error_msg
 
-                    # Validate response content
                     try:
                         content = final_response.content
                         
@@ -2126,48 +2125,44 @@ async def generate_response(query):
                         # Process the validated content
                         processed_content = await process_response_content(content)
 
+                        # Start TTS generation request (non-blocking)
+                        tts_task = asyncio.create_task(tts_handler.generate_audio(processed_content))
+
+                        # Wait for pre-recorded audio to complete if it's still playing
+                        if audio_task and not audio_task.done():
+                            try:
+                                await audio_task
+                            except Exception as e:
+                                print(f"Warning: Error waiting for tool audio completion: {e}")
+
+                        # Add mandatory buffer after pre-recorded audio completion
+                        await asyncio.sleep(0.5)  # 500ms minimum buffer
+
+                        # Wait for TTS generation to complete if it hasn't already
+                        try:
+                            audio_data = await tts_task
+                            if not audio_data:
+                                raise Exception("TTS generation returned empty audio data")
+                            
+                            with open(AUDIO_FILE, "wb") as f:
+                                f.write(audio_data)
+                        except Exception as e:
+                            print(f"Error in TTS generation: {e}")
+                            traceback.print_exc()
+                            await display_manager.update_display('speaking', mood='disappointed')
+                            return "Sorry, there was an error generating the voice response"
+
+                        # Update display and play the TTS response
+                        await display_manager.update_display('speaking', mood='casual')
+                        await audio_manager.play_audio(AUDIO_FILE)
+
+                        return processed_content
+
                     except Exception as e:
                         print(f"Error validating response content: {e}")
                         traceback.print_exc()
                         await display_manager.update_display('speaking', mood='disappointed')
                         return "I'm sorry, there was an error processing the response."
-                            
-                        # Start response content processing
-                        processed_content = await process_response_content(content_str)
-                        
-                    except Exception as content_err:
-                        print(f"Error validating response content: {content_err}")
-                        await display_manager.update_display('speaking', mood='disappointed')
-                        return "I'm sorry, there was an error processing the response."
-
-                    # Start TTS generation request (non-blocking)
-                    tts_task = asyncio.create_task(tts_handler.generate_audio(processed_content))
-
-                    # Wait for pre-recorded audio to complete if it's still playing
-                    if audio_task and not audio_task.done():
-                        try:
-                            await audio_task
-                        except Exception as e:
-                            print(f"Warning: Error waiting for tool audio completion: {e}")
-
-                    # Add mandatory buffer after pre-recorded audio completion
-                    await asyncio.sleep(0.5)  # 500ms minimum buffer
-
-                    # Wait for TTS generation to complete if it hasn't already
-                    try:
-                        audio_data = await tts_task
-                        with open(AUDIO_FILE, "wb") as f:
-                            f.write(audio_data)
-                    except Exception as e:
-                        print(f"Error in TTS generation: {e}")
-                        await display_manager.update_display('speaking', mood='disappointed')
-                        return "Sorry, there was an error generating the voice response"
-
-                    # Update display and play the TTS response
-                    await display_manager.update_display('speaking', mood='casual')
-                    await audio_manager.play_audio(AUDIO_FILE)
-
-                    return processed_content
 
                 except Exception as final_api_err:
                     print(f"Error in final response after tool use: {final_api_err}")
