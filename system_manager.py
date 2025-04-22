@@ -217,11 +217,15 @@ class SystemManager:
             for action, patterns in actions.items():
                 for pattern in patterns:
                     if pattern in normalized_transcript:
-                        # Extract arguments after the pattern if any
+                        # Extract arguments after the pattern if any, using only the first occurrence
                         start_idx = normalized_transcript.find(pattern) + len(pattern)
-                        args = normalized_transcript[start_idx:].strip()
+                        rest_of_text = normalized_transcript[start_idx:].strip()
                         
-                        # Special handling for persona commands - only trigger if valid persona found
+                        # For tool commands, don't pass arguments
+                        if command_type == "tool":
+                            return True, command_type, action, None
+                        
+                        # Special handling for persona commands
                         if command_type == "persona":
                             if persona_found:
                                 print(f"DEBUG - Matched persona command with target: {persona_found}")
@@ -230,14 +234,15 @@ class SystemManager:
                                 print(f"DEBUG - Persona command matched but no valid persona found")
                                 return False, None, None, None
                         
-                        return True, command_type, action, args if args else None
+                        # For other commands, pass remaining text as arguments if present
+                        return True, command_type, action, rest_of_text if rest_of_text else None
         
         print("DEBUG - No command pattern matched")
         return False, None, None, None
 
     async def _handle_tool_state_change(self, state: str) -> bool:
         """
-        Handle tool state changes with coordinated display and audio updates.
+        Handle tool state changes with proper display and audio coordination.
         
         Args:
             state: The desired tool state ('enable' or 'disable')
@@ -252,31 +257,39 @@ class SystemManager:
             else:
                 success = self.token_tracker.disable_tools()
                 
-            if not success:
-                return False
-                
-            # Get appropriate image path and update display
-            image_path = self._get_tool_state_path(f"{state}d")  # enabled or disabled
-            await self.display_manager.update_display('tools', specific_image=str(image_path / next(image_path.glob('*.png'))))
+            if success:
+                # Construct path using active persona
+                tool_state_path = Path(f"/home/user/LAURA/pygame/{config.ACTIVE_PERSONA.lower()}/system/tools/{state}d")
+                if tool_state_path.exists():
+                    png_files = list(tool_state_path.glob('*.png'))
+                    if png_files:
+                        await self.display_manager.update_display('listening', 
+                            specific_image=str(png_files[0]))
+                        
+                        # Queue audio feedback
+                        audio_folder = os.path.join(
+                            f"/home/user/LAURA/sounds/{config.ACTIVE_PERSONA.lower()}/tool_sentences/status/{state}d"
+                        )
+                        if os.path.exists(audio_folder):
+                            mp3_files = [f for f in os.listdir(audio_folder) if f.endswith('.mp3')]
+                            if mp3_files:
+                                audio_file = os.path.join(audio_folder, random.choice(mp3_files))
+                                await self.audio_manager.queue_audio(audio_file=audio_file, priority=True)
+                                await self.audio_manager.wait_for_queue_empty()
+                        
+                        # Return to listening state after audio completes
+                        await self.display_manager.update_display('listening')
+                        return True
             
-            # Play audio feedback
-            audio_folder = os.path.join(
-                f"/home/user/LAURA/sounds/{config.ACTIVE_PERSONA.lower()}/tool_sentences/status/{state}d"
-            )
-            if os.path.exists(audio_folder):
-                mp3_files = [f for f in os.listdir(audio_folder) if f.endswith('.mp3')]
-                if mp3_files:
-                    audio_file = os.path.join(audio_folder, random.choice(mp3_files))
-                    await self.audio_manager.play_audio(audio_file)
-                    await self.audio_manager.wait_for_audio_completion()
-            
-            # Return to listening state
+            # Always return to listening state, even on failure
             await self.display_manager.update_display('listening')
-            return True
+            return False
             
         except Exception as e:
             print(f"Error in tool state change: {e}")
             traceback.print_exc()
+            # Return to listening state on error
+            await self.display_manager.update_display('listening')
             return False
 
     def has_command_components(self, transcript: str, required_words: list, max_word_gap: int = 2) -> bool:
@@ -358,7 +371,7 @@ class SystemManager:
                             audio_file = os.path.join(audio_folder, random.choice(mp3_files))
                             await self.audio_manager.queue_audio(audio_file=audio_file, priority=True)
                 return success
-
+    
             elif command_type == "document":
                 if action == "load":
                     success = await self.document_manager.load_all_files(clear_existing=False)
@@ -379,7 +392,7 @@ class SystemManager:
                             audio_file = os.path.join(folder_path, random.choice(mp3_files))
                             await self.audio_manager.queue_audio(audio_file=audio_file)
                     return True
-
+    
             elif command_type == "calibration":
                 success = await self._run_calibration()
                 if success:
@@ -390,12 +403,12 @@ class SystemManager:
                             audio_file = os.path.join(folder_path, random.choice(mp3_files))
                             await self.audio_manager.queue_audio(audio_file=audio_file)
                 return success
-
+    
             elif command_type == "reminder":
                 return await self._handle_reminder_command(action, arguments)
-
+    
             return False
-
+    
         except Exception as e:
             print(f"Command error: {str(e)}")
             print(f"Traceback: {traceback.format_exc()}")
