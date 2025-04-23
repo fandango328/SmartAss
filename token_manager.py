@@ -78,6 +78,7 @@ class TokenManager:
         'CONTACT': ['contact', 'person', 'people', 'address', 'phone']
     }
 
+
     def __init__(self, anthropic_client):
         """
         Initialize TokenManager with streamlined session tracking.
@@ -88,20 +89,23 @@ class TokenManager:
         Raises:
             TypeError: If anthropic_client is None
         """
-        # CHANGE: Simplified client validation - removed MODEL_COSTS check since we're using native token counting
+        # Core client validation
         if anthropic_client is None:
             raise TypeError("anthropic_client cannot be None")
             
-        # KEEP: Core client and model settings
+        # Core client and model settings
         self.anthropic_client = anthropic_client
         self.query_model = ANTHROPIC_MODEL
         self.tool_model = "claude-3-5-sonnet-20241022"
-
-        # KEEP: Session state tracking
+        
+        # Session state tracking
         self.session_active = False
         self.session_start_time = None
-
         
+        # Initialize empty tool handlers
+        self.tool_handlers = {}
+        
+        # Token tracking per model
         self.haiku_tracker = {
             'input_tokens': 0,
             'output_tokens': 0,
@@ -116,7 +120,7 @@ class TokenManager:
             'tools_initialized': False
         }
 
-        # Update session tracker to include model info
+        # Session state with model info
         self.session = {
             'current_model': 'claude-3-5-haiku-20241022',
             'history_tokens': 0,
@@ -124,9 +128,13 @@ class TokenManager:
             'tools_enabled': False,
         }
               
-        # KEEP: Tool state management
+        # Tool state management
         self.tools_enabled = False
         self.tools_used_in_session = False
+
+    def register_tool_handler(self, name, handler):
+        """Register a single tool handler"""
+        self.tool_handlers[name] = handler
 
     def start_interaction(self):
         """
