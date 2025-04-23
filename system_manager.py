@@ -13,7 +13,15 @@ from token_manager import TokenManager
 from tts_handler import TTSHandler
 import config
 from secret import ELEVENLABS_KEY
-
+try:
+    from LAURA_email import get_random_audio
+except ImportError:
+    # Fallback if import fails
+    def get_random_audio(category, context=None):
+        """Fallback implementation if main function unavailable"""
+        print(f"Warning: Using fallback get_random_audio for {category}/{context}")
+        return None
+        
 RECURRENCE_TERMS = {
     "recurring": "recurring",    # standard spelling
     "reoccuring": "recurring",   # common misspelling
@@ -239,7 +247,7 @@ class SystemManager:
                 if mp3_files:
                     audio_file = os.path.join(audio_folder, random.choice(mp3_files))
                     prerecorded_task = asyncio.create_task(
-                        self.audio_manager.play_audio(audio_file, interrupt_current=True)
+                        self.audio_manager.play_audio(audio_file)
                     )
             
             # Step 3: Process response content
@@ -411,7 +419,7 @@ class SystemManager:
                         mp3_files = [f for f in os.listdir(audio_folder) if f.endswith('.mp3')]
                         if mp3_files:
                             audio_file = os.path.join(audio_folder, random.choice(mp3_files))
-                            await self.audio_manager.queue_audio(audio_file=audio_file, priority=True)
+                            await self.audio_manager.queue_audio(audio_file=audio_file)
                 return success
     
             elif command_type == "document":
