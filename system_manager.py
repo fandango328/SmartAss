@@ -711,42 +711,54 @@ class SystemManager:
                 except Exception as e:
                     print(f"Error handling initial response: {e}")
             
-            # Get tool handler from registry
-            handler = tool_registry.get_handler(tool_call.name)
-            if not handler:
-                raise ValueError(f"Tool '{tool_call.name}' not registered")
+            # Execute the tool
+            tool_args = tool_call.input
+            if not hasattr(tool_call, 'name') or not tool_call.name:
+                raise ValueError("Invalid tool call - missing tool name")
                 
-            # Execute tool with appropriate handling
-            try:
-                tool_result = await self._execute_tool(tool_call.name, handler, tool_call.input)
+            if tool_call.name not in self.token_tracker.tool_handlers:
+                raise ValueError(f"Unsupported tool: {tool_call.name}")
                 
-                # Record token usage only
-                self.token_tracker.record_tool_usage(tool_call.name)
-                
-                # Process result with Claude
-                final_response = await self.anthropic_client.messages.create(
-                    model=ANTHROPIC_MODEL,
-                    messages=[{
-                        "role": "user",
-                        "content": [{
-                            "type": "tool_result",
-                            "tool_use_id": tool_call.id,
-                            "content": tool_result
-                        }]
-                    }],
-                    max_tokens=1024
-                )
-                
-                if not final_response or not final_response.content:
-                    raise ValueError("Empty response from Claude")
-                
-                # Process and generate audio response
+            handler = self.token_tracker.tool_handlers[tool_call.name]
+            
+            # Special handling for calendar query
+            if tool_call.name == "calendar_query":
+                if tool_args["query_type"] == "next_event":
+                    tool_result = await handler(get_next_event)
+                elif tool_args["query_type"] == "day_schedule":
+                    tool_result = await handler(get_day_schedule)
+                else:
+                    tool_result = "Unsupported query type"
+            else:
+                # Standard tool execution
+                tool_result = await handler(**tool_args) if asyncio.iscoroutinefunction(handler) else handler(**tool_args)
+            
+            # Record successful tool usage
+            self.token_tracker.record_tool_usage(tool_call.name)
+            
+            # Process tool result with Claude
+            final_response = await self.anthropic_client.messages.create(
+                model=ANTHROPIC_MODEL,
+                messages=[{
+                    "role": "user",
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": tool_call.id,
+                        "content": tool_result
+                    }]
+                }],
+                max_tokens=1024
+            )
+            
+            # Process final response
+            if final_response and final_response.content:
                 processed_content = self._validate_llm_response(final_response.content)
-                final_audio = self.tts_handler.generate_audio(str(processed_content))
                 
+                # Generate and queue final audio
+                final_audio = self.tts_handler.generate_audio(str(processed_content))
                 with open("speech.mp3", "wb") as f:
                     f.write(final_audio)
-                
+                    
                 # Update display and play response
                 await self.display_manager.update_display('speaking', mood='casual')
                 await self.notification_manager.queue_notification(
@@ -760,10 +772,8 @@ class SystemManager:
                 await self.display_manager.update_display('listening')
                 return processed_content
                 
-            except Exception as tool_error:
-                print(f"Tool execution error: {tool_error}")
-                raise
-                
+            raise ValueError("Empty response from Claude")
+            
         except Exception as e:
             print(f"Error in tool execution: {e}")
             traceback.print_exc()
@@ -788,31 +798,6 @@ class SystemManager:
             # Return to listening state after error
             await self.display_manager.update_display('listening')
             return error_msg
-
-    async def _execute_tool(self, tool_name: str, handler, tool_args: dict):
-        """
-        Execute a tool with special handling for calendar queries.
-        
-        Args:
-            tool_name: Name of the tool to execute
-            handler: Tool handler function
-            tool_args: Arguments for the tool
-            
-        Returns:
-            Any: Result from tool execution
-        """
-        if tool_name == "calendar_query":
-            if tool_args["query_type"] == "next_event":
-                return await handler(get_next_event)
-            elif tool_args["query_type"] == "day_schedule":
-                return await handler(get_day_schedule)
-            else:
-                return "Unsupported query type"
-        
-        # Standard tool execution
-        if asyncio.iscoroutinefunction(handler):
-            return await handler(**tool_args)
-        return handler(**tool_args)
 
     async def _handle_persona_command(self, action: str, arguments: str = None) -> bool:
         """
