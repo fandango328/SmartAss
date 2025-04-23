@@ -939,4 +939,3 @@ class SystemManager:
             print(f"Error in persona command: {e}")
             traceback.print_exc()
             return False
-#fin
