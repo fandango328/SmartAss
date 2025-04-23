@@ -502,22 +502,21 @@ class TokenManager:
     async def execute_tool(self, tool_name: str, **kwargs) -> Any:
         """Execute a tool and track its token usage"""
         try:
-            # Show tool use state
-            await self.system_manager._show_tool_use()
+            tool = get_tool_by_name(tool_name)
+            if not tool:
+                raise ValueError(f"Tool {tool_name} not found")
+                
+            self.record_tool_usage(tool_name)
+            result = tool['function'](**kwargs)
             
-            # Execute the tool
-            result = await super().execute_tool(tool_name, **kwargs)
-            
-            # Return to previous state
-            await self.system_manager.display_manager.update_display('listening')
-            
+            if asyncio.iscoroutine(result):
+                result = await result
+                
             return result
             
         except Exception as e:
             print(f"Error executing tool {tool_name}: {e}")
             traceback.print_exc()
-            # Ensure we return to listening state even on error
-            await self.system_manager.display_manager.update_display('listening')
             raise
 
     def track_query_completion(self, used_tool: bool = False) -> Dict[str, Any]:
