@@ -881,7 +881,7 @@ def create_task_for_event(event_id, task_type="both", days_before=1, days_after=
             # All-day event
             start_time = datetime.fromisoformat(event['start']['date'])
 
-        # Get tasks service
+        # Get tasks service    #<----- this is line 884
         tasks_service = build('tasks', 'v1', credentials=creds)
 
         # Get default task list
@@ -1684,30 +1684,14 @@ async def process_response_content(content):
 
 async def execute_tool(tool_call):
     """Execute a tool and return its result."""
-    tool_args = tool_call.input
-    
-    # Map tool names to their handler functions
-    tool_handlers = {
-        "draft_email": email_manager.draft_email,
-        "read_emails": email_manager.read_emails,
-        "email_action": email_manager.email_action,
-        "manage_tasks": manage_tasks,
-        "create_task_from_email": create_task_from_email,
-        "create_task_for_event": create_task_for_event,
-        "update_calendar_event": update_calendar_event,
-        "cancel_calendar_event": cancel_calendar_event,
-        "calendar_query": handle_calendar_query,
-        "calibrate_voice_detection": run_vad_calibration,
-        "create_calendar_event": create_calendar_event,
-        "get_location": get_location,
-        "get_current_time": get_current_time
-    }
-    
-    if tool_call.name not in tool_handlers:
-        return "Unsupported tool called"
-        
     try:
-        handler = tool_handlers[tool_call.name]
+        # Get the tool handler from TokenManager
+        handler = token_tracker.tool_handlers.get(tool_call.name)
+        if not handler:
+            return "Unsupported tool called"
+            
+        tool_args = tool_call.input
+        
         # Special handling for calendar query
         if tool_call.name == "calendar_query":
             if tool_args["query_type"] == "next_event":
@@ -1718,7 +1702,7 @@ async def execute_tool(tool_call):
                 return "Unsupported query type"
         
         # Handle update_calendar_event and cancel_calendar_event special cases
-        elif tool_call.name in ["update_calendar_event", "cancel_calendar_event"]:
+        if tool_call.name in ["update_calendar_event", "cancel_calendar_event"]:
             if "event_description" in tool_args and not tool_args.get("event_id"):
                 matching_events = find_calendar_event(tool_args["event_description"])
                 if matching_events:
