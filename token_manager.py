@@ -89,7 +89,6 @@ class TokenManager:
         Raises:
             TypeError: If anthropic_client is None
         """
-        # Core client validation
         if anthropic_client is None:
             raise TypeError("anthropic_client cannot be None")
             
@@ -97,10 +96,6 @@ class TokenManager:
         self.anthropic_client = anthropic_client
         self.query_model = ANTHROPIC_MODEL
         self.tool_model = "claude-3-5-sonnet-20241022"
-        
-        # Session state tracking
-        self.session_active = False
-        self.session_start_time = None
         
         # Initialize empty tool handlers
         self.tool_handlers = {}
@@ -120,7 +115,6 @@ class TokenManager:
             'tools_initialized': False
         }
 
-        # Session state with model info
         self.session = {
             'current_model': 'claude-3-5-haiku-20241022',
             'history_tokens': 0,
@@ -128,13 +122,9 @@ class TokenManager:
             'tools_enabled': False,
         }
               
-        # Tool state management
         self.tools_enabled = False
         self.tools_used_in_session = False
 
-    def register_tool_handler(self, name, handler):
-        """Register a single tool handler"""
-        self.tool_handlers[name] = handler
 
     def start_interaction(self):
         """
