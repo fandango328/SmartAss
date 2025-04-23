@@ -2252,7 +2252,7 @@ async def generate_response(query):  #line no 1750
                     await audio_manager.wait_for_queue_empty()
                     
                     return processed_content
-                    
+                
                 except Exception as e:
                     print(f"Error processing response: {e}")
                     traceback.print_exc()
@@ -2261,7 +2261,7 @@ async def generate_response(query):  #line no 1750
                         await display_manager.update_display('speaking', mood='disappointed')
                         error_msg = "Sorry, there was an error processing the response"
                         error_audio = tts_handler.generate_audio(error_msg)
-                        
+                    
                         with open(AUDIO_FILE, "wb") as f:
                             f.write(error_audio)
                         await audio_manager.queue_audio(audio_file=AUDIO_FILE)
