@@ -659,6 +659,135 @@ class SystemManager:
             days = [d.strip().lower()[:3] for d in day_input.split(',')]
             return [day_mapping[d] for d in days if d in day_mapping]
 
+    async def execute_tool_with_feedback(self, tool_call, initial_response=None):
+        """
+        Execute a tool with coordinated audio and visual feedback.
+        
+        Args:
+            tool_call: Tool execution data from Claude
+            initial_response: Optional initial response text from Claude
+            
+        Returns:
+            str: Processed response ready for TTS
+        """
+        try:
+            # Start with thinking state
+            await self.display_manager.update_display('thinking')
+            
+            # Show tool use state and play acknowledgment
+            await self.display_manager.update_display('tools', specific_image='use')
+            
+            # Queue and play tool acknowledgment sound
+            tool_sound = get_random_audio('tool', 'use')
+            if tool_sound:
+                await self.notification_manager.queue_notification(
+                    text="Processing tool request",
+                    priority=2,
+                    sound_file=tool_sound
+                )
+                await self.notification_manager.process_pending_notifications()
+            
+            # Handle initial response if provided and not generic
+            if initial_response and not any(phrase in initial_response.lower() 
+                                          for phrase in ['let me check', 'one moment', 'just a second']):
+                try:
+                    initial_audio = self.tts_handler.generate_audio(str(initial_response))
+                    with open("speech.mp3.initial", "wb") as f:
+                        f.write(initial_audio)
+                    await self.notification_manager.queue_notification(
+                        text=initial_response,
+                        priority=1,
+                        sound_file="speech.mp3.initial"
+                    )
+                    await self.notification_manager.process_pending_notifications()
+                except Exception as e:
+                    print(f"Error handling initial response: {e}")
+            
+            # Execute the tool
+            tool_args = tool_call.input
+            if tool_call.name not in self.token_tracker.tool_handlers:
+                raise ValueError(f"Unsupported tool: {tool_call.name}")
+                
+            handler = self.token_tracker.tool_handlers[tool_call.name]
+            
+            # Special handling for calendar query
+            if tool_call.name == "calendar_query":
+                if tool_args["query_type"] == "next_event":
+                    tool_result = await handler(get_next_event)
+                elif tool_args["query_type"] == "day_schedule":
+                    tool_result = await handler(get_day_schedule)
+                else:
+                    tool_result = "Unsupported query type"
+            else:
+                # Standard tool execution
+                tool_result = await handler(**tool_args) if asyncio.iscoroutinefunction(handler) else handler(**tool_args)
+            
+            # Record successful tool usage
+            self.token_tracker.record_tool_usage(tool_call.name)
+            
+            # Process tool result with Claude
+            final_response = await self.anthropic_client.messages.create(
+                model=ANTHROPIC_MODEL,
+                messages=[{
+                    "role": "user",
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": tool_call.id,
+                        "content": tool_result
+                    }]
+                }],
+                max_tokens=1024
+            )
+            
+            # Process final response
+            if final_response and final_response.content:
+                processed_content = self._validate_llm_response(final_response.content)
+                
+                # Generate and queue final audio
+                final_audio = self.tts_handler.generate_audio(str(processed_content))
+                with open("speech.mp3", "wb") as f:
+                    f.write(final_audio)
+                    
+                # Update display and play response
+                await self.display_manager.update_display('speaking', mood='casual')
+                await self.notification_manager.queue_notification(
+                    text=processed_content,
+                    priority=1,
+                    sound_file="speech.mp3"
+                )
+                await self.notification_manager.process_pending_notifications()
+                
+                # Return to listening state
+                await self.display_manager.update_display('listening')
+                return processed_content
+                
+            raise ValueError("Empty response from Claude")
+            
+        except Exception as e:
+            print(f"Error in tool execution: {e}")
+            traceback.print_exc()
+            
+            # Ensure error state is properly displayed
+            await self.display_manager.update_display('speaking', mood='disappointed')
+            error_msg = f"Sorry, there was an error executing the tool: {str(e)}"
+            
+            try:
+                error_audio = self.tts_handler.generate_audio(error_msg)
+                with open("speech.mp3", "wb") as f:
+                    f.write(error_audio)
+                await self.notification_manager.queue_notification(
+                    text=error_msg,
+                    priority=1,
+                    sound_file="speech.mp3"
+                )
+                await self.notification_manager.process_pending_notifications()
+            except Exception as audio_err:
+                print(f"Error generating error audio: {audio_err}")
+                
+            # Return to listening state after error
+            await self.display_manager.update_display('listening')
+            return error_msg
+
     async def _handle_persona_command(self, action: str, arguments: str = None) -> bool:
         """
         Handle persona switching with proper resource management.
@@ -793,8 +922,12 @@ class SystemManager:
                         print(f"ERROR: Failed to update configuration: {e}")
                         traceback.print_exc()
                         return False
-                else:
-                    print(f"ERROR: Persona '{arguments}' not found")
-                    return False
+                print(f"ERROR: Persona '{arguments}' not found")
+                return False
+                
+            return False
             
+        except Exception as e:
+            print(f"Error in persona command: {e}")
+            traceback.print_exc()
             return False
