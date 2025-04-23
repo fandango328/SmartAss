@@ -1795,9 +1795,9 @@ async def generate_response(query):  #line no 1750
 
     # Only add to chat_log if not already there
     already_added = (
-        len(chat_log) > 0 and
-        chat_log[-1]["role"] == "user" 
-        chat_log[-1]["content"] == query #line no 1800 
+        len(chat_log) > 0 and 
+        chat_log[-1]["role"] == "user" and
+        chat_log[-1]["content"] == query  #line 1800
     )
 
     if not already_added:
@@ -1941,52 +1941,47 @@ async def generate_response(query):  #line no 1750
         if not response:
             raise Exception("Failed to get API response")
 
-        # Tool response handling with coordinated audio
-        if response.stop_reason == "tool_use":
-            print(f"DEBUG: Tool use detected! Tools active: {token_tracker.tools_are_active()}")
-            
-            # Extract initial response and tool call
-            initial_response = None
-            tool_call = None
-            for block in response.content:
-                if block.type == "text":
-                    initial_response = block.text
-                elif block.type == "tool_use":
-                    tool_call = block
-
-            # Update display first
-            await display_manager.update_display('tools', specific_image='use')
-            
-            # Queue tool acknowledgment through notification manager
-            tool_sound = get_random_audio('tool', 'use')
-            if tool_sound:
-                await notification_manager.queue_notification(
-                    text="Processing tool request",
-                    priority=2,  # Higher priority for tool sounds
-                    sound_file=tool_sound
-                )
-            
-            # Handle initial response if meaningful
-            if initial_response and not any(phrase in initial_response.lower() 
-                                          for phrase in ['let me check', 'one moment', 'just a second']):
-                try:
-                    initial_audio = tts_handler.generate_audio(str(initial_response))
-                    with open(f"{AUDIO_FILE}.initial", "wb") as f:
-                        f.write(initial_audio)
+            # Tool response handling with coordinated audio and chat log management
+            if response.stop_reason == "tool_use":
+                print(f"DEBUG: Tool use detected! Tools active: {token_tracker.tools_are_active()}")
+                
+                # Extract tool call and ignore partial response text
+                tool_call = next((block for block in response.content 
+                                if block.type == "tool_use"), None)
+                
+                if not tool_call:
+                    raise ValueError("Tool use indicated but no tool call found in response")
+                
+                # Update display for tool use
+                await display_manager.update_display('tools', specific_image='use')
+                
+                # Queue pre-recorded tool acknowledgment
+                tool_sound = get_random_audio('tool', 'use')
+                if tool_sound:
                     await notification_manager.queue_notification(
-                        text=initial_response,
-                        priority=1,
-                        sound_file=f"{AUDIO_FILE}.initial"
+                        text="Processing tool request",
+                        priority=2,
+                        sound_file=tool_sound
                     )
-                except Exception as e:
-                    print(f"Error generating initial response audio: {e}")
-
-            # Process queued notifications
-            await notification_manager.process_pending_notifications()
-            
-            # Process tool execution
-            tool_results = []
-            if tool_call:
+                
+                # Add standardized assistant acknowledgment to chat log
+                acknowledgment_message = {
+                    "role": "assistant",
+                    "content": "Handling your tool request now",
+                    "timestamp": datetime.now().isoformat()
+                }
+                chat_log.append(acknowledgment_message)
+                save_to_log_file(acknowledgment_message)
+                
+                # Track token usage for acknowledgment
+                token_tracker.update_session_costs(
+                    token_tracker.count_message_tokens([acknowledgment_message]),
+                    acknowledgment_message["content"],
+                    True  # Tool interaction
+                )
+                
+                # Process tool execution
+                tool_results = []
                 print(f"Processing tool call: {tool_call.name}")
                 print(f"DEBUG: Processing tool call: {tool_call.name} with ID: {tool_call.id}")
                 print(f"DEBUG: Tool args: {tool_call.input}")
@@ -1995,14 +1990,14 @@ async def generate_response(query):  #line no 1750
                     # Execute tool and get result
                     tool_result = await execute_tool(tool_call)
                     tool_results.append({
-                        "type": "tool_result",   
+                        "type": "tool_result",
                         "tool_use_id": tool_call.id,
-                        "content": tool_result #line no 2000
+                        "content": tool_result
                     })
                     
                     # Update chat log with tool results
                     chat_log.append({
-                        "role": "user",
+                        "role": "user",  #line 2000
                         "content": tool_results
                     })
                     
@@ -2015,7 +2010,7 @@ async def generate_response(query):  #line no 1750
                         temperature=0.7
                     )
                     
-                    # Process and play final response
+                    # Process and play final response through notification manager
                     if final_response and final_response.content:
                         processed_content = await process_response_content(final_response.content)
                         try:
@@ -2023,12 +2018,14 @@ async def generate_response(query):  #line no 1750
                             with open(AUDIO_FILE, "wb") as f:
                                 f.write(final_audio)
                             
-                            # Update display for final response
+                            # Update display and queue through notification manager
                             await display_manager.update_display('speaking', mood='casual')
-                            
-                            # Queue and play final response
-                            await audio_manager.queue_audio(audio_file=AUDIO_FILE)
-                            await audio_manager.wait_for_queue_empty()
+                            await notification_manager.queue_notification(
+                                text=processed_content,
+                                priority=1,  # Normal priority for final response
+                                sound_file=AUDIO_FILE
+                            )
+                            await notification_manager.process_pending_notifications()
                             
                             return processed_content
                             
@@ -2095,12 +2092,12 @@ async def generate_response(query):  #line no 1750
                                         tool_response = cancel_calendar_event(**tool_args)
                                     else:
                                         event_list = "\n".join([
-                                                f"{i+1}. {event['summary']} ({event['start_formatted']})"   #line no 2100
+                                                f"{i+1}. {event['summary']} ({event['start_formatted']})"  
                                                 for i, event in enumerate(matching_events)
                                         ]) #line no 2100
                                         tool_response = f"I found multiple matching events:\n\n{event_list}\n\nPlease specify which event you'd like to cancel."
                                 else:
-                                    tool_response = "I couldn't find any calendar events matching that description."
+                                    tool_response = "I couldn't find any calendar events matching that description."   #line no 2100
                             else:
                                 tool_response = cancel_calendar_event(**tool_args)
                         elif tool_call.name == "calendar_query":
@@ -2197,10 +2194,10 @@ async def generate_response(query):  #line no 1750
                     try:
                         final_audio = tts_handler.generate_audio(str(processed_content))
                         if not final_audio:
-                            raise ValueError("TTS generation returned empty audio") #line no 2200
+                            raise ValueError("TTS generation returned empty audio") 
                             
                         with open(AUDIO_FILE, "wb") as f:
-                            f.write(final_audio)
+                            f.write(final_audio)  #line no 2200
                         
                         # Update display and queue audio through notification manager
                         await display_manager.update_display('speaking', mood='casual')
@@ -2260,16 +2257,20 @@ async def generate_response(query):  #line no 1750
                     print(f"Error processing response: {e}")
                     traceback.print_exc()
                     
-                    await display_manager.update_display('speaking', mood='disappointed')
-                    error_msg = "Sorry, there was an error processing the response"
-                    error_audio = tts_handler.generate_audio(error_msg)
-                    
-                    with open(AUDIO_FILE, "wb") as f:
-                        f.write(error_audio)
-                    await audio_manager.queue_audio(audio_file=AUDIO_FILE)
-                    await audio_manager.wait_for_queue_empty()
-                    
-                    return error_msg  #line no 2272
+                    try:
+                        await display_manager.update_display('speaking', mood='disappointed')
+                        error_msg = "Sorry, there was an error processing the response"
+                        error_audio = tts_handler.generate_audio(error_msg)
+                        
+                        with open(AUDIO_FILE, "wb") as f:
+                            f.write(error_audio)
+                        await audio_manager.queue_audio(audio_file=AUDIO_FILE)
+                        await audio_manager.wait_for_queue_empty()
+                        
+                        return error_msg
+                    except Exception as nested_e:
+                        print(f"Error handling error notification: {nested_e}")
+                        return "An unexpected error occurred"  #line 2273
 
 async def wake_word():
     """Wake word detection with notification-aware breaks"""
