@@ -1616,7 +1616,10 @@ async def process_response_content(content):
     """
     global chat_log
     
-    print("DEBUG - Starting response content processing")
+    print(f"\n[{datetime.now().strftime('%H:%M:%S.%f')}] === Response Processing Debug ===")
+    print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Content type: {type(content)}")
+    print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Audio manager state - Speaking: {audio_manager.is_speaking}, Playing: {audio_manager.is_playing}")
+    print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Notification queue size: {notification_manager.notification_queue.qsize()}")
     
     try:
         # Validate and sanitize content first
@@ -1638,6 +1641,8 @@ async def process_response_content(content):
         # Add natural pauses after sentences
         formatted_message = re.sub(r'(?<=[.!?])\s+(?=[A-Z])', '. ', formatted_message)
         
+        print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Pre-mood processing - Content length: {len(text)}")
+        
         # Parse mood and update display state
         mood_match = re.match(r'^\[(.*?)\]([\s\S]*)', formatted_message, re.IGNORECASE)
         if mood_match:
@@ -1646,12 +1651,14 @@ async def process_response_content(content):
             mapped_mood = map_mood(raw_mood)
             if mapped_mood:
                 await display_manager.update_display('speaking', mood=mapped_mood)
-                print(f"DEBUG - Mood detected: {mapped_mood}")
+                print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Mood detected: {mapped_mood}")
                 
             # Save message with mood intact
             assistant_message = {"role": "assistant", "content": formatted_message}
             chat_log.append(assistant_message)
             save_to_log_file(assistant_message)
+            print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Chat log updated - Last message type: {chat_log[-1]['role']}")
+            print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Messages in log: {len(chat_log)}")
             
             # Strip mood for voice generation
             formatted_message = clean_message
@@ -1664,13 +1671,14 @@ async def process_response_content(content):
         # Final cleanup
         formatted_message = formatted_message.strip()
         
-        print(f"DEBUG - Formatted message for voice (full):\n{formatted_message}\n")
-        print(f"DEBUG - Chat_log now has {len(chat_log)} messages")
+        print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Formatted message for voice - Length: {len(formatted_message)}")
+        print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Content preview: {formatted_message[:100]}...")
+        print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Chat_log size: {len(chat_log)} messages")
         
         return formatted_message
         
     except Exception as e:
-        print(f"Error in process_response_content: {e}")
+        print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Error in process_response_content: {e}")
         traceback.print_exc()
         return "I apologize, but I encountered an error processing the response."
 
@@ -1739,7 +1747,7 @@ async def execute_tool(tool_call):
         print(f"DEBUG: Tool execution error: {e}")
         return f"Error executing tool: {str(e)}"
 
-async def generate_response(query):
+async def generate_response(query):  #line no 1750
     global chat_log, last_interaction, last_interaction_check, token_tracker
 
     now = datetime.now()
@@ -1788,8 +1796,8 @@ async def generate_response(query):
     # Only add to chat_log if not already there
     already_added = (
         len(chat_log) > 0 and
-        chat_log[-1]["role"] == "user" and
-        chat_log[-1]["content"] == query
+        chat_log[-1]["role"] == "user" 
+        chat_log[-1]["content"] == query #line no 1800 
     )
 
     if not already_added:
@@ -1889,7 +1897,7 @@ async def generate_response(query):
 
         # Make API call with error handling
         response = None
-        try:
+        try:  #line no 1900
             response = anthropic_client.messages.create(**api_params)
 
             try:
@@ -1989,7 +1997,7 @@ async def generate_response(query):
                     # Execute tool and get result
                     tool_result = await execute_tool(tool_call)
                     tool_results.append({
-                        "type": "tool_result",
+                        "type": "tool_result",   #line no 2000
                         "tool_use_id": tool_call.id,
                         "content": tool_result
                     })
@@ -2089,7 +2097,7 @@ async def generate_response(query):
                                         tool_response = cancel_calendar_event(**tool_args)
                                     else:
                                         event_list = "\n".join([
-                                                f"{i+1}. {event['summary']} ({event['start_formatted']})"
+                                                f"{i+1}. {event['summary']} ({event['start_formatted']})"   #line no 2100
                                                 for i, event in enumerate(matching_events)
                                         ])
                                         tool_response = f"I found multiple matching events:\n\n{event_list}\n\nPlease specify which event you'd like to cancel."
@@ -2189,7 +2197,7 @@ async def generate_response(query):
                         await display_manager.update_display('speaking', mood='disappointed')
                         
                         # Queue error message audio
-                        try:
+                        try:  #line no 2200
                             error_audio = tts_handler.generate_audio(str(error_msg))  # Ensure string conversion
                             with open(AUDIO_FILE, "wb") as f:
                                 f.write(error_audio)
@@ -2289,7 +2297,7 @@ async def generate_response(query):
                             await display_manager.update_display('speaking', mood='disappointed')
                             
                             error_msg = "Sorry, there was an error generating the voice response"
-                            try:
+                            try:  #line no 2300
                                 error_audio = tts_handler.generate_audio(str(error_msg))
                                 with open(AUDIO_FILE, "wb") as f:
                                     f.write(error_audio)
@@ -2389,7 +2397,7 @@ async def generate_response(query):
             token_tracker.disable_tools()  # Force disable tools
             error_msg = "I encountered an issue with a previous tool operation. I've resolved it and disabled tools temporarily. You can re-enable them when needed."
 
-        await display_manager.update_display('speaking', mood='casual')
+        await display_manager.update_display('speaking', mood='casual')  #line no 2400
         error_audio = await tts_handler.generate_audio(error_msg)
         with open(AUDIO_FILE, "wb") as f:
             f.write(error_audio)
@@ -2410,7 +2418,7 @@ async def generate_response(query):
         await audio_manager.queue_audio(audio_file=AUDIO_FILE)
         await audio_manager.wait_for_queue_empty()
         
-        return error_msg
+        return error_msg  #line 2421
 
 async def wake_word():
     """Wake word detection with notification-aware breaks"""
@@ -2955,33 +2963,25 @@ async def print_response(chat):
 async def generate_voice(chat):
     """
     Generate voice audio from formatted text.
-
-    Args:
-        chat (str): Pre-formatted text from process_response_content
-                   Should already have newlines and spaces normalized
     """
+    print(f"\n[{datetime.now().strftime('%H:%M:%S.%f')}] === Voice Generation Debug ===")
+    print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Input type: {type(chat)}")
+    print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Input preview: {str(chat)[:100]}")
+    
     # Skip voice generation for control signals
     if not chat or chat == "[CONTINUE]":
-        print(f"DEBUG - GENERATE_VOICE skipping: '{chat}'")
+        print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Skipping voice generation - control signal")
         return
 
-    print(f"DEBUG - GENERATE_VOICE received chat: '{chat[:50]}...'")
     try:
-        print(f"DEBUG - Content type: {type(chat)}")
-
-        # Verify input is properly formatted
-        if not isinstance(chat, str):
-            print(f"WARNING: Unexpected content type in generate_voice: {type(chat)}")
-            chat = str(chat)
-
         # Normalize the text
         chat = ' '.join(chat.split())
         
         if not chat.strip():
-            print("WARNING: Empty text after normalization")
+            print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Warning: Empty text after normalization")
             return
 
-        print(f"Sending to TTS: {chat[:50]}..." if len(chat) > 50 else f"Sending to TTS: {chat}")
+        print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Generating TTS for: {chat[:100]}...")
 
         # Generate audio with error handling
         try:
@@ -2989,19 +2989,20 @@ async def generate_voice(chat):
             if not audio:
                 raise Exception("TTS handler returned empty audio data")
         except Exception as tts_error:
-            print(f"Error in TTS generation: {tts_error}")
+            print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Error in TTS generation: {tts_error}")
             raise
 
         # Save and play the audio
+        print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Saving audio to {AUDIO_FILE}")
         with open(AUDIO_FILE, "wb") as f:
             f.write(audio)
 
+        print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Queueing audio for playback")
         await audio_manager.play_audio(AUDIO_FILE)
 
     except Exception as e:
-        print(f"Error in generate_voice: {e}")
+        print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Error in generate_voice: {e}")
         traceback.print_exc()
-        # Don't re-raise - let the caller handle the error state
 
 def get_location(format: str) -> str:
     print("DEBUG: Entering get_location function")
