@@ -1616,7 +1616,10 @@ async def process_response_content(content):
     """
     global chat_log
     
-    print("DEBUG - Starting response content processing")
+    print(f"\n[{datetime.now().strftime('%H:%M:%S.%f')}] === Response Processing Debug ===")
+    print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Content type: {type(content)}")
+    print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Audio manager state - Speaking: {audio_manager.is_speaking}, Playing: {audio_manager.is_playing}")
+    print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Notification queue size: {notification_manager.notification_queue.qsize()}")
     
     try:
         # Validate and sanitize content first
@@ -1638,6 +1641,8 @@ async def process_response_content(content):
         # Add natural pauses after sentences
         formatted_message = re.sub(r'(?<=[.!?])\s+(?=[A-Z])', '. ', formatted_message)
         
+        print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Pre-mood processing - Content length: {len(text)}")
+        
         # Parse mood and update display state
         mood_match = re.match(r'^\[(.*?)\]([\s\S]*)', formatted_message, re.IGNORECASE)
         if mood_match:
@@ -1646,12 +1651,14 @@ async def process_response_content(content):
             mapped_mood = map_mood(raw_mood)
             if mapped_mood:
                 await display_manager.update_display('speaking', mood=mapped_mood)
-                print(f"DEBUG - Mood detected: {mapped_mood}")
+                print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Mood detected: {mapped_mood}")
                 
             # Save message with mood intact
             assistant_message = {"role": "assistant", "content": formatted_message}
             chat_log.append(assistant_message)
             save_to_log_file(assistant_message)
+            print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Chat log updated - Last message type: {chat_log[-1]['role']}")
+            print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Messages in log: {len(chat_log)}")
             
             # Strip mood for voice generation
             formatted_message = clean_message
@@ -1664,13 +1671,14 @@ async def process_response_content(content):
         # Final cleanup
         formatted_message = formatted_message.strip()
         
-        print(f"DEBUG - Formatted message for voice (full):\n{formatted_message}\n")
-        print(f"DEBUG - Chat_log now has {len(chat_log)} messages")
+        print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Formatted message for voice - Length: {len(formatted_message)}")
+        print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Content preview: {formatted_message[:100]}...")
+        print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Chat_log size: {len(chat_log)} messages")
         
         return formatted_message
         
     except Exception as e:
-        print(f"Error in process_response_content: {e}")
+        print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Error in process_response_content: {e}")
         traceback.print_exc()
         return "I apologize, but I encountered an error processing the response."
 
@@ -1739,7 +1747,7 @@ async def execute_tool(tool_call):
         print(f"DEBUG: Tool execution error: {e}")
         return f"Error executing tool: {str(e)}"
 
-async def generate_response(query):
+async def generate_response(query):  #line no 1750
     global chat_log, last_interaction, last_interaction_check, token_tracker
 
     now = datetime.now()
@@ -1787,9 +1795,9 @@ async def generate_response(query):
 
     # Only add to chat_log if not already there
     already_added = (
-        len(chat_log) > 0 and
+        len(chat_log) > 0 and 
         chat_log[-1]["role"] == "user" and
-        chat_log[-1]["content"] == query
+        chat_log[-1]["content"] == query  #line 1800
     )
 
     if not already_added:
@@ -1806,6 +1814,37 @@ async def generate_response(query):
         if use_tools:
             tools_needed, relevant_tools = token_tracker.get_tools_for_query(query)
             print(f"DEBUG: Tools needed: {tools_needed}, Found {len(relevant_tools)} relevant tools")
+            
+            # Check if we have identified tools that should be executed immediately
+            if tools_needed and relevant_tools:
+                query_lower = query.lower()
+                tool_to_execute = None
+                tool_args = {}
+                
+                # Determine which tool to execute based on query content
+                if any(t['name'] == 'get_current_time' for t in relevant_tools) and ('time' in query_lower or 'clock' in query_lower):
+                    tool_to_execute = 'get_current_time'
+                    format_type = 'both'  # Default format
+                    if 'date' in query_lower and 'time' not in query_lower:
+                        format_type = 'date'
+                    elif 'time' in query_lower and 'date' not in query_lower:
+                        format_type = 'time'
+                    tool_args = {"format": format_type}
+                
+                # If we found a tool to execute, use system_manager to run it
+                if tool_to_execute:
+                    print(f"DEBUG: Executing tool {tool_to_execute} with args {tool_args}")
+                    
+                    # Create a mock tool_call object that system_manager can process
+                    from collections import namedtuple
+                    ToolCall = namedtuple('ToolCall', ['name', 'id', 'input'])
+                    tool_call = ToolCall(name=tool_to_execute, id="manual-execution", input=tool_args)
+                    
+                    # Execute tool and get processed response
+                    tool_response = await system_manager.execute_tool_with_feedback(tool_call)
+                    if tool_response:
+                        # Tool was successfully executed, return its response
+                        return tool_response
 
         # Get sanitized message history
         sanitized_messages = sanitize_messages_for_api(chat_log)
@@ -1889,7 +1928,7 @@ async def generate_response(query):
 
         # Make API call with error handling
         response = None
-        try:
+        try:  #line no 1900
             response = anthropic_client.messages.create(**api_params)
 
             try:
@@ -1933,54 +1972,47 @@ async def generate_response(query):
         if not response:
             raise Exception("Failed to get API response")
 
-        # Tool response handling with coordinated audio
-        if response.stop_reason == "tool_use":
-            print(f"DEBUG: Tool use detected! Tools active: {token_tracker.tools_are_active()}")
-            
-            # Extract initial response and tool call
-            initial_response = None
-            tool_call = None
-            for block in response.content:
-                if block.type == "text":
-                    initial_response = block.text
-                elif block.type == "tool_use":
-                    tool_call = block
-
-            # Update display first
-            await display_manager.update_display('tools', specific_image='use')
-            
-            # Queue tool acknowledgment through notification manager
-            tool_sound = get_random_audio('tool', 'use')
-            if tool_sound:
-                # Use notification manager's priority queue for tool sounds
-                await notification_manager.queue_notification(
-                    text="Processing tool request",
-                    priority=2,  # Higher priority for tool sounds
-                    sound_file=tool_sound
-                )
-            
-            # If there's an initial response that's not just a generic acknowledgment
-            if initial_response and not any(phrase in initial_response.lower() 
-                                          for phrase in ['let me check', 'one moment', 'just a second']):
-                try:
-                    initial_audio = tts_handler.generate_audio(str(initial_response))
-                    with open(f"{AUDIO_FILE}.initial", "wb") as f:
-                        f.write(initial_audio)
-                    # Queue initial response with lower priority
+            # Tool response handling with coordinated audio and chat log management
+            if response.stop_reason == "tool_use":
+                print(f"DEBUG: Tool use detected! Tools active: {token_tracker.tools_are_active()}")
+                
+                # Extract tool call and ignore partial response text
+                tool_call = next((block for block in response.content 
+                                if block.type == "tool_use"), None)
+                
+                if not tool_call:
+                    raise ValueError("Tool use indicated but no tool call found in response")
+                
+                # Update display for tool use
+                await display_manager.update_display('tools', specific_image='use')
+                
+                # Queue pre-recorded tool acknowledgment
+                tool_sound = get_random_audio('tool', 'use')
+                if tool_sound:
                     await notification_manager.queue_notification(
-                        text=initial_response,
-                        priority=1,
-                        sound_file=f"{AUDIO_FILE}.initial"
+                        text="Processing tool request",
+                        priority=2,
+                        sound_file=tool_sound
                     )
-                except Exception as e:
-                    print(f"Error generating initial response audio: {e}")
-
-            # Process notifications before continuing
-            await notification_manager.process_pending_notifications()
-            
-            # Process tool execution
-            tool_results = []
-            if tool_call:
+                
+                # Add standardized assistant acknowledgment to chat log
+                acknowledgment_message = {
+                    "role": "assistant",
+                    "content": "Handling your tool request now",
+                    "timestamp": datetime.now().isoformat()
+                }
+                chat_log.append(acknowledgment_message)
+                save_to_log_file(acknowledgment_message)
+                
+                # Track token usage for acknowledgment
+                token_tracker.update_session_costs(
+                    token_tracker.count_message_tokens([acknowledgment_message]),
+                    acknowledgment_message["content"],
+                    True  # Tool interaction
+                )
+                
+                # Process tool execution
+                tool_results = []
                 print(f"Processing tool call: {tool_call.name}")
                 print(f"DEBUG: Processing tool call: {tool_call.name} with ID: {tool_call.id}")
                 print(f"DEBUG: Tool args: {tool_call.input}")
@@ -1996,7 +2028,7 @@ async def generate_response(query):
                     
                     # Update chat log with tool results
                     chat_log.append({
-                        "role": "user",
+                        "role": "user",  #line 2000
                         "content": tool_results
                     })
                     
@@ -2009,7 +2041,7 @@ async def generate_response(query):
                         temperature=0.7
                     )
                     
-                    # Process and play final response
+                    # Process and play final response through notification manager
                     if final_response and final_response.content:
                         processed_content = await process_response_content(final_response.content)
                         try:
@@ -2017,12 +2049,14 @@ async def generate_response(query):
                             with open(AUDIO_FILE, "wb") as f:
                                 f.write(final_audio)
                             
-                            # Update display for final response
+                            # Update display and queue through notification manager
                             await display_manager.update_display('speaking', mood='casual')
-                            
-                            # Queue and play final response
-                            await audio_manager.queue_audio(audio_file=AUDIO_FILE)
-                            await audio_manager.wait_for_queue_empty()
+                            await notification_manager.queue_notification(
+                                text=processed_content,
+                                priority=1,  # Normal priority for final response
+                                sound_file=AUDIO_FILE
+                            )
+                            await notification_manager.process_pending_notifications()
                             
                             return processed_content
                             
@@ -2089,12 +2123,12 @@ async def generate_response(query):
                                         tool_response = cancel_calendar_event(**tool_args)
                                     else:
                                         event_list = "\n".join([
-                                                f"{i+1}. {event['summary']} ({event['start_formatted']})"
+                                                f"{i+1}. {event['summary']} ({event['start_formatted']})"  
                                                 for i, event in enumerate(matching_events)
-                                        ])
+                                        ]) #line no 2100
                                         tool_response = f"I found multiple matching events:\n\n{event_list}\n\nPlease specify which event you'd like to cancel."
                                 else:
-                                    tool_response = "I couldn't find any calendar events matching that description."
+                                    tool_response = "I couldn't find any calendar events matching that description."   #line no 2100
                             else:
                                 tool_response = cancel_calendar_event(**tool_args)
                         elif tool_call.name == "calendar_query":
@@ -2145,14 +2179,6 @@ async def generate_response(query):
                 })
 
                 try:
-                    # Ensure tool audio has completed before processing response
-                    if not audio_complete.done():
-                        try:
-                            await audio_complete
-                            await asyncio.sleep(0.5)  # Buffer after tool audio
-                        except Exception as e:
-                            print(f"Warning: Error waiting for tool audio completion: {e}")
-
                     # Make final API call to process tool results
                     final_response = anthropic_client.messages.create(
                         model=ANTHROPIC_MODEL,
@@ -2162,17 +2188,24 @@ async def generate_response(query):
                         temperature=0.7
                     )
 
-                    # Token tracking for tool response
+                    # Update token tracking
                     try:
                         tool_messages = chat_log[-2:] if len(chat_log) >= 2 else chat_log
                         tool_input_count = token_tracker.count_message_tokens(tool_messages)
                         final_response_text = ""
+                        
+                        # Extract text content
                         if isinstance(final_response.content, list):
-                            for block in final_response.content:
-                                if hasattr(block, 'text'):
-                                    final_response_text += block.text
+                            final_response_text = " ".join(
+                                block.text for block in final_response.content 
+                                if hasattr(block, 'text')
+                            )
                         else:
-                            final_response_text = final_response.content.text if hasattr(final_response.content, 'text') else str(final_response.content)
+                            final_response_text = (
+                                final_response.content.text 
+                                if hasattr(final_response.content, 'text') 
+                                else str(final_response.content)
+                            )
 
                         token_tracker.update_session_costs(
                             tool_input_count,
@@ -2182,235 +2215,98 @@ async def generate_response(query):
                     except Exception as token_err:
                         print(f"Token tracking error in tool response: {token_err}")
 
-                    # Validate and process response content
+                    # Process and validate response
                     if not final_response or not final_response.content:
-                        error_msg = "I'm sorry, I couldn't process the tool result properly."
-                        print("API Error: Empty content in tool response")
-                        await display_manager.update_display('speaking', mood='disappointed')
-                        
-                        # Queue error message audio
-                        try:
-                            error_audio = tts_handler.generate_audio(str(error_msg))  # Ensure string conversion
-                            with open(AUDIO_FILE, "wb") as f:
-                                f.write(error_audio)
-                            await audio_manager.queue_audio(audio_file=AUDIO_FILE)
-                            await audio_manager.wait_for_queue_empty()
-                        except Exception as tts_error:
-                            print(f"Error generating error message audio: {tts_error}")
-                            # Fallback to just returning the error message without audio
-                            
-                        return str(error_msg)  # Ensure we return a string
+                        raise ValueError("Empty response from API")
 
-                    try:
-                        content = final_response.content
-                        
-                        # Handle content types
-                        if isinstance(content, (bytes, bytearray)):
-                            print("ERROR: Received binary response content")
-                            await display_manager.update_display('speaking', mood='disappointed')
-                            error_msg = "I'm sorry, I received an invalid response format."
-                            
-                            error_audio = await tts_handler.generate_audio(error_msg)
-                            with open(AUDIO_FILE, "wb") as f:
-                                f.write(error_audio)
-                            await audio_manager.queue_audio(audio_file=AUDIO_FILE)
-                            await audio_manager.wait_for_queue_empty()
-                            
-                            return error_msg
-                            
-                        # If content is a list, join text blocks
-                        if isinstance(content, list):
-                            text_content = ""
-                            for block in content:
-                                if hasattr(block, 'text'):
-                                    text_content += block.text
-                                elif isinstance(block, dict) and 'text' in block:
-                                    text_content += block['text']
-                            content = text_content
-                            
-                        # Convert to string if needed
-                        if not isinstance(content, str):
-                            content = str(content)
-                            
-                        # Check for binary data indicators
-                        if 'LAME3' in content or '\xFF\xFB' in content:
-                            print("ERROR: Detected binary audio data in response")
-                            await display_manager.update_display('speaking', mood='disappointed')
-                            error_msg = "I'm sorry, I received an invalid response format."
-                            
-                            error_audio = await tts_handler.generate_audio(error_msg)
-                            with open(AUDIO_FILE, "wb") as f:
-                                f.write(error_audio)
-                            await audio_manager.queue_audio(audio_file=AUDIO_FILE)
-                            await audio_manager.wait_for_queue_empty()
-                            
-                            return error_msg
-                            
-                        # Enforce length limit
-                        if len(content) > 10000:
-                            print(f"WARNING: Response content too long ({len(content)} chars), truncating")
-                            content = content[:10000] + "..."
-
-                        # Process the validated content
-                        processed_content = await process_response_content(content)
-
-                        # Validate content before TTS generation
-                        if isinstance(processed_content, (bytes, bytearray)) or processed_content.startswith(('ID3', '\xff\xfb')):
-                            print("ERROR: Received binary audio data instead of text")
-                            await display_manager.update_display('speaking', mood='disappointed')
-                            error_msg = "I'm sorry, I received an invalid response format."
-                            
-                            error_audio = await tts_handler.generate_audio(error_msg)
-                            with open(AUDIO_FILE, "wb") as f:
-                                f.write(error_audio)
-                            await audio_manager.queue_audio(audio_file=AUDIO_FILE)
-                            await audio_manager.wait_for_queue_empty()
-                            
-                            return error_msg
-
-                        # Generate TTS synchronously since it returns bytes directly
-                        try:
-                            tts_audio = tts_handler.generate_audio(str(processed_content))
-                            if not tts_audio:
-                                raise Exception("TTS generation returned empty audio data")
-                            with open(AUDIO_FILE, "wb") as f:
-                                f.write(tts_audio)
-                        except Exception as e:
-                            print(f"Error in TTS generation: {e}")
-                            raise
-                            await audio_manager.queue_audio(audio_file=AUDIO_FILE)
-                            await audio_manager.wait_for_queue_empty()
-
-                            return processed_content
-
-                        except Exception as e:
-                            print(f"Error in TTS generation: {e}")
-                            traceback.print_exc()
-                            await display_manager.update_display('speaking', mood='disappointed')
-                            
-                            error_msg = "Sorry, there was an error generating the voice response"
-                            try:
-                                error_audio = tts_handler.generate_audio(str(error_msg))
-                                with open(AUDIO_FILE, "wb") as f:
-                                    f.write(error_audio)
-                                await audio_manager.queue_audio(audio_file=AUDIO_FILE)
-                                await audio_manager.wait_for_queue_empty()
-                            except Exception as tts_err:
-                                print(f"Failed to generate error audio: {tts_err}")
-                            
-                            return error_msg
-
-                    except Exception as e:
-                        print(f"Error validating response content: {e}")
-                        traceback.print_exc()
-                        await display_manager.update_display('speaking', mood='disappointed')
-                        
-                        error_msg = "I'm sorry, there was an error processing the response."
-                        try:
-                            error_audio = tts_handler.generate_audio(str(error_msg))
-                            with open(AUDIO_FILE, "wb") as f:
-                                f.write(error_audio)
-                            await audio_manager.queue_audio(audio_file=AUDIO_FILE)
-                            await audio_manager.wait_for_queue_empty()
-                        except Exception as tts_err:
-                            print(f"Failed to generate error audio: {tts_err}")
-                        
-                        return error_msg
-
-                except Exception as final_api_err:
-                    print(f"Error in final response after tool use: {final_api_err}")
-                    await display_manager.update_display('speaking', mood='disappointed')
+                    processed_content = await process_response_content(final_response.content)
                     
-                    error_msg = f"Sorry, there was an error after using tools: {str(final_api_err)}"
+                    # Generate and play audio response
                     try:
-                        error_audio = tts_handler.generate_audio(str(error_msg))
+                        final_audio = tts_handler.generate_audio(str(processed_content))
+                        if not final_audio:
+                            raise ValueError("TTS generation returned empty audio") 
+                            
+                        with open(AUDIO_FILE, "wb") as f:
+                            f.write(final_audio)  #line no 2200
+                        
+                        # Update display and queue audio through notification manager
+                        await display_manager.update_display('speaking', mood='casual')
+                        await notification_manager.queue_notification(
+                            text=processed_content,
+                            priority=1,
+                            sound_file=AUDIO_FILE
+                        )
+                        await notification_manager.process_pending_notifications()
+                        
+                        return processed_content
+                        
+                    except Exception as audio_err:
+                        print(f"Error generating audio response: {audio_err}")
+                        raise
+
+                except Exception as e:
+                    print(f"Error processing tool response: {e}")
+                    traceback.print_exc()
+                    
+                    # Handle error with consistent audio feedback
+                    await display_manager.update_display('speaking', mood='disappointed')
+                    error_msg = "Sorry, there was an error processing the tool response"
+                    
+                    try:
+                        error_audio = tts_handler.generate_audio(error_msg)
                         with open(AUDIO_FILE, "wb") as f:
                             f.write(error_audio)
-                        await audio_manager.queue_audio(audio_file=AUDIO_FILE)
-                        await audio_manager.wait_for_queue_empty()
-                    except Exception as tts_err:
-                        print(f"Failed to generate error audio: {tts_err}")
+                        await notification_manager.queue_notification(
+                            text=error_msg,
+                            priority=2,
+                            sound_file=AUDIO_FILE
+                        )
+                        await notification_manager.process_pending_notifications()
+                    except Exception as audio_err:
+                        print(f"Error generating error audio: {audio_err}")
                     
                     return error_msg
 
             # Non-tool response processing
             else:
-                print(f"DEBUG: Returning response. Tools active: {token_tracker.tools_are_active()}, Tools used in session: {token_tracker.tools_used_in_session}")
-
+                print(f"DEBUG: Processing regular response")
                 try:
-                    # Process final response after tool execution
-                    if final_response and final_response.content:
-                        processed_content = await process_response_content(final_response.content)
-                        try:
-                            final_audio = tts_handler.generate_audio(str(processed_content))
-                            with open(AUDIO_FILE, "wb") as f:
-                                f.write(final_audio)
-                            
-                            # Update display for final response
-                            await display_manager.update_display('speaking', mood='casual')
-                            
-                            # Queue final response through notification manager
-                            await notification_manager.queue_notification(
-                                text=processed_content,
-                                priority=1,  # Normal priority for final response
-                                sound_file=AUDIO_FILE
-                            )
-                            
-                            # Process the notification
-                            await notification_manager.process_pending_notifications()
-                            
-                            return processed_content
-                            
-                        except Exception as e:
-                            print(f"Error in final response audio generation: {e}")
-                            raise
-
-                except Exception as process_error:
-                    print(f"Error processing response content: {process_error}")
-                    traceback.print_exc()
-                    await display_manager.update_display('speaking', mood='disappointed')
+                    processed_content = await process_response_content(final_response.content)
+                    final_audio = tts_handler.generate_audio(str(processed_content))
                     
-                    error_msg = "Sorry, there was an error processing the response"
-                    error_audio = await tts_handler.generate_audio(error_msg)
                     with open(AUDIO_FILE, "wb") as f:
-                        f.write(error_audio)
+                        f.write(final_audio)
+                    
+                    await display_manager.update_display('speaking', mood='casual')
                     await audio_manager.queue_audio(audio_file=AUDIO_FILE)
                     await audio_manager.wait_for_queue_empty()
                     
-                    return error_msg
+                    return processed_content
+                
+                except Exception as e:
+                    print(f"Error processing response: {e}")
+                    traceback.print_exc()
+                    
+                    try:
+                        await display_manager.update_display('speaking', mood='disappointed')
+                        error_msg = "Sorry, there was an error processing the response"
+                        error_audio = tts_handler.generate_audio(error_msg)
+                    
+                        with open(AUDIO_FILE, "wb") as f:
+                            f.write(error_audio)
+                        await audio_manager.queue_audio(audio_file=AUDIO_FILE)
+                        await audio_manager.wait_for_queue_empty()
+                        
+                        return error_msg
+                    except Exception as nested_e:
+                        print(f"Error handling error notification: {nested_e}")
+                        return "An unexpected error occurred"
 
-    except (APIError, APIConnectionError, BadRequestError, InternalServerError) as e:
-        error_msg = ("I apologize, but the service is temporarily overloaded. Please try again in a moment."
-                    if "overloaded" in str(e).lower() else f"Sorry, there was a server error: {str(e)}")
-        print(f"Anthropic API Error: {e}")
-        if "tool_use_id" in str(e) and "tool_result" in str(e):
-            print("DEBUG: Detected tool mismatch error, sanitizing tool interactions")
-            chat_log = sanitize_tool_interactions(chat_log)
-            token_tracker.disable_tools()  # Force disable tools
-            error_msg = "I encountered an issue with a previous tool operation. I've resolved it and disabled tools temporarily. You can re-enable them when needed."
-
-        await display_manager.update_display('speaking', mood='casual')
-        error_audio = await tts_handler.generate_audio(error_msg)
-        with open(AUDIO_FILE, "wb") as f:
-            f.write(error_audio)
-        await audio_manager.queue_audio(audio_file=AUDIO_FILE)
-        await audio_manager.wait_for_queue_empty()
-        
-        return error_msg
-
-    except Exception as e:
-        error_msg = f"Sorry, there was an unexpected error: {str(e)}"
-        print(f"Unexpected error: {str(e)}")
-        print(traceback.format_exc())
-        await display_manager.update_display('speaking', mood='casual')
-        
-        error_audio = await tts_handler.generate_audio(error_msg)
-        with open(AUDIO_FILE, "wb") as f:
-            f.write(error_audio)
-        await audio_manager.queue_audio(audio_file=AUDIO_FILE)
-        await audio_manager.wait_for_queue_empty()
-        
-        return error_msg
+    except Exception as outer_e:
+        print(f"Error in generate_response: {outer_e}")
+        traceback.print_exc()
+        return "I encountered an error processing your request"
 
 async def wake_word():
     """Wake word detection with notification-aware breaks"""
@@ -2955,33 +2851,25 @@ async def print_response(chat):
 async def generate_voice(chat):
     """
     Generate voice audio from formatted text.
-
-    Args:
-        chat (str): Pre-formatted text from process_response_content
-                   Should already have newlines and spaces normalized
     """
+    print(f"\n[{datetime.now().strftime('%H:%M:%S.%f')}] === Voice Generation Debug ===")
+    print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Input type: {type(chat)}")
+    print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Input preview: {str(chat)[:100]}")
+    
     # Skip voice generation for control signals
     if not chat or chat == "[CONTINUE]":
-        print(f"DEBUG - GENERATE_VOICE skipping: '{chat}'")
+        print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Skipping voice generation - control signal")
         return
 
-    print(f"DEBUG - GENERATE_VOICE received chat: '{chat[:50]}...'")
     try:
-        print(f"DEBUG - Content type: {type(chat)}")
-
-        # Verify input is properly formatted
-        if not isinstance(chat, str):
-            print(f"WARNING: Unexpected content type in generate_voice: {type(chat)}")
-            chat = str(chat)
-
         # Normalize the text
         chat = ' '.join(chat.split())
         
         if not chat.strip():
-            print("WARNING: Empty text after normalization")
+            print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Warning: Empty text after normalization")
             return
 
-        print(f"Sending to TTS: {chat[:50]}..." if len(chat) > 50 else f"Sending to TTS: {chat}")
+        print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Generating TTS for: {chat[:100]}...")
 
         # Generate audio with error handling
         try:
@@ -2989,19 +2877,20 @@ async def generate_voice(chat):
             if not audio:
                 raise Exception("TTS handler returned empty audio data")
         except Exception as tts_error:
-            print(f"Error in TTS generation: {tts_error}")
+            print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Error in TTS generation: {tts_error}")
             raise
 
         # Save and play the audio
+        print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Saving audio to {AUDIO_FILE}")
         with open(AUDIO_FILE, "wb") as f:
             f.write(audio)
 
+        print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Queueing audio for playback")
         await audio_manager.play_audio(AUDIO_FILE)
 
     except Exception as e:
-        print(f"Error in generate_voice: {e}")
+        print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Error in generate_voice: {e}")
         traceback.print_exc()
-        # Don't re-raise - let the caller handle the error state
 
 def get_location(format: str) -> str:
     print("DEBUG: Entering get_location function")
