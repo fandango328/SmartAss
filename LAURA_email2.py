@@ -2270,7 +2270,12 @@ async def generate_response(query):  #line no 1750
                         return error_msg
                     except Exception as nested_e:
                         print(f"Error handling error notification: {nested_e}")
-                        return "An unexpected error occurred"  #line 2273
+                        return "An unexpected error occurred"
+
+    except Exception as outer_e:
+        print(f"Error in generate_response: {outer_e}")
+        traceback.print_exc()
+        return "I encountered an error processing your request"
 
 async def wake_word():
     """Wake word detection with notification-aware breaks"""
