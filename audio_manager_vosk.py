@@ -94,6 +94,36 @@ class AudioManager:
                 "expected_duration": self.state.expected_duration
             }
 
+    @property
+    def is_playing(self):
+        """Property accessor for state.is_playing"""
+        return self.state.is_playing
+        
+    @property
+    def is_speaking(self):
+        """Property accessor for state.is_speaking"""
+        return self.state.is_speaking
+    
+    @property
+    def is_listening(self):
+        """Property accessor for state.is_listening"""
+        return self.state.is_listening
+    
+    @property
+    def playback_start_time(self):
+        """Property accessor for state.playback_start_time"""
+        return self.state.playback_start_time
+    
+    @property
+    def current_audio_file(self):
+        """Property accessor for state.current_audio_file"""
+        return self.state.current_audio_file
+    
+    @property
+    def expected_duration(self):
+        """Property accessor for state.expected_duration"""
+        return self.state.expected_duration
+                
     async def initialize_input(self):
         """
         Initialize audio input stream for capturing speech.
