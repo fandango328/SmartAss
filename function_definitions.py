@@ -3,6 +3,7 @@
 # Standard Library Imports
 import os
 import json
+import glob
 import gc
 import psutil
 import random
@@ -1361,22 +1362,40 @@ def optimize_memory():
     print(f"Memory percentage: {memory_percent:.1f}%")
     return memory_info
     
-def load_recent_context(token_limit=None):                        
-    """Load recent conversation context from log files, filtering out system commands"""
+def load_recent_context(token_manager=None, token_limit=None):
+    """
+    Load recent conversation context from log files, filtering out system commands.
+    
+    Args:
+        token_manager: TokenManager instance for counting tokens
+        token_limit: Optional override for token limit (default: from config)
+        
+    Returns:
+        list: Filtered chat messages
+    """
     if token_limit is None:
         token_limit = CHAT_LOG_RECOVERY_TOKENS
 
+    # Ensure chat logs directory exists
     log_dir = CHAT_LOG_DIR
-    if not os.path.exists(log_dir):
+    os.makedirs(log_dir, exist_ok=True)
+
+    # Get list of log files
+    try:
+        files = sorted(glob.glob(f"{log_dir}/chat_log_*.json"), reverse=True)[:2]
+    except Exception as e:
+        print(f"Error scanning log directory: {e}")
         return []
 
-    files = sorted(glob.glob(f"{log_dir}/chat_log_*.json"), reverse=True)[:2]
     filtered_messages = []
     current_tokens = 0
 
     # Process from newest to oldest
     for file in files:
         try:
+            if not os.path.exists(file):
+                continue
+                
             with open(file, "r") as f:
                 logs = json.load(f)
 
@@ -1385,10 +1404,8 @@ def load_recent_context(token_limit=None):
                 # Handle both old and new format
                 if isinstance(log_entry, dict):
                     if "role" in log_entry and "content" in log_entry:
-                        # New format
                         message = log_entry
                     elif "api_message" in log_entry:
-                        # Old format
                         message = log_entry["api_message"]
                     else:
                         continue
@@ -1399,7 +1416,7 @@ def load_recent_context(token_limit=None):
                 content = message.get("content", "").strip()
                 role = message.get("role")
 
-                if not content or not role:  # Skip empty messages
+                if not content or not role:
                     continue
 
                 formatted_message = {
@@ -1407,39 +1424,37 @@ def load_recent_context(token_limit=None):
                     "content": content
                 }
 
-                # Skip system commands by checking content
+                # Skip system commands
                 content_lower = content.lower()
-
-                # Skip if it's a system command
                 is_system_command = False
 
-                # Check document commands
-                for action in SYSTEM_STATE_COMMANDS["document"]:
-                    if any(cmd.lower() in content_lower
-                          for cmd in SYSTEM_STATE_COMMANDS["document"][action]):
-                        is_system_command = True
+                # Check all system command types
+                for command_type, actions in SYSTEM_STATE_COMMANDS.items():
+                    for action, commands in actions.items():
+                        if any(cmd.lower() in content_lower for cmd in commands):
+                            is_system_command = True
+                            break
+                    if is_system_command:
                         break
 
-                # Check tool commands
-                for action in SYSTEM_STATE_COMMANDS["tool"]:
-                    if any(cmd.lower() in content_lower
-                          for cmd in SYSTEM_STATE_COMMANDS["tool"][action]):
-                        is_system_command = True
-                        break
-
-                # Check voice calibration
-                if ("voice" in content_lower or "boys" in content_lower) and \
-                   any(word in content_lower for word in ["calibrat", "detect"]):
+                # Additional check for calibration commands
+                if (("voice" in content_lower or "boys" in content_lower) and 
+                    any(word in content_lower for word in ["calibrat", "detect"])):
                     is_system_command = True
 
                 if not is_system_command:
-                    # Count tokens using properly formatted message
-                    msg_tokens = token_manager.count_message_tokens([formatted_message])
-                    if current_tokens + msg_tokens <= token_limit:
-                        filtered_messages.insert(0, formatted_message)
-                        current_tokens += msg_tokens
-                    else:
-                        break
+                    # Only count tokens if we have a token manager
+                    if token_manager:
+                        try:
+                            msg_tokens = token_manager.count_message_tokens([formatted_message])
+                            if current_tokens + msg_tokens > token_limit:
+                                break
+                            current_tokens += msg_tokens
+                        except Exception as e:
+                            print(f"Error counting tokens: {e}")
+                            continue
+                    
+                    filtered_messages.insert(0, formatted_message)
 
         except Exception as e:
             print(f"Error loading from {file}: {e}")
@@ -1447,7 +1462,7 @@ def load_recent_context(token_limit=None):
 
     print(f"Loaded {len(filtered_messages)} messages from previous conversation")
     return filtered_messages
-    
+        
 def get_audio_path(category, context=None, persona=None):
     """
     Centralized audio path resolution with fallbacks
