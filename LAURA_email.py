@@ -630,83 +630,6 @@ async def handle_system_command(transcript):
         print(f"Traceback: {traceback.format_exc()}")
         return False
 
-async def process_response_content(content):
-    """
-    Process API response content for voice generation and chat log storage.
-    
-    Args:
-        content: Raw response from API (must be text only)
-    Returns:
-        str: Formatted message ready for voice generation
-    """
-    global chat_log
-    
-    print(f"\n[{datetime.now().strftime('%H:%M:%S.%f')}] === Response Processing Debug ===")
-    print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Content type: {type(content)}")
-    print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Audio manager state - Speaking: {audio_manager.is_speaking}, Playing: {audio_manager.is_playing}")
-    print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Notification queue size: {notification_manager.notification_queue.qsize()}")
-    
-    try:
-        # Validate and sanitize content first
-        text = system_manager._validate_llm_response(content)
-        
-        # Format message for voice generation
-        formatted_message = text
-        
-        # Convert all newlines to spaces
-        formatted_message = formatted_message.replace('\n', ' ')
-        
-        # Convert list markers to natural speech transitions
-        formatted_message = re.sub(r'(\d+)\.\s*', r'Number \1: ', formatted_message)
-        formatted_message = re.sub(r'^\s*-\s*', 'Also, ', formatted_message)
-        
-        # Clean up multiple spaces
-        formatted_message = re.sub(r'\s+', ' ', formatted_message)
-        
-        # Add natural pauses after sentences
-        formatted_message = re.sub(r'(?<=[.!?])\s+(?=[A-Z])', '. ', formatted_message)
-        
-        print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Pre-mood processing - Content length: {len(text)}")
-        
-        # Parse mood and update display state
-        mood_match = re.match(r'^\[(.*?)\]([\s\S]*)', formatted_message, re.IGNORECASE)
-        if mood_match:
-            raw_mood = mood_match.group(1)
-            clean_message = mood_match.group(2)
-            mapped_mood = map_mood(raw_mood)
-            if mapped_mood:
-                await display_manager.update_display('speaking', mood=mapped_mood)
-                print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Mood detected: {mapped_mood}")
-                
-            # Save message with mood intact
-            assistant_message = {"role": "assistant", "content": formatted_message}
-            chat_log.append(assistant_message)
-            save_to_log_file(assistant_message)
-            print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Chat log updated - Last message type: {chat_log[-1]['role']}")
-            print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Messages in log: {len(chat_log)}")
-            
-            # Strip mood for voice generation
-            formatted_message = clean_message
-        else:
-            # No mood detected
-            assistant_message = {"role": "assistant", "content": formatted_message}
-            chat_log.append(assistant_message)
-            save_to_log_file(assistant_message)
-        
-        # Final cleanup
-        formatted_message = formatted_message.strip()
-        
-        print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Formatted message for voice - Length: {len(formatted_message)}")
-        print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Content preview: {formatted_message[:100]}...")
-        print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Chat_log size: {len(chat_log)} messages")
-        
-        return formatted_message
-        
-    except Exception as e:
-        print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Error in process_response_content: {e}")
-        traceback.print_exc()
-        return "I apologize, but I encountered an error processing the response."
-
 async def execute_tool(tool_call):
     """Execute a tool and return its result."""
     try:
@@ -1745,51 +1668,6 @@ async def check_upcoming_events():
         except Exception as e:
             print(f"Error in calendar check: {e}")
             await asyncio.sleep(30)
-
-
-
-
-async def run_vad_calibration():
-    """Run VAD calibration process"""
-    try:
-        print("Starting VAD calibration...")
-        
-        # Show calibration image
-        if system_manager:
-            await system_manager.show_calibration_image()
-        
-        # Create and run the calibration process
-        calibration_script = os.path.join(os.path.dirname(__file__), "vad_calib.py")
-        process = await asyncio.create_subprocess_exec(
-            sys.executable, calibration_script,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        
-        # Wait for completion
-        stdout, stderr = await process.communicate()
-        output = stdout.decode()
-        error = stderr.decode()
-        
-        # Check if successful
-        if "CALIBRATION_COMPLETE" in output:
-            print("VAD calibration completed successfully")
-            
-            # Reset display to listening state
-            if display_manager:
-                await display_manager.update_display('listening')
-                
-            # Reload VAD settings
-            return True
-        else:
-            print("VAD calibration failed")
-            print(f"Output: {output}")
-            print(f"Error: {error}")
-            return False
-            
-    except Exception as e:
-        print(f"Error during calibration: {e}")
-        return False
 
 async def heartbeat(remote_transcriber):
     while True:
