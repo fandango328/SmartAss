@@ -15,21 +15,25 @@ from laura_tools import tool_registry
 import config
 from secret import ELEVENLABS_KEY
 
-try:
-    from LAURA_email import (
-        get_random_audio,
-        get_current_time,
-        get_location,
-        run_vad_calibration,
-        create_calendar_event, 
-        update_calendar_event,
-        cancel_calendar_event, 
-        handle_calendar_query,
-        manage_tasks, 
-        create_task_from_email,
-        create_task_for_event
-    )
-from function_definitions import get_random_audio
+from LAURA_email import (
+    run_vad_calibration,
+    handle_calendar_query,
+    process_response_content,
+)
+
+from function_definitions import (
+    get_random_audio,
+    get_current_time,
+    get_location,
+    create_calendar_event,
+    update_calendar_event,
+    cancel_calendar_event,
+    manage_tasks,
+    create_task_from_email,
+    create_task_for_event
+)
+
+from email_manager import EmailManager
         
 RECURRENCE_TERMS = {
     "recurring": "recurring",    # standard spelling
