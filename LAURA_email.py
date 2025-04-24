@@ -391,7 +391,7 @@ display_manager: Optional[DisplayManager] = None
 document_manager: Optional[DocumentManager] = None
 tts_handler: Optional[TTSHandler] = None
 anthropic_client: Optional[Anthropic] = None
-token_tracker: Optional[TokenManager] = None
+token_manager: Optional[TokenManager] = None
 system_manager: Optional[SystemManager] = None
 email_manager: Optional[EmailManager] = None  # Add this line
 snowboy = None  # Type hint not added as snowboydetect types aren't standard
@@ -597,10 +597,10 @@ def read_keyboard_events(device, max_events=5):
 def map_mood(mood):
     return MOOD_MAPPINGS.get(mood.lower(), "casual")
 
-def verify_token_tracker_setup():
+def verify_token_manager_setup():
     """Verify token tracker initialization status"""
     print(f"\n{Fore.CYAN}=== Pre-Initialization Check ===")
-    print(f"Token Tracker Status: {'Defined' if 'token_tracker' in globals() else 'Missing'}")
+    print(f"Token Tracker Status: {'Defined' if 'token_manager' in globals() else 'Missing'}")
     print(f"Anthropic Client Status: {'Initialized' if anthropic_client else 'Missing'}")
     print(f"System Prompt Status: {'Defined' if SYSTEM_PROMPT else 'Missing'}{Fore.WHITE}\n")
 
@@ -1335,7 +1335,7 @@ def estimate_tokens(message):
     Note:
         - This is an estimation function for internal log management
         - Uses character-based approximation (4 chars ≈ 1 token)
-        - For exact counts in API calls, use token_tracker's count_message_tokens
+        - For exact counts in API calls, use token_manager's count_message_tokens
     """
     try:
         # Handle dictionary messages (typical chat format)
@@ -1393,7 +1393,7 @@ def trim_chat_log(log, max_tokens=None):
         user_msg = log[i]
 
         # Calculate tokens for this pair
-        pair_tokens = token_tracker.count_message_tokens([user_msg, assistant_msg])
+        pair_tokens = token_manager.count_message_tokens([user_msg, assistant_msg])
 
         if current_size + pair_tokens <= max_tokens:
             # Insert pair at start (maintaining order)
@@ -1565,7 +1565,7 @@ def load_recent_context(token_limit=None):
 
                 if not is_system_command:
                     # Count tokens using properly formatted message
-                    msg_tokens = token_tracker.count_message_tokens([formatted_message])
+                    msg_tokens = token_manager.count_message_tokens([formatted_message])
                     if current_tokens + msg_tokens <= token_limit:
                         filtered_messages.insert(0, formatted_message)
                         current_tokens += msg_tokens
@@ -1686,7 +1686,7 @@ async def execute_tool(tool_call):
     """Execute a tool and return its result."""
     try:
         # Get the tool handler from TokenManager
-        handler = token_tracker.tool_handlers.get(tool_call.name)
+        handler = token_manager.tool_handlers.get(tool_call.name)
         if not handler:
             return "Unsupported tool called"
             
@@ -1723,7 +1723,7 @@ async def execute_tool(tool_call):
         result = await handler(**tool_args) if asyncio.iscoroutinefunction(handler) else handler(**tool_args)
         
         # Record successful tool usage
-        token_tracker.record_tool_usage(tool_call.name)
+        token_manager.record_tool_usage(tool_call.name)
         
         return result
         
@@ -1732,18 +1732,18 @@ async def execute_tool(tool_call):
         return f"Error executing tool: {str(e)}"
 
 async def generate_response(query):  #line no 1750
-    global chat_log, last_interaction, last_interaction_check, token_tracker
+    global chat_log, last_interaction, last_interaction_check, token_manager
 
     now = datetime.now()
     last_interaction = now
     last_interaction_check = now
-    token_tracker.start_interaction()
+    token_manager.start_interaction()
 
     query_lower = query.lower().strip()
 
     # Tool command section with proper audio synchronization
     try:
-        was_command, command_response = token_tracker.handle_tool_command(query)
+        was_command, command_response = token_manager.handle_tool_command(query)
         if was_command:
             success = command_response.get('success', False)
             mood = command_response.get('mood', 'casual')
@@ -1792,11 +1792,11 @@ async def generate_response(query):  #line no 1750
 
     try:
         # Check if tools are enabled and get relevant tools
-        use_tools = token_tracker.tools_are_active()
+        use_tools = token_manager.tools_are_active()
         relevant_tools = []
 
         if use_tools:
-            tools_needed, relevant_tools = token_tracker.get_tools_for_query(query)
+            tools_needed, relevant_tools = token_manager.get_tools_for_query(query)
             print(f"DEBUG: Tools needed: {tools_needed}, Found {len(relevant_tools)} relevant tools")
             
             # Check if we have identified tools that should be executed immediately
@@ -1917,7 +1917,7 @@ async def generate_response(query):  #line no 1750
 
             try:
                 # Get input token count from the API response itself
-                input_count = response.usage.input_tokens if hasattr(response, 'usage') else token_tracker.count_message_tokens(chat_log)
+                input_count = response.usage.input_tokens if hasattr(response, 'usage') else token_manager.count_message_tokens(chat_log)
 
                 # Get the response text with better error handling
                 response_text = ""
@@ -1935,8 +1935,8 @@ async def generate_response(query):  #line no 1750
                 else:
                     response_text = response.content.text if hasattr(response.content, 'text') else str(response.content)
 
-                # Let token_tracker handle output token counting just once
-                token_tracker.update_session_costs(
+                # Let token_manager handle output token counting just once
+                token_manager.update_session_costs(
                     input_count,
                     response_text,
                     use_tools and len(relevant_tools) > 0
@@ -1958,7 +1958,7 @@ async def generate_response(query):  #line no 1750
 
             # Tool response handling with coordinated audio and chat log management
             if response.stop_reason == "tool_use":
-                print(f"DEBUG: Tool use detected! Tools active: {token_tracker.tools_are_active()}")
+                print(f"DEBUG: Tool use detected! Tools active: {token_manager.tools_are_active()}")
                 
                 # Extract tool call and ignore partial response text
                 tool_call = next((block for block in response.content 
@@ -1989,8 +1989,8 @@ async def generate_response(query):  #line no 1750
                 save_to_log_file(acknowledgment_message)
                 
                 # Track token usage for acknowledgment
-                token_tracker.update_session_costs(
-                    token_tracker.count_message_tokens([acknowledgment_message]),
+                token_manager.update_session_costs(
+                    token_manager.count_message_tokens([acknowledgment_message]),
                     acknowledgment_message["content"],
                     True  # Tool interaction
                 )
@@ -2138,7 +2138,7 @@ async def generate_response(query):  #line no 1750
                             tool_response = "Unsupported tool called"
 
                         # Record successful tool usage
-                        token_tracker.record_tool_usage(tool_call.name)
+                        token_manager.record_tool_usage(tool_call.name)
 
                     except Exception as e:
                         print(f"DEBUG: Tool execution error: {e}")
@@ -2175,7 +2175,7 @@ async def generate_response(query):  #line no 1750
                     # Update token tracking
                     try:
                         tool_messages = chat_log[-2:] if len(chat_log) >= 2 else chat_log
-                        tool_input_count = token_tracker.count_message_tokens(tool_messages)
+                        tool_input_count = token_manager.count_message_tokens(tool_messages)
                         final_response_text = ""
                         
                         # Extract text content
@@ -2191,7 +2191,7 @@ async def generate_response(query):  #line no 1750
                                 else str(final_response.content)
                             )
 
-                        token_tracker.update_session_costs(
+                        token_manager.update_session_costs(
                             tool_input_count,
                             final_response_text,
                             True
@@ -3771,7 +3771,7 @@ async def main():
     Last Updated: 2025-03-28 20:37:10 UTC
     Author: fandango328
     """
-    global remote_transcriber, display_manager, transcriber, token_tracker, chat_log, document_manager, system_manager, keyboard_device, keyboard_path
+    global remote_transcriber, display_manager, transcriber, token_manager, chat_log, document_manager, system_manager, keyboard_device, keyboard_path
     tasks = []
 
     try:
@@ -3865,8 +3865,8 @@ async def main():
             return  # Exit if Google is required but not initialized
 
         print(f"{Fore.CYAN}Initializing token management system...{Fore.WHITE}")
-        token_tracker = TokenManager(anthropic_client=anthropic_client)
-        token_tracker.start_session()
+        token_manager = TokenManager(anthropic_client=anthropic_client)
+        token_manager.start_session()
 
         # Initialize DocumentManager
         print(f"{Fore.CYAN}Initializing document management system...{Fore.WHITE}")
@@ -3900,8 +3900,8 @@ async def main():
         # VERIFICATION PHASE
         print(f"\n{Fore.CYAN}=== Token Management System Status ===")
         print(f"✓ Token Manager: Initialized")
-        print(f"✓ Model: {token_tracker.query_model}")
-        print(f"✓ Current Tool Status: {'Enabled' if token_tracker.tools_are_active() else 'Disabled'}")
+        print(f"✓ Model: {token_manager.query_model}")
+        print(f"✓ Current Tool Status: {'Enabled' if token_manager.tools_are_active() else 'Disabled'}")
         print(f"✓ Document Manager: Initialized")
 
         # TRANSCRIPTION SETUP PHASE
@@ -4028,7 +4028,7 @@ async def run_main_loop():
                     audio_manager=audio_manager,
                     document_manager=document_manager,
                     notification_manager=notification_manager,
-                    token_tracker=token_tracker
+                    token_manager=token_manager
                 )
                 print("SystemManager initialized successfully")
                 print(f"{Fore.MAGENTA}Listening for wake word or press Raspberry button to begin...{Fore.WHITE}")
