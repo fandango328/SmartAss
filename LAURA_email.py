@@ -128,6 +128,19 @@ from config import (
     ANTHROPIC_MODEL,
     CALENDAR_NOTIFICATION_SENTENCES
 )
+from function_definitions import (
+    get_random_audio,
+    get_current_time,
+    get_location,
+    create_calendar_event,
+    update_calendar_event,
+    cancel_calendar_event,
+    manage_tasks,
+    create_task_from_email,
+    create_task_for_event,
+    load_recent_context,
+    get_calendar_service  
+)
 
 #BASE_URL = "https://openrouter.ai/api/v1/chat/completions"  # This is for using openrouter, right now i have it configured to use anthropic for handling query
 AUDIO_FILE = "speech.mp3" #gets saved-to/overwritten by elevenlabs after each completed voice generation and delivery
@@ -492,8 +505,43 @@ except Exception as e:
     print(f"Error setting up Google integration: {e}")
     traceback.print_exc()
     USE_GOOGLE = False
+# =============================================================================
+# Manager Initialization
+# =============================================================================
+try:
+    # Initialize notification manager first
+    notification_manager = NotificationManager(audio_manager)
+    
+    # Initialize email manager with Google credentials
+    email_manager = EmailManager(creds) if USE_GOOGLE else None
+    
+    # Initialize document manager
+    document_manager = DocumentManager()  # Document manager no longer needs email_manager
+    
+    # Now initialize system manager with all available components
+    async def init_system_manager():
+        global system_manager
+        async with system_manager_lock:
+            system_manager = SystemManager(
+                email_manager=email_manager,
+                display_manager=display_manager,
+                audio_manager=audio_manager,
+                document_manager=document_manager,
+                notification_manager=notification_manager,
+                token_manager=token_manager,
+                tts_handler=tts_handler,
+                anthropic_client=anthropic_client
+            )
+        return system_manager
 
-email_manager = EmailManager(creds)  # Where creds is your Google credentials
+    # Run system manager initialization
+    asyncio.get_event_loop().run_until_complete(init_system_manager())
+    print("Manager initialization completed successfully")
+    
+except Exception as e:
+    print(f"Error during manager initialization: {e}")
+    traceback.print_exc()
+    raise
 
 # =============================================================================
 # Core Component Initialization
@@ -1892,7 +1940,7 @@ async def main():
 
 
         # NEW: Load chat log from recent context
-        chat_log = load_recent_context()
+        chat_log = load_recent_context(token_manager=token_manager)
         print("\n=== Chat Log Initialization Debug ===")
         print(f"Timestamp: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"Total messages in chat_log: {len(chat_log)}")
@@ -2027,8 +2075,9 @@ async def run_main_loop():
         if system_manager is None:
             try:
                 print("Initializing SystemManager...")
+                
                 # Initialize NotificationManager if needed first
-                if 'notification_manager' not in globals():
+                if notification_manager is None:
                     try:
                         print("Initializing NotificationManager...")
                         notification_manager = NotificationManager(audio_manager)
@@ -2036,24 +2085,42 @@ async def run_main_loop():
                         print("NotificationManager initialized successfully")
                     except Exception as e:
                         print(f"Error initializing NotificationManager: {e}")
-                        print("NotificationManager initialization failed")
+                        traceback.print_exc()
                         return
 
-                # Now create SystemManager with all required parameters
-                system_manager = SystemManager(
-                    display_manager=display_manager,
-                    audio_manager=audio_manager,
-                    document_manager=document_manager,
-                    notification_manager=notification_manager,
-                    token_manager=token_manager
-                )
-                print("SystemManager initialized successfully")
-                print(f"{Fore.MAGENTA}Listening for wake word or press Raspberry button to begin...{Fore.WHITE}")
+                # Create and initialize SystemManager with all dependencies
+                try:
+                    system_manager = SystemManager(
+                        email_manager=email_manager,
+                        display_manager=display_manager,
+                        audio_manager=audio_manager,
+                        document_manager=document_manager,
+                        notification_manager=notification_manager,
+                        token_manager=token_manager,
+                        tts_handler=tts_handler,
+                        anthropic_client=anthropic_client
+                    )
+                    
+                    # Register managers with tool registry
+                    await system_manager.register_managers()
+                    
+                    # Verify initialization
+                    if not system_manager.is_initialized():
+                        raise RuntimeError("System Manager initialization incomplete")
+                        
+                    print("SystemManager initialized successfully")
+                    print(f"{Fore.MAGENTA}Listening for wake word or press Raspberry button to begin...{Fore.WHITE}")
+                    
+                except Exception as e:
+                    print(f"Error setting up SystemManager: {e}")
+                    traceback.print_exc()
+                    return
+                    
             except Exception as e:
-                print(f"Error initializing SystemManager: {e}")
-                print("SystemManager initialization failed")
+                print(f"Error in SystemManager initialization: {e}")
+                traceback.print_exc()
                 return
-
+    
     while True:
         # Start of iteration - clear variables
         wake_detected = False
