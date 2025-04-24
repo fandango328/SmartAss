@@ -29,12 +29,7 @@ try:
         create_task_from_email,
         create_task_for_event
     )
-except ImportError:
-    # Fallback if import fails
-    def get_random_audio(category, context=None):
-        """Fallback implementation if main function unavailable"""
-        print(f"Warning: Using fallback get_random_audio for {category}/{context}")
-        return None
+from function_definitions import get_random_audio
         
 RECURRENCE_TERMS = {
     "recurring": "recurring",    # standard spelling
