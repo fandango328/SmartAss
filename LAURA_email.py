@@ -129,7 +129,6 @@ from config import (
     CALENDAR_NOTIFICATION_SENTENCES
 )
 from function_definitions import (
-    get_random_audio,
     get_current_time,
     get_location,
     create_calendar_event,
@@ -140,8 +139,11 @@ from function_definitions import (
     create_task_for_event,
     load_recent_context,
     get_calendar_service,
-    save_to_log_file  
+    save_to_log_file,
+    sanitize_messages_for_api  
 )
+
+from core_functions import get_random_audio
 from tool_registry import tool_registry
 
 
@@ -794,7 +796,7 @@ async def generate_response(query: str) -> str:
         )
         
         if not already_added:
-            chat_log.append(storage_message)
+            chat_log.append(chat_message)
 
         # ✓ Updated: Tool execution check with registry
         use_tools = token_manager.tools_are_active()
@@ -888,78 +890,101 @@ async def generate_response(query: str) -> str:
             if not response or not response.content:
                 raise ValueError("Empty response from API")
 
-            # ✓ Updated: Handle tool use with registry access
+            # Handle tool use with registry access
             if response.stop_reason == "tool_use":
-                tool_call = next((block for block in response.content if block.type == "tool_use"), None)
-                if not tool_call:
-                    raise ValueError("Tool use indicated but no tool call found")
-
-                await display_manager.update_display('tools', specific_image='use')
-                tool_sound = get_random_audio('tool', 'use')
-                
-                if tool_sound:
-                    # Play pre-recorded acknowledgment without TTS
-                    await audio_manager.queue_audio(
-                        audio_file=tool_sound,
-                        priority=True
-                    )
-                    await audio_manager.wait_for_queue_empty()
-
-                # Preserved tool execution logic
                 try:
-                    tool_result = await system_manager.execute_tool_with_feedback(tool_call)
-                    if tool_result:
+                    # Log tool detection
+                    print("DEBUG: Tool use detected!")
+                    
+                    tool_call = next((block for block in response.content if block.type == "tool_use"), None)
+                    if not tool_call:
+                        raise ValueError("Tool use indicated but no tool call found")
+
+                    # Add initial assistant response to chat log with full content blocks
+                    print("DEBUG: Adding assistant response to chat log with content types:")
+                    for block in response.content:
+                        print(f"  - Block type: {block.type}, ID: {getattr(block, 'id', 'no id')}")
+                    
+                    chat_log.append({
+                        "role": "assistant",
+                        "content": [block.model_dump() for block in response.content],
+                    })
+
+                    # Execute tool and get packaged response
+                    tool_result = await system_manager.execute_tool_with_feedback(
+                        tool_call,
+                        initial_response=response
+                    )
+
+                    # Add tool result to chat log for final API call
+                    print(f"DEBUG: Adding tool result to chat log for ID: {tool_result['tool_use_id']}")
+                    chat_log.append({
+                        "role": "user",
+                        "content": [tool_result]
+                    })
+
+                    # Make final API call with updated chat log
+                    print("\nDEBUG: Making final API call with updated chat log")
+                    final_response = system_manager.anthropic_client.messages.create(
+                        model=config.ANTHROPIC_MODEL,
+                        system=system_content,
+                        messages=sanitize_messages_for_api(chat_log),
+                        max_tokens=1024,
+                        temperature=0.7
+                    )
+
+                    if final_response and final_response.content:
+                        # Append final response to chat log
                         chat_log.append({
-                            "role": "user",
-                            "content": [{
-                                "type": "tool_result",
-                                "tool_use_id": tool_call.id,
-                                "content": tool_result
-                            }]
+                            "role": "assistant",
+                            "content": final_response.content[0].text
                         })
                         
-                        final_response = system_manager.anthropic_client.messages.create(
-                            model=config.ANTHROPIC_MODEL,
-                            system=system_content,
-                            messages=chat_log,
-                            max_tokens=1024,
-                            temperature=0.7
+                        processed_content = await process_response_content(
+                            final_response.content,
+                            system_manager,
+                            display_manager,
+                            audio_manager,
+                            notification_manager
                         )
-                        
-                        if final_response and final_response.content:
-                            processed_content = await process_response_content(final_response.content)
-                            
-                            try:
-                                final_audio = system_manager.tts_handler.generate_audio(str(processed_content))
-                                with open(AUDIO_FILE, "wb") as f:
-                                    f.write(final_audio)
-                                
-                                await display_manager.update_display('speaking', mood='casual')
-                                await notification_manager.queue_notification(
-                                    text=processed_content,
-                                    priority=1,
-                                    sound_file=AUDIO_FILE
-                                )
-                                await notification_manager.process_pending_notifications()
-                                
-                                return processed_content
-                                
-                            except Exception as e:
-                                print(f"Error in final response audio generation: {e}")
-                                raise
-                                
+
+                        # Wait for pre-recorded notification to finish before TTS
+                        await audio_manager.wait_for_queue_empty()
+                        await asyncio.sleep(0.5)  # Buffer time between notifications
+
+                        final_audio = system_manager.tts_handler.generate_audio(str(processed_content))
+                        with open(AUDIO_FILE, "wb") as f:
+                            f.write(final_audio)
+
+                        await audio_manager.queue_audio(audio_file=AUDIO_FILE)
+                        await audio_manager.wait_for_queue_empty()
+
+                        return processed_content
+
                 except Exception as e:
-                    print(f"Error in tool execution: {e}")
+                    print(f"Error in tool execution flow: {e}")
+                    traceback.print_exc()
                     raise
 
-            # Preserved non-tool response processing
-            processed_content = await process_response_content(response.content)
+            # Non-tool response processing
+            # Append response to chat log before processing
+            chat_log.append({
+                "role": "assistant",
+                "content": response.content[0].text
+            })
+            
+            processed_content = await process_response_content(
+                response.content,
+                system_manager,
+                display_manager,
+                audio_manager,
+                notification_manager
+            )
             final_audio = system_manager.tts_handler.generate_audio(str(processed_content))
             
             with open(AUDIO_FILE, "wb") as f:
                 f.write(final_audio)
             
-            await display_manager.update_display('speaking', mood='casual')
             await audio_manager.queue_audio(audio_file=AUDIO_FILE)
             await audio_manager.wait_for_queue_empty()
             
@@ -973,7 +998,6 @@ async def generate_response(query: str) -> str:
         print(f"Error in generate_response: {e}")
         traceback.print_exc()
         
-        # ✓ Updated: Consistent error handling with registry
         try:
             await display_manager.update_display('speaking', mood='disappointed')
             error_msg = "I apologize, but I encountered an error processing your request"
