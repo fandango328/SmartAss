@@ -15,10 +15,12 @@ from laura_tools import tool_registry
 import config
 from secret import ELEVENLABS_KEY
 
-from LAURA_email import (
+from core_functions import (
     run_vad_calibration,
     handle_calendar_query,
     process_response_content,
+    validate_llm_response,
+    handle_tool_sequence
 )
 
 from function_definitions import (
@@ -219,11 +221,11 @@ def _register_tool_handlers(self):
         basic_handlers = {
             "get_current_time": get_current_time,
             "get_location": get_location,
-            "calendar_query": lambda **kwargs: execute_calendar_query(
-                kwargs,
-                self.email_manager.service,  # Calendar service from email manager
-                self.notification_manager
-            ),
+            "calendar_query": lambda **kwargs: handle_calendar_query(
+				self.email_manager.service,
+				kwargs.get("query_type"),
+				**{k:v for k,v in kwargs.items() if k != "query_type"}
+			),
             "create_calendar_event": create_calendar_event,
             "update_calendar_event": update_calendar_event,
             "cancel_calendar_event": cancel_calendar_event,
