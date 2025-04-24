@@ -122,7 +122,7 @@ def __init__(self,
     tool_registry.register_manager('token', self.token_manager)
     tool_registry.register_manager('system', self)
     tool_registry.register_manager('tts', self.tts_handler)
-
+    
     # Register tool handlers through dedicated method
     self._register_tool_handlers()
 
@@ -198,35 +198,39 @@ def __init__(self,
     # Debug flag for command detection
     self.debug_detection = False
 
-    def _register_tool_handlers(self):
-        """Register core tool handlers with proper dependency injection."""
-        try:
-            # Phase 1: Register all managers first
-            if not tool_registry.get_manager('email'):
-                from email_manager import EmailManager
-                from secret import get_gmail_credentials
-                email_manager = EmailManager(get_gmail_credentials())
-                tool_registry.register_manager('email', email_manager)
+def _register_tool_handlers(self):
+    """Register core tool handlers with proper dependency injection."""
+    try:
+        # Phase 1: Register all managers first
+        if not tool_registry.get_manager('email'):
+            from email_manager import EmailManager
+            from secret import get_gmail_credentials
+            email_manager = EmailManager(get_gmail_credentials())
+            tool_registry.register_manager('email', email_manager)
 
-            # Phase 2: Register basic tool handlers
-            from function_definitions import (
-                get_current_time, get_location, create_calendar_event,
-                update_calendar_event, cancel_calendar_event, manage_tasks,
-                create_task_from_email, create_task_for_event
-            )
+        # Phase 2: Register basic tool handlers
+        from core_functions import execute_calendar_query
+        from function_definitions import (
+            get_current_time, get_location, create_calendar_event,
+            update_calendar_event, cancel_calendar_event, manage_tasks,
+            create_task_from_email, create_task_for_event
+        )
 
-            basic_handlers = {
-                "get_current_time": get_current_time,
-                "get_location": get_location,
-                "calibrate_voice_detection": self.run_vad_calibration,
-                "create_calendar_event": create_calendar_event,
-                "update_calendar_event": update_calendar_event,
-                "cancel_calendar_event": cancel_calendar_event,
-                "calendar_query": self.handle_calendar_query,
-                "manage_tasks": manage_tasks,
-                "create_task_from_email": create_task_from_email,
-                "create_task_for_event": create_task_for_event
-            }
+        basic_handlers = {
+            "get_current_time": get_current_time,
+            "get_location": get_location,
+            "calendar_query": lambda **kwargs: execute_calendar_query(
+                kwargs,
+                self.email_manager.service,  # Calendar service from email manager
+                self.notification_manager
+            ),
+            "create_calendar_event": create_calendar_event,
+            "update_calendar_event": update_calendar_event,
+            "cancel_calendar_event": cancel_calendar_event,
+            "manage_tasks": manage_tasks,
+            "create_task_from_email": create_task_from_email,
+            "create_task_for_event": create_task_for_event
+        }
             
             # Register basic handlers
             tool_registry.register_handlers(basic_handlers)
