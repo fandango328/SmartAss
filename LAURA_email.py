@@ -2002,14 +2002,13 @@ async def main():
 
         # EXECUTION PHASE
         # -------------------------------------------------------------
-        # Run all tasks concurrently with error handling
-        # Set initial state to sleep
-        await display_manager.update_display('sleep')
-
-        # EXECUTION PHASE
-        # -------------------------------------------------------------
-        # Run all tasks concurrently with error handling
+        # Set initial state to sleep and run all tasks
         try:
+            # Ensure display manager is initialized before setting initial state
+            if display_manager:
+                await display_manager.update_display('sleep')
+            
+            # Run all tasks concurrently with error handling
             await asyncio.gather(*tasks, return_exceptions=True)
         except Exception as e:
             print(f"Task execution error: {e}")
@@ -2073,22 +2072,37 @@ async def run_main_loop():
     # Initialize SystemManager if not already initialized
     async with system_manager_lock:
         if system_manager is None:
+            print("\nInitializing SystemManager...")
+            
+            # Verify required global managers exist
+            required_managers = {
+                'display_manager': display_manager,
+                'audio_manager': audio_manager,
+                'token_manager': token_manager,
+                'document_manager': document_manager
+            }
+            
+            missing_managers = [name for name, manager in required_managers.items() 
+                              if manager is None]
+            
+            if missing_managers:
+                print(f"\nError: Required managers not found: {', '.join(missing_managers)}")
+                return
+            
             try:
-                print("Initializing SystemManager...")
-                
-                # Initialize NotificationManager if needed first
+                # Initialize NotificationManager if needed
                 if notification_manager is None:
+                    print("\nInitializing NotificationManager...")
                     try:
-                        print("Initializing NotificationManager...")
                         notification_manager = NotificationManager(audio_manager)
                         await notification_manager.start()
                         print("NotificationManager initialized successfully")
-                    except Exception as e:
-                        print(f"Error initializing NotificationManager: {e}")
+                    except Exception as notif_error:
+                        print(f"Failed to initialize NotificationManager: {notif_error}")
                         traceback.print_exc()
                         return
 
-                # Create and initialize SystemManager with all dependencies
+                # Create SystemManager with verified dependencies
                 try:
                     system_manager = SystemManager(
                         email_manager=email_manager,
@@ -2101,23 +2115,25 @@ async def run_main_loop():
                         anthropic_client=anthropic_client
                     )
                     
-                    # Register managers with tool registry
+                    # Register and verify manager initialization
                     await system_manager.register_managers()
+                    is_init, missing = system_manager.is_initialized()
                     
-                    # Verify initialization
-                    if not system_manager.is_initialized():
-                        raise RuntimeError("System Manager initialization incomplete")
-                        
-                    print("SystemManager initialized successfully")
+                    if not is_init:
+                        print("\nSystem initialization failed!")
+                        print(f"Missing required managers: {', '.join(missing)}")
+                        return
+                    
+                    print("\nSystemManager initialized successfully")
                     print(f"{Fore.MAGENTA}Listening for wake word or press Raspberry button to begin...{Fore.WHITE}")
                     
-                except Exception as e:
-                    print(f"Error setting up SystemManager: {e}")
+                except Exception as sys_error:
+                    print(f"\nFailed to initialize SystemManager: {sys_error}")
                     traceback.print_exc()
                     return
                     
             except Exception as e:
-                print(f"Error in SystemManager initialization: {e}")
+                print(f"\nCritical error during initialization: {e}")
                 traceback.print_exc()
                 return
     
