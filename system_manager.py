@@ -16,7 +16,19 @@ import config
 from secret import ELEVENLABS_KEY
 
 try:
-    from LAURA_email import get_random_audio
+    from LAURA_email import (
+        get_random_audio,
+        get_current_time,
+        get_location,
+        run_vad_calibration,
+        create_calendar_event, 
+        update_calendar_event,
+        cancel_calendar_event, 
+        handle_calendar_query,
+        manage_tasks, 
+        create_task_from_email,
+        create_task_for_event
+    )
 except ImportError:
     # Fallback if import fails
     def get_random_audio(category, context=None):
@@ -95,13 +107,34 @@ class SystemManager:
             token_manager.set_system_manager(self)
                 
         # Initialize TTS handler
-        from secret import ELEVENLABS_KEY
         self.tts_handler = TTSHandler({
             "TTS_ENGINE": config.TTS_ENGINE,
             "ELEVENLABS_KEY": ELEVENLABS_KEY,
             "VOICE": config.VOICE,
             "ELEVENLABS_MODEL": config.ELEVENLABS_MODEL,
         })
+
+        # Register core tool handlers with the global tool registry
+        try:
+            tool_registry.register_handlers({
+                "get_current_time": get_current_time,
+                "get_location": get_location,
+                "calibrate_voice_detection": run_vad_calibration,
+                "create_calendar_event": create_calendar_event,
+                "update_calendar_event": update_calendar_event,
+                "cancel_calendar_event": cancel_calendar_event,
+                "calendar_query": handle_calendar_query,
+                "draft_email": email_manager.draft_email,
+                "read_emails": email_manager.read_emails,
+                "email_action": email_manager.email_action,
+                "manage_tasks": manage_tasks,
+                "create_task_from_email": create_task_from_email,
+                "create_task_for_event": create_task_for_event
+            })
+            print("Tool handlers registered successfully")
+        except Exception as e:
+            print(f"Error registering tool handlers: {e}")
+            traceback.print_exc()
 
         # Command patterns with enhanced natural language support
         self.command_patterns = {
@@ -174,7 +207,7 @@ class SystemManager:
 
         # Debug flag for command detection
         self.debug_detection = False
-        
+
     def _validate_llm_response(self, content) -> str:
         """
         Validate and sanitize LLM response content before processing.
@@ -255,12 +288,11 @@ class SystemManager:
             # Step 3: Process response content
             try:
                 validated_content = self._validate_llm_response(tool_response)
-                processed_content = await self.process_response_content(validated_content)
-                if not processed_content:
+                if not validated_content:
                     raise RuntimeError("Failed to process tool response content")
                     
                 # Step 4: Generate TTS audio
-                tts_audio = await self.tts_handler.generate_audio(processed_content)
+                tts_audio = await self.tts_handler.generate_audio(validated_content)
                 if not tts_audio:
                     raise RuntimeError("Failed to generate TTS audio")
                     
@@ -714,50 +746,38 @@ class SystemManager:
                     print(f"Error handling initial response: {e}")
             
             # Execute the tool
-            tool_args = tool_call.input
             if not hasattr(tool_call, 'name') or not tool_call.name:
                 raise ValueError("Invalid tool call - missing tool name")
                 
-            if tool_call.name not in self.token_manager.tool_handlers:
+            handler = tool_registry.get_handler(tool_call.name)
+            if not handler:
                 raise ValueError(f"Unsupported tool: {tool_call.name}")
                 
-            handler = self.token_manager.tool_handlers[tool_call.name]
+            # Get tool arguments
+            tool_args = {}
+            if hasattr(tool_call, 'input'):
+                tool_args = tool_call.input
+            elif hasattr(tool_call, 'arguments'):
+                try:
+                    tool_args = json.loads(tool_call.arguments)
+                except json.JSONDecodeError:
+                    tool_args = {}
             
-            # Special handling for calendar query
-            if tool_call.name == "calendar_query":
-                if tool_args["query_type"] == "next_event":
-                    tool_result = await handler(get_next_event)
-                elif tool_args["query_type"] == "day_schedule":
-                    tool_result = await handler(get_day_schedule)
-                else:
-                    tool_result = "Unsupported query type"
+            # Execute tool with proper async handling
+            if asyncio.iscoroutinefunction(handler):
+                tool_result = await handler(**tool_args)
             else:
-                # Standard tool execution
-                tool_result = await handler(**tool_args) if asyncio.iscoroutinefunction(handler) else handler(**tool_args)
+                tool_result = handler(**tool_args)
             
             # Record successful tool usage
             self.token_manager.record_tool_usage(tool_call.name)
             
-            # Process tool result with Claude
-            final_response = await self.anthropic_client.messages.create(
-                model=ANTHROPIC_MODEL,
-                messages=[{
-                    "role": "user",
-                    "content": [{
-                        "type": "tool_result",
-                        "tool_use_id": tool_call.id,
-                        "content": tool_result
-                    }]
-                }],
-                max_tokens=1024
-            )
-            
-            # Process final response
-            if final_response and final_response.content:
-                processed_content = self._validate_llm_response(final_response.content)
+            # Process the result
+            if tool_result:
+                processed_content = str(tool_result)
                 
                 # Generate and queue final audio
-                final_audio = self.tts_handler.generate_audio(str(processed_content))
+                final_audio = self.tts_handler.generate_audio(processed_content)
                 with open("speech.mp3", "wb") as f:
                     f.write(final_audio)
                     
@@ -773,8 +793,8 @@ class SystemManager:
                 # Return to listening state
                 await self.display_manager.update_display('listening')
                 return processed_content
-                
-            raise ValueError("Empty response from Claude")
+            
+            raise ValueError("Empty result from tool execution")
             
         except Exception as e:
             print(f"Error in tool execution: {e}")
