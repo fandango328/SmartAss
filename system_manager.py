@@ -79,160 +79,203 @@ class SystemManager:
        - Uses existing states for error conditions
        - Provides graceful degradation
        - Ensures state consistency
-    """
+    """   
+    def __init__(self, email_manager=None, display_manager=None, audio_manager=None,
+                 document_manager=None, notification_manager=None, token_manager=None,
+                 tts_handler=None, anthropic_client=None):
+        """
+        Initialize SystemManager with all required dependencies.
+        
+        Args:
+            email_manager: EmailManager instance for handling email operations
+            display_manager: DisplayManager for UI updates
+            audio_manager: AudioManager for sound handling
+            document_manager: DocumentManager for file operations
+            notification_manager: NotificationManager for system notifications
+            token_manager: TokenManager for API token management
+            tts_handler: TTSHandler for text-to-speech
+            anthropic_client: Anthropic client for AI operations
+        """
+        self.email_manager = email_manager
+        self.display_manager = display_manager
+        self.audio_manager = audio_manager
+        self.document_manager = document_manager
+        self.notification_manager = notification_manager
+        self.token_manager = token_manager
+        self.tts_handler = tts_handler
+        self.anthropic_client = anthropic_client
+                # Initialization tracking
+        self._initialized_managers = {
+            'email': False,
+            'display': False,
+            'audio': False,
+            'document': False,
+            'notification': False,
+            'token': False,
+            'tts': False,
+            'anthropic': False
+        }
+        
+        self.debug_detection = False
+        self.command_patterns = {
+            "document": {
+                "load": [
+                    "load file", "load files", "load all files",
+                    "load my file", "load my files"
+                ],
+                "offload": [
+                    "offload file", "offload files", "clear files",
+                    "remove files", "clear all files"
+                ]
+            },
+            "tool": {
+                "enable": [
+                    "tools activate", "enable tools", "start tools",
+                    "tools online", "enable tool use"
+                ],
+                "disable": [
+                    "tools offline", "disable tools", "stop tools",
+                    "tools off", "disable tool use", "stop tool",
+                    "tools stop", "tool stop"
+                ]
+            },
+            "calibration": {
+                "calibrate": [
+                    "calibrate voice", "calibrate detection",
+                    "voice calibration", "detection calibration"
+                ]
+            },
+            "reminder": {
+                "clear": [
+                    "clear reminder", "dismiss reminder", "acknowledge reminder",
+                    "clear notification", "dismiss notification", 
+                    "I've finished my task", "I've taken my medicine"
+                ],
+                "add": [
+                    f"add {term} reminder" for term in RECURRENCE_TERMS.keys()
+                ] + [
+                    f"create {term} reminder" for term in RECURRENCE_TERMS.keys()
+                ] + [
+                    f"set {term} reminder" for term in RECURRENCE_TERMS.keys()
+                ] + [
+                    f"schedule {term} reminder" for term in RECURRENCE_TERMS.keys()
+                ],
+                "update": [
+                    f"update {term} reminder" for term in RECURRENCE_TERMS.keys()
+                ] + [
+                    f"change {term} reminder" for term in RECURRENCE_TERMS.keys()
+                ] + [
+                    f"modify {term} reminder" for term in RECURRENCE_TERMS.keys()
+                ],
+                "list": [
+                    f"list {term} reminders" for term in RECURRENCE_TERMS.keys()
+                ] + [
+                    f"show {term} reminders" for term in RECURRENCE_TERMS.keys()
+                ] + [
+                    f"active {term} reminders" for term in RECURRENCE_TERMS.keys()
+                ]
+            },
+            "persona": {
+                "switch": [
+                    "change character to", "talk to", "switch to", "change to",
+                    "load personality", "load character", "load assistant",
+                    "switch personality", "change personality",
+                    "switch character to", "switch voice", "change voice"
+                ]
+            }
+        }
 
-def __init__(self,
-             display_manager,
-             audio_manager,
-             document_manager,
-             notification_manager,
-             token_manager):
-    """
-    Initialize SystemManager with required components using dependency injection.
-    
-    Args:
-        display_manager: Handles visual feedback and animations
-        audio_manager: Controls audio playback and synchronization
-        document_manager: Manages document loading and state
-        notification_manager: Handles system notifications
-        token_manager: Manages token usage
-    """
-    # Store manager references
-    self.display_manager = display_manager
-    self.audio_manager = audio_manager
-    self.document_manager = document_manager
-    self.notification_manager = notification_manager
-    self.token_manager = token_manager
-    
-    # Set up bidirectional reference if needed
-    if hasattr(token_manager, 'set_system_manager'):
-        token_manager.set_system_manager(self)
+    def _update_initialization_status(self):
+        """Update the initialization status of all managers."""
+        self._initialized_managers.update({
+            'email': self.email_manager is not None,
+            'display': self.display_manager is not None,
+            'audio': self.audio_manager is not None,
+            'document': self.document_manager is not None,
+            'notification': self.notification_manager is not None,
+            'token': self.token_manager is not None,
+            'tts': self.tts_handler is not None,
+            'anthropic': self.anthropic_client is not None
+        })
+                
+    def _initialize_clients(self):
+        """Initialize TTS and Anthropic clients with configuration."""
+        if not self.tts_handler:
+            self.tts_handler = TTSHandler({
+                "TTS_ENGINE": config.TTS_ENGINE,
+                "ELEVENLABS_KEY": ELEVENLABS_KEY,
+                "VOICE": config.VOICE,
+                "ELEVENLABS_MODEL": config.ELEVENLABS_MODEL,
+            })
+        
+        if not self.anthropic_client:
+            from secret import ANTHROPIC_API_KEY
+            from anthropic import Anthropic
+            self.anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY)
             
-    # Initialize TTS handler
-    self.tts_handler = TTSHandler({
-        "TTS_ENGINE": config.TTS_ENGINE,
-        "ELEVENLABS_KEY": ELEVENLABS_KEY,
-        "VOICE": config.VOICE,
-        "ELEVENLABS_MODEL": config.ELEVENLABS_MODEL,
-    })
+    def register_managers(self):
+        """Register all available managers with the tool registry."""
+        # Register managers if they exist
+        if self.display_manager:
+            tool_registry.register_manager('display', self.display_manager)
+        if self.audio_manager:
+            tool_registry.register_manager('audio', self.audio_manager)
+        if self.document_manager:
+            tool_registry.register_manager('document', self.document_manager)
+        if self.notification_manager:
+            tool_registry.register_manager('notification', self.notification_manager)
+        if self.token_manager:
+            tool_registry.register_manager('token', self.token_manager)
+            if hasattr(self.token_manager, 'set_system_manager'):
+                self.token_manager.set_system_manager(self)
+        if self.tts_handler:
+            tool_registry.register_manager('tts', self.tts_handler)
+        
+        tool_registry.register_manager('system', self)
+        
+        # Initialize clients if needed
+        self._initialize_clients()
+        
+        # Register tool handlers
+        self._register_tool_handlers()        
 
-    # Register all managers with tool registry
-    tool_registry.register_manager('display', self.display_manager)
-    tool_registry.register_manager('audio', self.audio_manager)
-    tool_registry.register_manager('document', self.document_manager)
-    tool_registry.register_manager('notification', self.notification_manager)
-    tool_registry.register_manager('token', self.token_manager)
-    tool_registry.register_manager('system', self)
-    tool_registry.register_manager('tts', self.tts_handler)
-    
-    # Register tool handlers through dedicated method
-    self._register_tool_handlers()
 
-    # Command patterns with enhanced natural language support
-    self.command_patterns = {
-        "document": {
-            "load": [
-                "load file", "load files", "load all files",
-                "load my file", "load my files"
-            ],
-            "offload": [
-                "offload file", "offload files", "clear files",
-                "remove files", "clear all files"
-            ]
-        },
-        "tool": {
-            "enable": [
-                "tools activate", "enable tools", "start tools",
-                "tools online", "enable tool use"
-            ],
-            "disable": [
-                "tools offline", "disable tools", "stop tools",
-                "tools off", "disable tool use", "stop tool",
-                "tools stop", "tool stop"
-            ]
-        },
-        "calibration": {
-            "calibrate": [
-                "calibrate voice", "calibrate detection",
-                "voice calibration", "detection calibration"
-            ]
-        },
-        "reminder": {
-            "clear": [
-                "clear reminder", "dismiss reminder", "acknowledge reminder",
-                "clear notification", "dismiss notification", 
-                "I've finished my task", "I've taken my medicine"
-            ],
-            "add": [
-                f"add {term} reminder" for term in RECURRENCE_TERMS.keys()
-            ] + [
-                f"create {term} reminder" for term in RECURRENCE_TERMS.keys()
-            ] + [
-                f"set {term} reminder" for term in RECURRENCE_TERMS.keys()
-            ] + [
-                f"schedule {term} reminder" for term in RECURRENCE_TERMS.keys()
-            ],
-            "update": [
-                f"update {term} reminder" for term in RECURRENCE_TERMS.keys()
-            ] + [
-                f"change {term} reminder" for term in RECURRENCE_TERMS.keys()
-            ] + [
-                f"modify {term} reminder" for term in RECURRENCE_TERMS.keys()
-            ],
-            "list": [
-                f"list {term} reminders" for term in RECURRENCE_TERMS.keys()
-            ] + [
-                f"show {term} reminders" for term in RECURRENCE_TERMS.keys()
-            ] + [
-                f"active {term} reminders" for term in RECURRENCE_TERMS.keys()
-            ]
-        },
-        "persona": {
-            "switch": [
-                "change character to", "talk to", "switch to", "change to",
-                "load personality", "load character", "load assistant",
-                "switch personality", "change personality",
-                "switch character to", "switch voice", "change voice"
-            ]
-        }
-    }
 
-    # Debug flag for command detection
-    self.debug_detection = False
+    def _register_tool_handlers(self):
+        """Register core tool handlers with proper dependency injection."""
+        try:
+            # Phase 1: Register all managers first
+            if not tool_registry.get_manager('email'):
+                from email_manager import EmailManager
+                email_manager = self.email_manager  # Use existing email manager
+                if email_manager:
+                    tool_registry.register_manager('email', email_manager)
+                else:
+                    print("Warning: No email manager available")
 
-def _register_tool_handlers(self):
-    """Register core tool handlers with proper dependency injection."""
-    try:
-        # Phase 1: Register all managers first
-        if not tool_registry.get_manager('email'):
-            from email_manager import EmailManager
-            from secret import get_gmail_credentials
-            email_manager = EmailManager(get_gmail_credentials())
-            tool_registry.register_manager('email', email_manager)
+            # Phase 2: Register basic tool handlers
+            from core_functions import execute_calendar_query
+            from function_definitions import (
+                get_current_time, get_location, create_calendar_event,
+                update_calendar_event, cancel_calendar_event, manage_tasks,
+                create_task_from_email, create_task_for_event
+            )
 
-        # Phase 2: Register basic tool handlers
-        from core_functions import execute_calendar_query
-        from function_definitions import (
-            get_current_time, get_location, create_calendar_event,
-            update_calendar_event, cancel_calendar_event, manage_tasks,
-            create_task_from_email, create_task_for_event
-        )
-
-        basic_handlers = {
-            "get_current_time": get_current_time,
-            "get_location": get_location,
-            "calendar_query": lambda **kwargs: handle_calendar_query(
-				self.email_manager.service,
-				kwargs.get("query_type"),
-				**{k:v for k,v in kwargs.items() if k != "query_type"}
-			),
-            "create_calendar_event": create_calendar_event,
-            "update_calendar_event": update_calendar_event,
-            "cancel_calendar_event": cancel_calendar_event,
-            "manage_tasks": manage_tasks,
-            "create_task_from_email": create_task_from_email,
-            "create_task_for_event": create_task_for_event
-        }
+            basic_handlers = {
+                "get_current_time": get_current_time,
+                "get_location": get_location,
+                "calendar_query": lambda **kwargs: handle_calendar_query(
+                    self.email_manager.service if self.email_manager else None,
+                    kwargs.get("query_type"),
+                    **{k:v for k,v in kwargs.items() if k != "query_type"}
+                ),
+                "create_calendar_event": create_calendar_event,
+                "update_calendar_event": update_calendar_event,
+                "cancel_calendar_event": cancel_calendar_event,
+                "manage_tasks": manage_tasks,
+                "create_task_from_email": create_task_from_email,
+                "create_task_for_event": create_task_for_event
+            }
             
             # Register basic handlers
             tool_registry.register_handlers(basic_handlers)
@@ -255,131 +298,6 @@ def _register_tool_handlers(self):
         except Exception as e:
             print(f"Error registering tool handlers: {e}")
             traceback.print_exc()
-
-    def _validate_llm_response(self, content) -> str:
-        """
-        Validate and sanitize LLM response content before processing.
-        Prevents binary data contamination and ensures proper content type.
-        
-        Args:
-            content: Raw response from LLM API
-            
-        Returns:
-            str: Validated and sanitized text content
-            
-        Raises:
-            ValueError: If content contains binary data or invalid formats
-        """
-        if isinstance(content, (bytes, bytearray)):
-            raise ValueError("Binary content detected in LLM response")
-            
-        if isinstance(content, str):
-            text = content
-        elif hasattr(content, 'text'):
-            text = content.text
-        elif isinstance(content, list):
-            text = ""
-            for block in content:
-                if hasattr(block, 'text'):
-                    text += block.text
-                elif isinstance(block, dict) and block.get('type') == 'text':
-                    text += block.get('text', '')
-                elif isinstance(block, str):
-                    text += block
-        else:
-            raise ValueError(f"Unsupported content type: {type(content)}")
-            
-        if any(indicator in text for indicator in [
-            'LAME3', '\xFF\xFB',  # MP3 headers
-            '\x89PNG',            # PNG header
-            '\xFF\xD8\xFF'       # JPEG header
-        ]):
-            raise ValueError("Binary data detected in text content")
-            
-        return text.strip()
-
-    async def _handle_tool_use_sequence(self, tool_response: str) -> bool:
-        """
-        Coordinate tool use sequence with proper state transitions and audio sync.
-        
-        The sequence follows:
-        1. Update display to tool use state
-        2. Start pre-recorded audio
-        3. Process response content
-        4. Wait for TTS generation
-        5. Handle audio transition
-        6. Restore appropriate display state
-        
-        Args:
-            tool_response: Response from tool execution
-            
-        Returns:
-            bool: Success status of the sequence
-        """
-        try:
-            # Step 1: Update display to tool use state
-            await self.display_manager.update_display('tools', specific_image='use')
-            
-            # Step 2: Queue and start pre-recorded audio
-            audio_folder = os.path.join(
-                f"/home/user/LAURA/sounds/{config.ACTIVE_PERSONA.lower()}/tool_sentences/use"
-            )
-            prerecorded_task = None
-            if os.path.exists(audio_folder):
-                mp3_files = [f for f in os.listdir(audio_folder) if f.endswith('.mp3')]
-                if mp3_files:
-                    audio_file = os.path.join(audio_folder, random.choice(mp3_files))
-                    prerecorded_task = asyncio.create_task(
-                        self.audio_manager.play_audio(audio_file)
-                    )
-            
-            # Step 3: Process response content
-            try:
-                validated_content = self._validate_llm_response(tool_response)
-                if not validated_content:
-                    raise RuntimeError("Failed to process tool response content")
-                    
-                # Step 4: Generate TTS audio
-                tts_audio = await self.tts_handler.generate_audio(validated_content)
-                if not tts_audio:
-                    raise RuntimeError("Failed to generate TTS audio")
-                    
-                # Save TTS audio
-                with open("speech.mp3", "wb") as f:
-                    f.write(tts_audio)
-                    
-                # Step 5: Handle audio transition
-                if prerecorded_task:
-                    try:
-                        await prerecorded_task
-                    except Exception as e:
-                        print(f"Warning: Error in pre-recorded audio: {e}")
-                        
-                # Add mandatory buffer
-                await asyncio.sleep(0.5)
-                
-                # Step 6: Update display and play TTS
-                await self.display_manager.update_display('speaking', mood='casual')
-                await self.audio_manager.play_audio("speech.mp3")
-                
-                # Wait for completion
-                await self.audio_manager.wait_for_audio_completion()
-                
-                # Return to listening state
-                await self.display_manager.update_display('listening')
-                return True
-                
-            except Exception as e:
-                print(f"Error in tool use sequence: {e}")
-                traceback.print_exc()
-                await self.display_manager.update_display('listening')
-                return False
-                
-        except Exception as e:
-            print(f"Critical error in tool use sequence: {e}")
-            traceback.print_exc()
-            await self.display_manager.update_display('listening')
-            return False
 
     def _normalize_command_input(self, transcript: str) -> str:
         """
@@ -475,6 +393,22 @@ def _register_tool_handlers(self):
         
         return False, None, None, None
 
+    def is_initialized(self) -> bool:
+        """
+        Check if the system manager is fully initialized with required components.
+        
+        Returns:
+            bool: True if all required managers are initialized
+        """
+        required_managers = {
+            'token_manager': self.token_manager,
+            'display_manager': self.display_manager,
+            'audio_manager': self.audio_manager,
+            'notification_manager': self.notification_manager
+        }
+        
+        return all(required_managers.values())
+
     async def handle_command(self, command_type: str, action: str, arguments: str = None) -> bool:
         """
         Execute system commands with proper state management and feedback.
@@ -487,27 +421,22 @@ def _register_tool_handlers(self):
         Returns:
             bool: Success status of command execution
         """
+        if not self.is_initialized():
+            print("Warning: System Manager not fully initialized")
+            return False
+            
         try:
             if command_type == "tool":
                 if action not in ["enable", "disable"]:
                     return False
                     
                 success = await self._handle_tool_state_change(action)
-                if success:
-                    audio_folder = os.path.join(
-                        f"/home/user/LAURA/sounds/{config.ACTIVE_PERSONA.lower()}/tool_sentences/status/{action}d"
-                    )
-                    if os.path.exists(audio_folder):
-                        mp3_files = [f for f in os.listdir(audio_folder) if f.endswith('.mp3')]
-                        if mp3_files:
-                            audio_file = os.path.join(audio_folder, random.choice(mp3_files))
-                            await self.audio_manager.queue_audio(audio_file=audio_file)
                 return success
-    
+
             elif command_type == "document":
                 if action == "load":
                     success = await self.document_manager.load_all_files(clear_existing=False)
-                    if success:
+                    if success and self.audio_manager:
                         folder_path = os.path.join(f"/home/user/LAURA/sounds/{config.ACTIVE_PERSONA.lower()}/file_sentences/loaded")
                         if os.path.exists(folder_path):
                             mp3_files = [f for f in os.listdir(folder_path) if f.endswith('.mp3')]
@@ -517,17 +446,18 @@ def _register_tool_handlers(self):
                     return success
                 else:  # offload
                     await self.document_manager.offload_all_files()
-                    folder_path = os.path.join(f"/home/user/LAURA/sounds/{config.ACTIVE_PERSONA.lower()}/file_sentences/offloaded")
-                    if os.path.exists(folder_path):
-                        mp3_files = [f for f in os.listdir(folder_path) if f.endswith('.mp3')]
-                        if mp3_files:
-                            audio_file = os.path.join(folder_path, random.choice(mp3_files))
-                            await self.audio_manager.queue_audio(audio_file=audio_file)
+                    if self.audio_manager:
+                        folder_path = os.path.join(f"/home/user/LAURA/sounds/{config.ACTIVE_PERSONA.lower()}/file_sentences/offloaded")
+                        if os.path.exists(folder_path):
+                            mp3_files = [f for f in os.listdir(folder_path) if f.endswith('.mp3')]
+                            if mp3_files:
+                                audio_file = os.path.join(folder_path, random.choice(mp3_files))
+                                await self.audio_manager.queue_audio(audio_file=audio_file)
                     return True
-    
+
             elif command_type == "calibration":
                 success = await self._run_calibration()
-                if success:
+                if success and self.audio_manager:
                     folder_path = os.path.join(f"/home/user/LAURA/sounds/{config.ACTIVE_PERSONA.lower()}/calibration_sentences")
                     if os.path.exists(folder_path):
                         mp3_files = [f for f in os.listdir(folder_path) if f.endswith('.mp3')]
@@ -535,19 +465,44 @@ def _register_tool_handlers(self):
                             audio_file = os.path.join(folder_path, random.choice(mp3_files))
                             await self.audio_manager.queue_audio(audio_file=audio_file)
                 return success
-    
+
             elif command_type == "reminder":
                 return await self._handle_reminder_command(action, arguments)
-    
+
             elif command_type == "persona":
                 return await self._handle_persona_command(action, arguments)
-    
+
             return False
-    
+
         except Exception as e:
             print(f"Command error: {str(e)}")
             print(f"Traceback: {traceback.format_exc()}")
             return False
+
+    def _verify_required_managers(self, *manager_names) -> bool:
+        """
+        Verify that required managers are initialized.
+        
+        Args:
+            *manager_names: Variable list of manager names to check
+            
+        Returns:
+            bool: True if all required managers are initialized
+            
+        Raises:
+            RuntimeError: If any required manager is not initialized
+        """
+        missing_managers = []
+        for manager_name in manager_names:
+            manager = getattr(self, f"{manager_name}_manager", None)
+            if manager is None:
+                missing_managers.append(manager_name)
+        
+        if missing_managers:
+            raise RuntimeError(
+                f"Required managers not initialized: {', '.join(missing_managers)}"
+            )
+        return True
 
     async def _handle_tool_state_change(self, state: str) -> bool:
         """
@@ -560,6 +515,9 @@ def _register_tool_handlers(self):
             bool: Success of the state change
         """
         try:
+            # Verify required managers are initialized
+            self._verify_required_managers('token', 'display')
+            
             # Update token manager state
             if state == "enable":
                 success = self.token_manager.enable_tools()
@@ -569,6 +527,17 @@ def _register_tool_handlers(self):
             if success:
                 # Use DisplayManager's path resolution
                 await self.display_manager.update_display('tools', specific_image=f"{state}d")
+                
+                # Play appropriate audio feedback if audio manager is available
+                if self.audio_manager:
+                    audio_folder = os.path.join(
+                        f"/home/user/LAURA/sounds/{config.ACTIVE_PERSONA.lower()}/tool_sentences/status/{state}d"
+                    )
+                    if os.path.exists(audio_folder):
+                        mp3_files = [f for f in os.listdir(audio_folder) if f.endswith('.mp3')]
+                        if mp3_files:
+                            audio_file = os.path.join(audio_folder, random.choice(mp3_files))
+                            await self.audio_manager.queue_audio(audio_file=audio_file)
                 return True
             
             await self.display_manager.update_display('listening')
@@ -577,9 +546,15 @@ def _register_tool_handlers(self):
         except Exception as e:
             print(f"Error in tool state change: {e}")
             traceback.print_exc()
-            await self.display_manager.update_display('listening')
-            return False
-
+            
+            # Try to return to listening state if display manager is available
+            if self.display_manager:
+                try:
+                    await self.display_manager.update_display('listening')
+                except Exception as display_error:
+                    print(f"Error updating display: {display_error}")
+        return False
+        
     async def show_tool_use(self) -> None:
         """
         Update display and start audio for tool use feedback.
