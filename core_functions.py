@@ -328,3 +328,45 @@ async def handle_tool_sequence(tool_response: str, system_manager, display_manag
         traceback.print_exc()
         await display_manager.update_display('listening')
         return False
+
+def get_random_audio(category: str, subtype: str) -> Optional[str]:
+    """
+    Get a random audio file from the specified category and subtype.
+    
+    Args:
+        category (str): Main category folder (e.g., 'tool', 'notification')
+        subtype (str): Subtype folder or specific type (e.g., 'use', 'status/enabled')
+        
+    Returns:
+        Optional[str]: Path to random audio file if found, None otherwise
+    """
+    try:
+        # Construct base path for audio files
+        audio_base = Path('audio')
+        category_path = audio_base / category
+        
+        # Handle subtypes with potential nested folders
+        if '/' in subtype:
+            subtype_parts = subtype.split('/')
+            for part in subtype_parts:
+                category_path = category_path / part
+        else:
+            category_path = category_path / subtype
+            
+        # Get list of audio files
+        audio_files = [
+            f for f in category_path.glob('*.mp3')
+            if f.is_file() and f.suffix.lower() == '.mp3'
+        ]
+        
+        if not audio_files:
+            print(f"No audio files found in {category_path}")
+            return None
+            
+        # Select random file
+        chosen_file = random.choice(audio_files)
+        return str(chosen_file)
+        
+    except Exception as e:
+        print(f"Error getting random audio: {e}")
+        return None
