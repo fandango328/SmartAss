@@ -139,8 +139,11 @@ from function_definitions import (
     create_task_from_email,
     create_task_for_event,
     load_recent_context,
-    get_calendar_service  
+    get_calendar_service,
+    save_to_log_file  
 )
+from tool_registry import tool_registry
+
 
 #BASE_URL = "https://openrouter.ai/api/v1/chat/completions"  # This is for using openrouter, right now i have it configured to use anthropic for handling query
 AUDIO_FILE = "speech.mp3" #gets saved-to/overwritten by elevenlabs after each completed voice generation and delivery
@@ -773,9 +776,16 @@ async def generate_response(query: str) -> str:
                     await audio_manager.wait_for_queue_empty()
             return "[CONTINUE]"
 
-        # Message storage (preserved logic)
-        storage_message = {"role": "user", "content": query}
-        save_to_log_file(storage_message)
+        # Log the user's message to chat history
+        try:
+            chat_message = {
+                "role": "user",
+                "content": query
+            }
+            save_to_log_file(chat_message)
+        except Exception as e:
+            print(f"Warning: Failed to save chat message to log: {e}")
+            traceback.print_exc()
         
         already_added = (
             len(chat_log) > 0 and 
@@ -979,6 +989,7 @@ async def generate_response(query: str) -> str:
         except Exception as audio_err:
             print(f"Error handling error notification: {audio_err}")
             return "An unexpected error occurred"
+            
 async def wake_word():
     """Wake word detection with notification-aware breaks"""
     global last_interaction_check, last_interaction
@@ -1819,7 +1830,7 @@ def sanitize_tool_interactions(chat_history):
 async def main():
     """
     Main entry point for LAURA (Language & Automation User Response Agent).
-
+    
     Manages the initialization and lifecycle of core system components:
     - Token Management: Handles API token usage and limits
     - Document Management: Controls file loading and processing
@@ -1833,194 +1844,194 @@ async def main():
     - Calendar monitoring
     - Heartbeat monitoring (for remote transcription)
 
-    Last Updated: 2025-03-28 20:37:10 UTC
+    Last Updated: 2025-04-24 16:36:20 UTC
     Author: fandango328
     """
-    global remote_transcriber, display_manager, transcriber, token_manager, chat_log, document_manager, system_manager, keyboard_device, keyboard_path
+    global remote_transcriber, display_manager, transcriber, token_manager
+    global chat_log, document_manager, system_manager, keyboard_device
+    global audio_manager, tts_handler, anthropic_client
     tasks = []
 
     try:
-        # KEYBOARD INITIALIZATION PHASE
-        #print(f"\n{Fore.CYAN}=== Keyboard Initialization Phase ==={Fore.WHITE}")
-        #print(f"{Fore.CYAN}Available input devices:{Fore.WHITE}")
-        keyboard_devices = []  # List to store keyboard devices
-        #print(f"\nAvailable input devices:")
+        # CORE MANAGER INITIALIZATION PHASE
+        print("\n=== Core Manager Initialization ===")
+        
+        # 1. Display Manager (Primary UI System)
+        print("\nInitializing Display Manager...")
+        try:
+            display_manager = DisplayManager()
+        except Exception as e:
+            print(f"Critical Error: Display initialization failed: {e}")
+            return
 
+        # 2. Audio System
+        print("\nInitializing Audio Manager...")
+        try:
+            audio_manager = AudioManager()
+        except Exception as e:
+            print(f"Critical Error: Audio initialization failed: {e}")
+            return
+
+        # 3. Anthropic Client and Token Management
+        print("\nInitializing Token Management...")
+        try:
+            if not anthropic_client:
+                from anthropic import Anthropic
+                anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY)
+            token_manager = TokenManager(anthropic_client=anthropic_client)
+            token_manager.start_session()
+        except Exception as e:
+            print(f"Critical Error: Token management initialization failed: {e}")
+            return
+
+        # 4. TTS Handler
+        print("\nInitializing TTS Handler...")
+        try:
+            from config import TTS_ENGINE, VOICE, ELEVENLABS_MODEL
+            from secret import ELEVENLABS_KEY
+            
+            tts_config = {
+                "TTS_ENGINE": TTS_ENGINE,
+                "ELEVENLABS_KEY": ELEVENLABS_KEY,
+                "VOICE": VOICE,
+                "ELEVENLABS_MODEL": ELEVENLABS_MODEL
+            }
+            
+            print("TTS Configuration:")
+            print(f"- Engine: {tts_config['TTS_ENGINE']}")
+            print(f"- Voice: {tts_config['VOICE']}")
+            print(f"- Model: {tts_config['ELEVENLABS_MODEL']}")
+            
+            tts_handler = TTSHandler(tts_config)
+            print("TTS Handler initialized successfully")
+            
+        except ImportError as e:
+            print(f"Critical Error: Failed to import TTS configuration: {e}")
+            print("Ensure ElevenLabs parameters are defined in config.py")
+            return
+        except Exception as e:
+            print(f"Critical Error: TTS initialization failed: {e}")
+            print(f"Config attempted: {tts_config}")
+            return
+
+        # KEYBOARD INITIALIZATION PHASE
+        print("\n=== Keyboard Initialization ===")
+        keyboard_devices = []
+        
         for path in list_devices():
             try:
                 device = InputDevice(path)
-                #print(f"Device: {device.name} at {path}")
-
-                # Check if we can read from this device
                 try:
                     select.select([device.fd], [], [], 0)
-                    #print(f"  - Can read from device: YES")
-
-                    # Check for Pi 500 keyboard specifically
                     if "Pi 500" in device.name and "Keyboard" in device.name and "Mouse" not in device.name:
-                        #print(f"{Fore.GREEN}Found Pi 500 Keyboard!{Fore.WHITE}")
-                        # Try to get exclusive access
                         try:
                             device.grab()
-                            #print(f"  - Can grab device: YES")
-                            device.ungrab()  # Release the grab immediately
+                            device.ungrab()
                             keyboard_devices.append(device)
-                        except Exception as e:
-                            #print(f"  - Can grab device: NO - {e}")
+                        except Exception:
                             device.close()
                     else:
                         device.close()
-
-                except Exception as e:
-                    print(f"  - Can read from device: NO - {e}")
+                except Exception:
                     device.close()
-
             except Exception as e:
                 print(f"Error with device {path}: {e}")
 
-        #print(f"\nFound {len(keyboard_devices)} valid keyboard devices")
-
-            # Diagnostic: Reset and flush keyboard buffer
-        if keyboard_device:
-            try:
-                # Try to clear any pending events
-                #print(f"{Fore.CYAN}Flushing keyboard event buffer...{Fore.WHITE}")
-                # Read with very small timeout to clear buffer
-                r, w, x = select.select([keyboard_device.fd], [], [], 0.01)
-                if r:
-                    keyboard_device.read()
-                #print(f"{Fore.GREEN}Keyboard ready for input{Fore.WHITE}")
-            except Exception as e:
-                print(f"{Fore.YELLOW}Keyboard initialization note: {str(e)}{Fore.WHITE}")
-
-        # Use the first valid keyboard device
         if keyboard_devices:
             keyboard_device = keyboard_devices[0]
             print(f"{Fore.GREEN}Using keyboard device: {keyboard_device.path}{Fore.WHITE}")
-
-            # Do NOT grab exclusive access - that blocks normal keyboard input
             print(f"{Fore.GREEN}Using keyboard without exclusive access to allow normal typing{Fore.WHITE}")
-
-            # Debug: Print capabilities
-            #print("\nKeyboard capabilities:")
-            #caps = keyboard_device.capabilities(verbose=True)
-            #if ecodes.EV_KEY in caps:
-                #for key_info in caps[ecodes.EV_KEY]:
-                    #print(f"Key: {key_info[0]}, Code: {key_info[1]}")
-
-            # Keep other devices in case we need them
-            keyboard_device_alternates = keyboard_devices[1:]
         else:
             print(f"{Fore.YELLOW}No valid Pi 500 Keyboard found{Fore.WHITE}")
             keyboard_device = None
-            keyboard_device_alternates = []
 
-        # Debug: Print key mapping information
-        #if keyboard_device:
-        #    print(f"{Fore.CYAN}Keyboard capabilities:{Fore.WHITE}")
-        #    for event_type, event_codes in keyboard_device.capabilities(verbose=True).items():
-        #        if event_type[0] == 'EV_KEY':
-        #            for code in event_codes:
-        #                print(f"Key: {code[0]}, Code: {code[1]}")
+        # SUPPORTING MANAGERS INITIALIZATION
+        print("\n=== Supporting Managers Initialization ===")
+        
+        # Document Manager
+        print("\nInitializing Document Manager...")
+        try:
+            document_manager = DocumentManager()
+        except Exception as e:
+            print(f"Error: Document manager initialization failed: {e}")
+            return
 
-        # INITIALIZATION PHASE
-        # Google services should already be initialized in global scope
-        if not creds and USE_GOOGLE:
-            print(f"{Fore.RED}Warning: Google credentials not initialized in global scope{Fore.WHITE}")
-            return  # Exit if Google is required but not initialized
+        # Notification Manager
+        print("\nInitializing Notification Manager...")
+        try:
+            notification_manager = NotificationManager(audio_manager)
+            await notification_manager.start()
+        except Exception as e:
+            print(f"Error: Notification manager initialization failed: {e}")
+            return
 
-        print(f"{Fore.CYAN}Initializing token management system...{Fore.WHITE}")
-        token_manager = TokenManager(anthropic_client=anthropic_client)
-        token_manager.start_session()
+        # SYSTEM MANAGER INITIALIZATION
+        print("\nInitializing System Manager...")
+        try:
+            system_manager = SystemManager(
+                email_manager=email_manager,
+                display_manager=display_manager,
+                audio_manager=audio_manager,
+                document_manager=document_manager,
+                notification_manager=notification_manager,
+                token_manager=token_manager,
+                tts_handler=tts_handler,
+                anthropic_client=anthropic_client
+            )
+            await system_manager.register_managers()
+            
+            is_init, missing = system_manager.is_initialized()
+            if not is_init:
+                raise RuntimeError(f"System initialization incomplete. Missing: {', '.join(missing)}")
+                
+        except Exception as e:
+            print(f"Critical Error: System manager initialization failed: {e}")
+            return
 
-        # Initialize DocumentManager
-        print(f"{Fore.CYAN}Initializing document management system...{Fore.WHITE}")
-        document_manager = DocumentManager()
-
-
-
-        # NEW: Load chat log from recent context
-        chat_log = load_recent_context(token_manager=token_manager)
-        print("\n=== Chat Log Initialization Debug ===")
-        print(f"Timestamp: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')}")
-        print(f"Total messages in chat_log: {len(chat_log)}")
-
-        print("\nFirst 3 messages:")
-        for i, msg in enumerate(chat_log[:3]):
-            print(f"\nMessage {i}:")
-            print(f"Role: {msg.get('role', 'NO_ROLE')}")
-            print(f"Content Type: {type(msg.get('content', None))}")
-            print(f"Content Preview: {str(msg.get('content', ''))[:100]}")
-            print("-" * 50)
-
-        print("\nLast 3 messages:")
-        for i, msg in enumerate(chat_log[-3:]):
-            print(f"\nMessage {len(chat_log)-3+i}:")
-            print(f"Role: {msg.get('role', 'NO_ROLE')}")
-            print(f"Content Type: {type(msg.get('content', None))}")
-            print(f"Content Preview: {str(msg.get('content', ''))[:100]}")
-            print("-" * 50)
-        print(f"{Fore.CYAN}Loaded {len(chat_log)} messages from previous conversation{Fore.WHITE}")
-
-        # VERIFICATION PHASE
-        print(f"\n{Fore.CYAN}=== Token Management System Status ===")
-        print(f"✓ Token Manager: Initialized")
-        print(f"✓ Model: {token_manager.query_model}")
-        print(f"✓ Current Tool Status: {'Enabled' if token_manager.tools_are_active() else 'Disabled'}")
-        print(f"✓ Document Manager: Initialized")
-
-        # TRANSCRIPTION SETUP PHASE
-        # Initialize appropriate transcription system based on configuration
+        # TRANSCRIPTION SETUP
+        print("\n=== Transcription System Initialization ===")
         if TRANSCRIPTION_MODE == "remote":
-            # Remote transcription mode uses websocket-based service
             remote_transcriber = RemoteTranscriber()
             print(f"{Fore.YELLOW}Using remote transcription service{Fore.WHITE}")
         else:
-            # Local transcription mode uses either Vosk or WhisperCpp
             print(f"{Fore.YELLOW}Using local transcription{Fore.WHITE}")
-            if TRANSCRIPTION_MODE == "local":
-                print(f"{Fore.YELLOW}Using local transcription{Fore.WHITE}")
-                if TRANSCRIPTION_MODE == "local" and not transcriber:
-                    if TRANSCRIPTION_ENGINE == "vosk":
-                        print("Optimizing memory before loading Vosk model...")
-                        mem_info = optimize_memory()  # Add this line
-                        transcriber = VoskTranscriber(VOSK_MODEL_PATH)
-                    else:
-                        transcriber = WhisperCppTranscriber(WHISPER_MODEL_PATH, VAD_SETTINGS)
+            if not transcriber:
+                if TRANSCRIPTION_ENGINE == "vosk":
+                    print("Initializing Vosk transcriber...")
+                    transcriber = VoskTranscriber(VOSK_MODEL_PATH)
+                else:
+                    print("Initializing Whisper transcriber...")
+                    transcriber = WhisperCppTranscriber(WHISPER_MODEL_PATH, VAD_SETTINGS)
 
-        # TASK MANAGEMENT PHASE
-        # Create core application tasks
+        # CHAT LOG INITIALIZATION
+        print("\n=== Chat Log Initialization ===")
+        chat_log = load_recent_context(token_manager=token_manager)
+        print(f"Loaded {len(chat_log)} messages from previous conversation")
+
+        # TASK CREATION AND EXECUTION
+        print("\n=== Task Management ===")
         tasks = [
-            asyncio.create_task(display_manager.rotate_background()),  # Handles display animations
-            asyncio.create_task(run_main_loop()),                     # Main application loop
-            asyncio.create_task(check_upcoming_events())              # Calendar monitoring
+            asyncio.create_task(display_manager.rotate_background()),
+            asyncio.create_task(run_main_loop()),
+            asyncio.create_task(check_upcoming_events())
         ]
 
-        # Add websocket heartbeat task for remote transcription
         if TRANSCRIPTION_MODE == "remote":
             tasks.append(asyncio.create_task(heartbeat(remote_transcriber)))
 
-        # EXECUTION PHASE
-        # -------------------------------------------------------------
-        # Set initial state to sleep and run all tasks
-        try:
-            # Ensure display manager is initialized before setting initial state
-            if display_manager:
-                await display_manager.update_display('sleep')
-            
-            # Run all tasks concurrently with error handling
-            await asyncio.gather(*tasks, return_exceptions=True)
-        except Exception as e:
-            print(f"Task execution error: {e}")
-            traceback.print_exc()
+        # Set initial display state
+        await display_manager.update_display('sleep')
+        
+        # Execute all tasks
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     except Exception as e:
         print(f"Critical error in main function: {e}")
         traceback.print_exc()
+        
     finally:
         # CLEANUP PHASE
-        # -------------------------------------------------------------
-        # Cancel any running tasks
+        print("\n=== Cleanup Phase ===")
         for task in tasks:
             if not task.done():
                 task.cancel()
@@ -2029,38 +2040,22 @@ async def main():
                 except asyncio.CancelledError:
                     pass
 
-        # Cleanup transcription systems
         if TRANSCRIPTION_MODE == "remote" and remote_transcriber:
-            try:
-                await remote_transcriber.cleanup()
-            except Exception as e:
-                print(f"Remote transcriber cleanup error: {e}")
+            await remote_transcriber.cleanup()
         elif transcriber:
-            try:
-                transcriber.cleanup()
-            except Exception as e:
-                print(f"Local transcriber cleanup error: {e}")
+            transcriber.cleanup()
 
-        # Cleanup display and audio systems
-        try:
+        if display_manager:
             display_manager.cleanup()
-        except Exception as e:
-            print(f"Display manager cleanup error: {e}")
 
-        try:
+        if audio_manager:
             await audio_manager.reset_audio_state()
-        except Exception as e:
-            print(f"Audio manager cleanup error: {e}")
 
-        # Clean up keyboard device
         if keyboard_device:
-            try:
-                keyboard_device.close()
-                print(f"{Fore.GREEN}Keyboard device closed successfully{Fore.WHITE}")
-            except Exception as e:
-                print(f"Keyboard cleanup error: {e}")
+            keyboard_device.close()
+            print(f"{Fore.GREEN}Keyboard device closed successfully{Fore.WHITE}")
 
-        print(f"{Fore.GREEN}VOSK resources released{Fore.WHITE}")
+        print(f"{Fore.GREEN}All resources released{Fore.WHITE}")
 
 async def run_main_loop():
     """
@@ -2072,9 +2067,10 @@ async def run_main_loop():
     # Initialize SystemManager if not already initialized
     async with system_manager_lock:
         if system_manager is None:
-            print("\nInitializing SystemManager...")
+            print("\n=== System Manager Initialization Debug ===")
+            print(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
             
-            # Verify required global managers exist
+            # Verify and debug required global managers
             required_managers = {
                 'display_manager': display_manager,
                 'audio_manager': audio_manager,
@@ -2082,28 +2078,39 @@ async def run_main_loop():
                 'document_manager': document_manager
             }
             
+            print("\nManager Status:")
+            for name, manager in required_managers.items():
+                status = "✓ Available" if manager is not None else "✗ Missing"
+                print(f"{name}: {status}")
+                if manager is not None:
+                    print(f"  Type: {type(manager).__name__}")
+            
             missing_managers = [name for name, manager in required_managers.items() 
                               if manager is None]
             
             if missing_managers:
                 print(f"\nError: Required managers not found: {', '.join(missing_managers)}")
+                print("Initialization aborted.")
                 return
             
             try:
-                # Initialize NotificationManager if needed
+                print("\n--- Notification Manager Initialization ---")
                 if notification_manager is None:
-                    print("\nInitializing NotificationManager...")
+                    print("Status: Creating new instance")
                     try:
                         notification_manager = NotificationManager(audio_manager)
                         await notification_manager.start()
-                        print("NotificationManager initialized successfully")
+                        print("Status: Successfully initialized")
                     except Exception as notif_error:
-                        print(f"Failed to initialize NotificationManager: {notif_error}")
+                        print(f"Status: Failed - {str(notif_error)}")
                         traceback.print_exc()
                         return
+                else:
+                    print("Status: Using existing instance")
 
-                # Create SystemManager with verified dependencies
+                print("\n--- System Manager Creation ---")
                 try:
+                    print("Status: Creating new instance")
                     system_manager = SystemManager(
                         email_manager=email_manager,
                         display_manager=display_manager,
@@ -2115,25 +2122,27 @@ async def run_main_loop():
                         anthropic_client=anthropic_client
                     )
                     
-                    # Register and verify manager initialization
+                    print("Status: Registering managers")
                     await system_manager.register_managers()
+                    
+                    print("Status: Verifying initialization")
                     is_init, missing = system_manager.is_initialized()
                     
                     if not is_init:
-                        print("\nSystem initialization failed!")
-                        print(f"Missing required managers: {', '.join(missing)}")
+                        print("\nInitialization verification failed!")
+                        print(f"Missing components: {', '.join(missing)}")
                         return
                     
-                    print("\nSystemManager initialized successfully")
+                    print("\n=== System Manager Initialization Complete ===")
                     print(f"{Fore.MAGENTA}Listening for wake word or press Raspberry button to begin...{Fore.WHITE}")
                     
                 except Exception as sys_error:
-                    print(f"\nFailed to initialize SystemManager: {sys_error}")
+                    print(f"\nSystem Manager creation failed: {sys_error}")
                     traceback.print_exc()
                     return
                     
             except Exception as e:
-                print(f"\nCritical error during initialization: {e}")
+                print(f"\nCritical initialization error: {e}")
                 traceback.print_exc()
                 return
     
