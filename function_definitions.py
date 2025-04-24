@@ -1573,33 +1573,3 @@ def get_calendar_service():
         if DEBUG_CALENDAR:
             print(f"DEBUG: Error building calendar service: {e}")
         return None
-    
-def get_random_audio(category, context=None):
-    """
-    Get random audio file from specified category directory with context awareness
-
-    Args:
-        category: Main audio category (wake, tool, timeout, etc.)
-        context: Optional subcategory or specific context (e.g., 'loaded', 'use')
-                Can also be the wake word model filename
-
-    Returns:
-        Path to selected audio file or None if not found
-    """
-    try:
-        # Get the appropriate path
-        audio_path = get_audio_path(category, context)
-        
-        # Find audio files in the specified path
-        audio_files = list(audio_path.glob('*.mp3')) + list(audio_path.glob('*.wav'))
-
-        if audio_files:
-            chosen_file = str(random.choice(audio_files))
-            return chosen_file
-        else:
-            print(f"WARNING: No audio files found in {audio_path}")
-            return None
-
-    except Exception as e:
-        print(f"Error in get_random_audio: {str(e)}")
-        return None    
