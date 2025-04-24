@@ -79,133 +79,157 @@ class SystemManager:
        - Ensures state consistency
     """
 
-    def __init__(self,
-                 display_manager,
-                 audio_manager,
-                 document_manager,
-                 notification_manager,
-                 token_manager):
-        """
-        Initialize SystemManager with required components.
-        
-        Args:
-            display_manager: Handles visual feedback and animations
-            audio_manager: Controls audio playback and synchronization
-            document_manager: Manages document loading and state
-            notification_manager: Handles system notifications
-            token_manager: Manages token usage
-        """
-        self.display_manager = display_manager
-        self.audio_manager = audio_manager
-        self.document_manager = document_manager
-        self.notification_manager = notification_manager
-        self.token_manager = token_manager
-        
-        # Set up bidirectional reference if needed
-        if hasattr(token_manager, 'set_system_manager'):
-            token_manager.set_system_manager(self)
-                
-        # Initialize TTS handler
-        self.tts_handler = TTSHandler({
-            "TTS_ENGINE": config.TTS_ENGINE,
-            "ELEVENLABS_KEY": ELEVENLABS_KEY,
-            "VOICE": config.VOICE,
-            "ELEVENLABS_MODEL": config.ELEVENLABS_MODEL,
-        })
+def __init__(self,
+             display_manager,
+             audio_manager,
+             document_manager,
+             notification_manager,
+             token_manager):
+    """
+    Initialize SystemManager with required components using dependency injection.
+    
+    Args:
+        display_manager: Handles visual feedback and animations
+        audio_manager: Controls audio playback and synchronization
+        document_manager: Manages document loading and state
+        notification_manager: Handles system notifications
+        token_manager: Manages token usage
+    """
+    # Store manager references
+    self.display_manager = display_manager
+    self.audio_manager = audio_manager
+    self.document_manager = document_manager
+    self.notification_manager = notification_manager
+    self.token_manager = token_manager
+    
+    # Set up bidirectional reference if needed
+    if hasattr(token_manager, 'set_system_manager'):
+        token_manager.set_system_manager(self)
+            
+    # Initialize TTS handler
+    self.tts_handler = TTSHandler({
+        "TTS_ENGINE": config.TTS_ENGINE,
+        "ELEVENLABS_KEY": ELEVENLABS_KEY,
+        "VOICE": config.VOICE,
+        "ELEVENLABS_MODEL": config.ELEVENLABS_MODEL,
+    })
 
-        # Register core tool handlers with the global tool registry
-        try:
-            tool_registry.register_handlers({
-                "get_current_time": get_current_time,
-                "get_location": get_location,
-                "calibrate_voice_detection": run_vad_calibration,
-                "create_calendar_event": create_calendar_event,
-                "update_calendar_event": update_calendar_event,
-                "cancel_calendar_event": cancel_calendar_event,
-                "calendar_query": handle_calendar_query,
-                "draft_email": email_manager.draft_email,
-                "read_emails": email_manager.read_emails,
-                "email_action": email_manager.email_action,
-                "manage_tasks": manage_tasks,
-                "create_task_from_email": create_task_from_email,
-                "create_task_for_event": create_task_for_event
-            })
-            print("Tool handlers registered successfully")
-        except Exception as e:
-            print(f"Error registering tool handlers: {e}")
-            traceback.print_exc()
+    # Register all managers with tool registry
+    tool_registry.register_manager('display', self.display_manager)
+    tool_registry.register_manager('audio', self.audio_manager)
+    tool_registry.register_manager('document', self.document_manager)
+    tool_registry.register_manager('notification', self.notification_manager)
+    tool_registry.register_manager('token', self.token_manager)
+    tool_registry.register_manager('system', self)
+    tool_registry.register_manager('tts', self.tts_handler)
 
-        # Command patterns with enhanced natural language support
-        self.command_patterns = {
-            "document": {
-                "load": [
-                    "load file", "load files", "load all files",
-                    "load my file", "load my files"
-                ],
-                "offload": [
-                    "offload file", "offload files", "clear files",
-                    "remove files", "clear all files"
-                ]
-            },
-            "tool": {
-                "enable": [
-                    "tools activate", "enable tools", "start tools",
-                    "tools online", "enable tool use"
-                ],
-                "disable": [
-                    "tools offline", "disable tools", "stop tools",
-                    "tools off", "disable tool use", "stop tool",
-                    "tools stop", "tool stop"
-                ]
-            },
-            "calibration": {
-                "calibrate": [
-                    "calibrate voice", "calibrate detection",
-                    "voice calibration", "detection calibration"
-                ]
-            },
-            "reminder": {
-                "clear": [
-                    "clear reminder", "dismiss reminder", "acknowledge reminder",
-                    "clear notification", "dismiss notification", 
-                    "I've finished my task", "I've taken my medicine"
-                ],
-                "add": [
-                    f"add {term} reminder" for term in RECURRENCE_TERMS.keys()
-                ] + [
-                    f"create {term} reminder" for term in RECURRENCE_TERMS.keys()
-                ] + [
-                    f"set {term} reminder" for term in RECURRENCE_TERMS.keys()
-                ] + [
-                    f"schedule {term} reminder" for term in RECURRENCE_TERMS.keys()
-                ],
-                "update": [
-                    f"update {term} reminder" for term in RECURRENCE_TERMS.keys()
-                ] + [
-                    f"change {term} reminder" for term in RECURRENCE_TERMS.keys()
-                ] + [
-                    f"modify {term} reminder" for term in RECURRENCE_TERMS.keys()
-                ],
-                "list": [
-                    f"list {term} reminders" for term in RECURRENCE_TERMS.keys()
-                ] + [
-                    f"show {term} reminders" for term in RECURRENCE_TERMS.keys()
-                ] + [
-                    f"active {term} reminders" for term in RECURRENCE_TERMS.keys()
-                ]
-            },
-            "persona": {
-                "switch": [
-                    "change character to", "talk to", "switch to", "change to",
-                    "load personality", "load character", "load assistant",
-                    "switch personality", "change personality",
-                    "switch character to", "switch voice", "change voice"
-                ]
-            }
+    # Register tool handlers through dedicated method
+    self._register_tool_handlers()
+
+    # Command patterns with enhanced natural language support
+    self.command_patterns = {
+        "document": {
+            "load": [
+                "load file", "load files", "load all files",
+                "load my file", "load my files"
+            ],
+            "offload": [
+                "offload file", "offload files", "clear files",
+                "remove files", "clear all files"
+            ]
+        },
+        "tool": {
+            "enable": [
+                "tools activate", "enable tools", "start tools",
+                "tools online", "enable tool use"
+            ],
+            "disable": [
+                "tools offline", "disable tools", "stop tools",
+                "tools off", "disable tool use", "stop tool",
+                "tools stop", "tool stop"
+            ]
+        },
+        "calibration": {
+            "calibrate": [
+                "calibrate voice", "calibrate detection",
+                "voice calibration", "detection calibration"
+            ]
+        },
+        "reminder": {
+            "clear": [
+                "clear reminder", "dismiss reminder", "acknowledge reminder",
+                "clear notification", "dismiss notification", 
+                "I've finished my task", "I've taken my medicine"
+            ],
+            "add": [
+                f"add {term} reminder" for term in RECURRENCE_TERMS.keys()
+            ] + [
+                f"create {term} reminder" for term in RECURRENCE_TERMS.keys()
+            ] + [
+                f"set {term} reminder" for term in RECURRENCE_TERMS.keys()
+            ] + [
+                f"schedule {term} reminder" for term in RECURRENCE_TERMS.keys()
+            ],
+            "update": [
+                f"update {term} reminder" for term in RECURRENCE_TERMS.keys()
+            ] + [
+                f"change {term} reminder" for term in RECURRENCE_TERMS.keys()
+            ] + [
+                f"modify {term} reminder" for term in RECURRENCE_TERMS.keys()
+            ],
+            "list": [
+                f"list {term} reminders" for term in RECURRENCE_TERMS.keys()
+            ] + [
+                f"show {term} reminders" for term in RECURRENCE_TERMS.keys()
+            ] + [
+                f"active {term} reminders" for term in RECURRENCE_TERMS.keys()
+            ]
+        },
+        "persona": {
+            "switch": [
+                "change character to", "talk to", "switch to", "change to",
+                "load personality", "load character", "load assistant",
+                "switch personality", "change personality",
+                "switch character to", "switch voice", "change voice"
+            ]
         }
+    }
 
-        # Debug flag for command detection
-        self.debug_detection = False
+    # Debug flag for command detection
+    self.debug_detection = False
+
+def _register_tool_handlers(self):
+    """Register core tool handlers with proper dependency injection."""
+    try:
+        from function_definitions import (
+            get_current_time, get_location, create_calendar_event,
+            update_calendar_event, cancel_calendar_event, manage_tasks,
+            create_task_from_email, create_task_for_event
+        )
+
+        handlers = {
+            "get_current_time": get_current_time,
+            "get_location": get_location,
+            "calibrate_voice_detection": self.run_vad_calibration,
+            "create_calendar_event": create_calendar_event,
+            "update_calendar_event": update_calendar_event,
+            "cancel_calendar_event": cancel_calendar_event,
+            "calendar_query": self.handle_calendar_query,
+            "draft_email": self.email_manager.draft_email,
+            "read_emails": self.email_manager.read_emails,
+            "email_action": self.email_manager.email_action,
+            "manage_tasks": manage_tasks,
+            "create_task_from_email": create_task_from_email,
+            "create_task_for_event": create_task_for_event
+        }
+        
+        tool_registry.register_handlers(handlers)
+        tool_registry.initialize()
+        print("Tool handlers registered successfully")
+        
+    except Exception as e:
+        print(f"Error registering tool handlers: {e}")
+        traceback.print_exc()
 
     def _validate_llm_response(self, content) -> str:
         """
