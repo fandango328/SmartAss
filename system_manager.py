@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Optional, Tuple, Dict, Any
 from token_manager import TokenManager
 from tts_handler import TTSHandler
-from laura_tools import tool_registry
+from tool_registry import ToolRegistry, tool_registry
 import config
 from secret import ELEVENLABS_KEY
 
@@ -20,7 +20,8 @@ from core_functions import (
     handle_calendar_query,
     process_response_content,
     validate_llm_response,
-    handle_tool_sequence
+    handle_tool_sequence,
+    get_random_audio
 )
 
 from function_definitions import (
@@ -96,25 +97,51 @@ class SystemManager:
             tts_handler: TTSHandler for text-to-speech
             anthropic_client: Anthropic client for AI operations
         """
+        print("\nInitializing SystemManager with provided managers:")
+        
+        # Store manager instances
         self.email_manager = email_manager
+        print(f"- Email Manager: {'Present' if email_manager else 'Missing'}")
+        
         self.display_manager = display_manager
+        print(f"- Display Manager: {'Present' if display_manager else 'Missing'}")
+        
         self.audio_manager = audio_manager
+        print(f"- Audio Manager: {'Present' if audio_manager else 'Missing'}")
+        
         self.document_manager = document_manager
+        print(f"- Document Manager: {'Present' if document_manager else 'Missing'}")
+        
         self.notification_manager = notification_manager
+        print(f"- Notification Manager: {'Present' if notification_manager else 'Missing'}")
+        
         self.token_manager = token_manager
+        print(f"- Token Manager: {'Present' if token_manager else 'Missing'}")
+        
         self.tts_handler = tts_handler
+        print(f"- TTS Handler: {'Present' if tts_handler else 'Missing'}")
+        
         self.anthropic_client = anthropic_client
-                # Initialization tracking
+        print(f"- Anthropic Client: {'Present' if anthropic_client else 'Missing'}")
+        
+        # Initialize tracking dictionary with actual manager states
         self._initialized_managers = {
-            'email': False,
-            'display': False,
-            'audio': False,
-            'document': False,
-            'notification': False,
-            'token': False,
-            'tts': False,
-            'anthropic': False
+            'email': bool(email_manager),
+            'display': bool(display_manager),
+            'audio': bool(audio_manager),
+            'document': bool(document_manager),
+            'notification': bool(notification_manager),
+            'token': bool(token_manager),
+            'tts': bool(tts_handler),
+            'anthropic': bool(anthropic_client)
         }
+        
+        # Print initialization summary
+        print("\nRequired manager status:")
+        required = ['token', 'display', 'audio', 'notification']
+        for manager in required:
+            status = self._initialized_managers.get(manager, False)
+            print(f"- {manager}: {'✓ Initialized' if status else '✗ Not initialized'}")
         
         self.debug_detection = False
         self.command_patterns = {
@@ -198,50 +225,111 @@ class SystemManager:
             'anthropic': self.anthropic_client is not None
         })
                 
-    def _initialize_clients(self):
+    async def _initialize_clients(self):
         """Initialize TTS and Anthropic clients with configuration."""
-        if not self.tts_handler:
-            self.tts_handler = TTSHandler({
-                "TTS_ENGINE": config.TTS_ENGINE,
-                "ELEVENLABS_KEY": ELEVENLABS_KEY,
-                "VOICE": config.VOICE,
-                "ELEVENLABS_MODEL": config.ELEVENLABS_MODEL,
-            })
-        
-        if not self.anthropic_client:
-            from secret import ANTHROPIC_API_KEY
-            from anthropic import Anthropic
-            self.anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY)
+        try:
+            if not self.tts_handler:
+                self.tts_handler = TTSHandler({
+                    "TTS_ENGINE": config.TTS_ENGINE,
+                    "ELEVENLABS_KEY": ELEVENLABS_KEY,
+                    "VOICE": config.VOICE,
+                    "ELEVENLABS_MODEL": config.ELEVENLABS_MODEL,
+                })
+            self._initialized_managers['tts'] = bool(self.tts_handler)
             
-    def register_managers(self):
-        """Register all available managers with the tool registry."""
-        # Register managers if they exist
-        if self.display_manager:
-            tool_registry.register_manager('display', self.display_manager)
-        if self.audio_manager:
-            tool_registry.register_manager('audio', self.audio_manager)
-        if self.document_manager:
-            tool_registry.register_manager('document', self.document_manager)
-        if self.notification_manager:
-            tool_registry.register_manager('notification', self.notification_manager)
-        if self.token_manager:
-            tool_registry.register_manager('token', self.token_manager)
-            if hasattr(self.token_manager, 'set_system_manager'):
-                self.token_manager.set_system_manager(self)
-        if self.tts_handler:
-            tool_registry.register_manager('tts', self.tts_handler)
-        
-        tool_registry.register_manager('system', self)
-        
-        # Initialize clients if needed
-        self._initialize_clients()
-        
-        # Register tool handlers
-        self._register_tool_handlers()        
+            if not self.anthropic_client:
+                from secret import ANTHROPIC_API_KEY
+                from anthropic import Anthropic
+                self.anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY)
+            self._initialized_managers['anthropic'] = bool(self.anthropic_client)
+                
+        except Exception as e:
+            print(f"Error initializing clients: {e}")
+            traceback.print_exc()
+            
+    async def register_managers(self):
+        """Register all available managers with the tool registry and confirm initialization."""
+        try:
+            print("\nStarting manager registration process...")
+            
+            # Debug output for initial manager state
+            print("\nInitial manager states:")
+            for manager_name in ['display', 'audio', 'document', 'notification', 'token', 'tts', 'anthropic']:
+                manager = getattr(self, f"{manager_name}_manager", None)
+                print(f"- {manager_name}_manager: {'Present' if manager else 'Missing'}")
+            
+            # Register and track each manager
+            if self.display_manager:
+                print("\nRegistering display manager...")
+                tool_registry.register_manager('display', self.display_manager)
+                self._initialized_managers['display'] = True
+                print("✓ Display manager registered")
+                
+            if self.audio_manager:
+                print("\nRegistering audio manager...")
+                tool_registry.register_manager('audio', self.audio_manager)
+                self._initialized_managers['audio'] = True
+                print("✓ Audio manager registered")
+                
+            if self.document_manager:
+                print("\nRegistering document manager...")
+                tool_registry.register_manager('document', self.document_manager)
+                self._initialized_managers['document'] = True
+                print("✓ Document manager registered")
+                
+            if self.notification_manager:
+                print("\nRegistering notification manager...")
+                tool_registry.register_manager('notification', self.notification_manager)
+                self._initialized_managers['notification'] = True
+                print("✓ Notification manager registered")
+                
+            if self.token_manager:
+                print("\nRegistering token manager...")
+                tool_registry.register_manager('token', self.token_manager)
+                if hasattr(self.token_manager, 'set_system_manager'):
+                    self.token_manager.set_system_manager(self)
+                self._initialized_managers['token'] = True
+                print("✓ Token manager registered")
+            
+            # Register system manager before initializing clients
+            print("\nRegistering system manager...")
+            tool_registry.register_manager('system', self)
+            print("✓ System manager registered")
+            
+            # Initialize and register clients
+            print("\nInitializing clients...")
+            await self._initialize_clients()
+            
+            # Register tool handlers after system manager is registered
+            print("\nRegistering tool handlers...")
+            success = await self._register_tool_handlers()
+            if not success:
+                raise RuntimeError("Tool handler registration failed")
+            print("✓ Tool handlers registered")
+            
+            # Final verification and status report
+            print("\nFinal Initialization Status:")
+            required_managers = ['token', 'display', 'audio', 'notification']
+            all_initialized = True
+            
+            for manager in required_managers:
+                status = self._initialized_managers.get(manager, False)
+                print(f"- {manager}_manager: {'✓ Initialized' if status else '✗ Not initialized'}")
+                if not status:
+                    all_initialized = False
+            
+            if not all_initialized:
+                missing = [m for m in required_managers if not self._initialized_managers.get(m, False)]
+                print(f"\n⚠️  Warning: Required managers not initialized: {', '.join(missing)}")
+            else:
+                print("\n✅ All required managers successfully initialized")
+                
+        except Exception as e:
+            print(f"\n❌ Error during manager registration: {e}")
+            traceback.print_exc()
+            raise  # Re-raise the exception to ensure proper error handling
 
-
-
-    def _register_tool_handlers(self):
+    async def _register_tool_handlers(self):
         """Register core tool handlers with proper dependency injection."""
         try:
             # Phase 1: Register all managers first
@@ -292,12 +380,14 @@ class SystemManager:
             else:
                 print("Warning: Email manager not available, email-related tools will be disabled")
                 
-            tool_registry.initialize()
+            tool_registry.initialize()  # Removed await since this isn't an async method
             print("Tool handlers registered successfully")
+            return True
             
         except Exception as e:
             print(f"Error registering tool handlers: {e}")
             traceback.print_exc()
+            return False
 
     def _normalize_command_input(self, transcript: str) -> str:
         """
@@ -393,12 +483,12 @@ class SystemManager:
         
         return False, None, None, None
 
-    def is_initialized(self) -> bool:
+    def is_initialized(self) -> tuple[bool, list[str]]:
         """
         Check if the system manager is fully initialized with required components.
         
         Returns:
-            bool: True if all required managers are initialized
+            tuple: (bool: initialization status, list: missing manager names)
         """
         required_managers = {
             'token_manager': self.token_manager,
@@ -407,7 +497,10 @@ class SystemManager:
             'notification_manager': self.notification_manager
         }
         
-        return all(required_managers.values())
+        missing = [name for name, manager in required_managers.items() 
+                  if manager is None]
+        
+        return (len(missing) == 0, missing)
 
     async def handle_command(self, command_type: str, action: str, arguments: str = None) -> bool:
         """
@@ -421,13 +514,19 @@ class SystemManager:
         Returns:
             bool: Success status of command execution
         """
-        if not self.is_initialized():
+        # Enhanced initialization check with specific feedback
+        is_init, missing_managers = self.is_initialized()
+        if not is_init:
             print("Warning: System Manager not fully initialized")
+            print(f"Missing required managers: {', '.join(missing_managers)}")
             return False
             
         try:
+            print(f"\nExecuting command: {command_type} - {action}")
+            
             if command_type == "tool":
                 if action not in ["enable", "disable"]:
+                    print(f"Invalid tool action: {action}")
                     return False
                     
                 success = await self._handle_tool_state_change(action)
@@ -472,6 +571,7 @@ class SystemManager:
             elif command_type == "persona":
                 return await self._handle_persona_command(action, arguments)
 
+            print(f"Unknown command type: {command_type}")
             return False
 
         except Exception as e:
@@ -726,24 +826,68 @@ class SystemManager:
 
     async def execute_tool_with_feedback(self, tool_call, initial_response=None):
         """
-        Execute a tool with coordinated audio and visual feedback.
+        Execute a tool and manage feedback for the first part of a two-stage API interaction.
+        This method handles the sequence between first and final API calls.
+        
+        Flow:
+        1. Log assistant acknowledgment (from API or default)
+        2. Update display for tool state
+        3. Execute tool and get result
+        4. Queue pre-recorded notification
+        5. Return result for final API call in generate_response
         
         Args:
-            tool_call: Tool execution data from Claude
-            initial_response: Optional initial response text from Claude
+            tool_call: Tool execution data from first API call
+            initial_response: Optional acknowledgment from API
             
         Returns:
-            str: Processed response ready for TTS
+            dict: Contains tool result and metadata for final API call
+            {
+                'tool_id': str,            # ID of executed tool
+                'result': str,             # Tool execution result
+                'acknowledgment': str,     # What assistant said before execution
+            }
         """
         try:
-            # Start with thinking state
-            await self.display_manager.update_display('thinking')
+            # STEP 1: Log assistant acknowledgment
+            acknowledgment = initial_response if initial_response else "I'll help you with that right away."
+            chat_log.append({
+                "role": "assistant",
+                "content": acknowledgment
+            })
+            save_to_log_file({
+                "role": "assistant",
+                "content": acknowledgment
+            })
             
-            # Show tool use state and play acknowledgment
+            # STEP 2: Show tool execution state
             await self.display_manager.update_display('tools', specific_image='use')
             
-            # Queue and play tool acknowledgment sound
-            tool_sound = get_random_audio('tool', 'use')
+            # STEP 3: Execute tool
+            if not hasattr(tool_call, 'name') or not tool_call.name:
+                raise ValueError("Invalid tool call - missing tool name")
+                
+            handler = tool_registry.get_handler(tool_call.name)
+            if not handler:
+                raise ValueError(f"Unsupported tool: {tool_call.name}")
+                
+            # Execute tool directly with input if available
+            tool_args = getattr(tool_call, 'input', {}) or {}
+            
+            # Execute with proper async handling
+            if asyncio.iscoroutinefunction(handler):
+                tool_result = await handler(**tool_args)
+            else:
+                tool_result = handler(**tool_args)
+                
+            if not tool_result:
+                raise ValueError("Empty result from tool execution")
+                
+            # Record successful usage
+            self.token_manager.record_tool_usage(tool_call.name)
+            
+            # STEP 4: Queue pre-recorded notification
+            tool_sound = get_random_audio('tool', 'processing')
             if tool_sound:
                 await self.notification_manager.queue_notification(
                     text="Processing tool request",
@@ -752,98 +896,33 @@ class SystemManager:
                 )
                 await self.notification_manager.process_pending_notifications()
             
-            # Handle initial response if provided and not generic
-            if initial_response and not any(phrase in initial_response.lower() 
-                                          for phrase in ['let me check', 'one moment', 'just a second']):
-                try:
-                    initial_audio = self.tts_handler.generate_audio(str(initial_response))
-                    with open("speech.mp3.initial", "wb") as f:
-                        f.write(initial_audio)
-                    await self.notification_manager.queue_notification(
-                        text=initial_response,
-                        priority=1,
-                        sound_file="speech.mp3.initial"
-                    )
-                    await self.notification_manager.process_pending_notifications()
-                except Exception as e:
-                    print(f"Error handling initial response: {e}")
-            
-            # Execute the tool
-            if not hasattr(tool_call, 'name') or not tool_call.name:
-                raise ValueError("Invalid tool call - missing tool name")
-                
-            handler = tool_registry.get_handler(tool_call.name)
-            if not handler:
-                raise ValueError(f"Unsupported tool: {tool_call.name}")
-                
-            # Get tool arguments
-            tool_args = {}
-            if hasattr(tool_call, 'input'):
-                tool_args = tool_call.input
-            elif hasattr(tool_call, 'arguments'):
-                try:
-                    tool_args = json.loads(tool_call.arguments)
-                except json.JSONDecodeError:
-                    tool_args = {}
-            
-            # Execute tool with proper async handling
-            if asyncio.iscoroutinefunction(handler):
-                tool_result = await handler(**tool_args)
-            else:
-                tool_result = handler(**tool_args)
-            
-            # Record successful tool usage
-            self.token_manager.record_tool_usage(tool_call.name)
-            
-            # Process the result
-            if tool_result:
-                processed_content = str(tool_result)
-                
-                # Generate and queue final audio
-                final_audio = self.tts_handler.generate_audio(processed_content)
-                with open("speech.mp3", "wb") as f:
-                    f.write(final_audio)
-                    
-                # Update display and play response
-                await self.display_manager.update_display('speaking', mood='casual')
-                await self.notification_manager.queue_notification(
-                    text=processed_content,
-                    priority=1,
-                    sound_file="speech.mp3"
-                )
-                await self.notification_manager.process_pending_notifications()
-                
-                # Return to listening state
-                await self.display_manager.update_display('listening')
-                return processed_content
-            
-            raise ValueError("Empty result from tool execution")
+            # STEP 5: Return packaged result for final API call
+            return {
+                'tool_id': tool_call.id,
+                'result': str(tool_result),
+                'acknowledgment': acknowledgment
+            }
             
         except Exception as e:
             print(f"Error in tool execution: {e}")
             traceback.print_exc()
             
-            # Ensure error state is properly displayed
-            await self.display_manager.update_display('speaking', mood='disappointed')
-            error_msg = f"Sorry, there was an error executing the tool: {str(e)}"
+            error_msg = f"I encountered an error while processing your request: {str(e)}"
+            chat_log.append({
+                "role": "assistant",
+                "content": error_msg
+            })
+            save_to_log_file({
+                "role": "assistant",
+                "content": error_msg
+            })
             
-            try:
-                error_audio = self.tts_handler.generate_audio(error_msg)
-                with open("speech.mp3", "wb") as f:
-                    f.write(error_audio)
-                await self.notification_manager.queue_notification(
-                    text=error_msg,
-                    priority=1,
-                    sound_file="speech.mp3"
-                )
-                await self.notification_manager.process_pending_notifications()
-            except Exception as audio_err:
-                print(f"Error generating error audio: {audio_err}")
-                
-            # Return to listening state after error
-            await self.display_manager.update_display('listening')
-            return error_msg
-
+            return {
+                'tool_id': getattr(tool_call, 'id', 'error'),
+                'result': error_msg,
+                'acknowledgment': error_msg
+            }
+            
     async def _handle_persona_command(self, action: str, arguments: str = None) -> bool:
         """
         Handle persona switching with proper resource management.
