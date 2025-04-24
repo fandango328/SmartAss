@@ -11,8 +11,10 @@ from pathlib import Path
 from typing import Optional, Tuple, Dict, Any
 from token_manager import TokenManager
 from tts_handler import TTSHandler
+from laura_tools import tool_registry
 import config
 from secret import ELEVENLABS_KEY
+
 try:
     from LAURA_email import get_random_audio
 except ImportError:
@@ -71,7 +73,7 @@ class SystemManager:
                  audio_manager,
                  document_manager,
                  notification_manager,
-                 token_tracker):
+                 token_manager):
         """
         Initialize SystemManager with required components.
         
@@ -80,18 +82,18 @@ class SystemManager:
             audio_manager: Controls audio playback and synchronization
             document_manager: Manages document loading and state
             notification_manager: Handles system notifications
-            token_tracker: Manages tool state and token usage
+            token_manager: Manages token usage
         """
         self.display_manager = display_manager
         self.audio_manager = audio_manager
         self.document_manager = document_manager
         self.notification_manager = notification_manager
-        self.token_tracker = token_tracker
+        self.token_manager = token_manager
         
         # Set up bidirectional reference if needed
-        if hasattr(token_tracker, 'set_system_manager'):
-            token_tracker.set_system_manager(self)
-        
+        if hasattr(token_manager, 'set_system_manager'):
+            token_manager.set_system_manager(self)
+                
         # Initialize TTS handler
         from secret import ELEVENLABS_KEY
         self.tts_handler = TTSHandler({
@@ -480,9 +482,9 @@ class SystemManager:
         try:
             # Update token manager state
             if state == "enable":
-                success = self.token_tracker.enable_tools()
+                success = self.token_manager.enable_tools()
             else:
-                success = self.token_tracker.disable_tools()
+                success = self.token_manager.disable_tools()
                 
             if success:
                 # Use DisplayManager's path resolution
@@ -716,10 +718,10 @@ class SystemManager:
             if not hasattr(tool_call, 'name') or not tool_call.name:
                 raise ValueError("Invalid tool call - missing tool name")
                 
-            if tool_call.name not in self.token_tracker.tool_handlers:
+            if tool_call.name not in self.token_manager.tool_handlers:
                 raise ValueError(f"Unsupported tool: {tool_call.name}")
                 
-            handler = self.token_tracker.tool_handlers[tool_call.name]
+            handler = self.token_manager.tool_handlers[tool_call.name]
             
             # Special handling for calendar query
             if tool_call.name == "calendar_query":
@@ -734,7 +736,7 @@ class SystemManager:
                 tool_result = await handler(**tool_args) if asyncio.iscoroutinefunction(handler) else handler(**tool_args)
             
             # Record successful tool usage
-            self.token_tracker.record_tool_usage(tool_call.name)
+            self.token_manager.record_tool_usage(tool_call.name)
             
             # Process tool result with Claude
             final_response = await self.anthropic_client.messages.create(
