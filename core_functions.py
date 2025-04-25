@@ -6,6 +6,7 @@ import traceback
 import re
 from datetime import datetime
 from pathlib import Path
+from typing import Optional, List, Dict, Union, Any
 
 async def run_vad_calibration(system_manager, display_manager):
     """Run VAD calibration process with proper manager coordination"""
