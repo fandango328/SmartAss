@@ -143,7 +143,7 @@ from function_definitions import (
     sanitize_messages_for_api  
 )
 
-from core_functions import get_random_audio
+from core_functions import get_random_audio, process_response_content
 from tool_registry import tool_registry
 
 
