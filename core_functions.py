@@ -64,7 +64,7 @@ async def process_response_content(content, chat_log, system_manager, display_ma
     """
     Process API response content for voice generation and chat log storage.
     Handles mood detection, content formatting, ensures original message is saved, and robustly extracts text from 
-    structured content (blocks, dicts, etc.).
+    structured content (blocks, dicts, etc.). Provides deep debug logging for every step.
     
     Args:
         content: Raw response from API (can be str, dict, or structured content blocks)
@@ -78,65 +78,84 @@ async def process_response_content(content, chat_log, system_manager, display_ma
         str: Formatted message ready for voice generation
     """
     print(f"\n[{datetime.now().strftime('%H:%M:%S.%f')}] === Response Processing Debug ===")
-    print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Content type: {type(content)}")
-    print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Audio state - Speaking: {audio_manager.is_speaking}, Playing: {audio_manager.is_playing}")
-    print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Notification queue size: {notification_manager.notification_queue.qsize()}")
+    print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Incoming content type: {type(content)}")
+    print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Incoming content raw: {repr(content)}")
+    print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Audio state - Speaking: {getattr(audio_manager, 'is_speaking', None)}, Playing: {getattr(audio_manager, 'is_playing', None)}")
+    print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Notification queue size: {getattr(notification_manager.notification_queue, 'qsize', lambda: 'N/A')()}")
 
-    def extract_text_from_content(content):
-        """
-        Recursively extracts all relevant text from content, supporting
-        string, list of blocks, or dicts as returned by LLM/tool APIs.
-        """
+    def extract_text_from_content(content, depth=0):
+        indent = "  " * depth
+        print(f"{indent}Extracting text from: {type(content)}: {repr(content)[:80]}")
+
+        # Anthropic block objects (e.g., TextBlock), prefer .text field
+        if hasattr(content, "text") and isinstance(getattr(content, "text", None), str):
+            print(f"{indent}Block object with .text: {content.text[:80]}")
+            return content.text
+        if hasattr(content, "content"):
+            print(f"{indent}Block object with .content, recursing...")
+            return extract_text_from_content(content.content, depth+1)
         if isinstance(content, str):
+            print(f"{indent}Returning string directly.")
             return content
         elif isinstance(content, dict):
+            if "type" in content:
+                print(f"{indent}Block type: {content.get('type')}")
             # Prefer 'text', then 'content'
             if 'text' in content and isinstance(content['text'], str):
+                print(f"{indent}Found 'text' field.")
                 return content['text']
             elif 'content' in content and isinstance(content['content'], str):
+                print(f"{indent}Found 'content' field (str).")
                 return content['content']
             elif 'content' in content and isinstance(content['content'], list):
-                return extract_text_from_content(content['content'])
+                print(f"{indent}Found 'content' field (list), recursing...")
+                return extract_text_from_content(content['content'], depth+1)
             else:
                 # Fallback: join all string values in dict
-                return " ".join(str(v) for v in content.values() if isinstance(v, str))
+                join_strs = [str(v) for v in content.values() if isinstance(v, str)]
+                print(f"{indent}Fallback join of string values in dict: {join_strs}")
+                return " ".join(join_strs)
         elif isinstance(content, list):
-            # Only join text or valid text fields from blocks
+            print(f"{indent}Content is a list of length {len(content)}")
             result = []
-            for block in content:
-                result.append(extract_text_from_content(block))
-            return " ".join([x for x in result if x])
+            for idx, block in enumerate(content):
+                print(f"{indent}Processing list item {idx}: {type(block)}")
+                result.append(extract_text_from_content(block, depth+1))
+            joined = " ".join([x for x in result if x])
+            print(f"{indent}Joined list result: {repr(joined)[:80]}")
+            return joined
         else:
+            print(f"{indent}Unknown content type, using str().")
             return str(content)
 
     try:
         # Step 1: Parse content into usable text
         text = extract_text_from_content(content)
-        print(f"DEBUG - Full response text:\n{text}\n")
+        print(f"\nDEBUG - Full response text after extraction:\n{text}\n")
         
         # Step 2: Parse mood and preserve complete message
-        # Using [\s\S]* instead of .* to capture ALL content including newlines
-        # This ensures we don't truncate the message after the first line
         original_message = text  # Store original message before any processing
         mood_match = re.match(r'^\[(.*?)\]([\s\S]*)', text, re.IGNORECASE)
         if mood_match:
             raw_mood = mood_match.group(1)         # Extract mood from [mood]
             clean_message = mood_match.group(2)     # Get complete message content
             mapped_mood = None
-            # If you have a mood mapping, use it
             if 'MOOD_MAPPINGS' in globals():
                 mapped_mood = MOOD_MAPPINGS.get(raw_mood.lower(), None)
             else:
                 mapped_mood = raw_mood.lower()
             if mapped_mood and display_manager:
+                print(f"DEBUG - Mood detected and updating display: {mapped_mood}")
                 await display_manager.update_display('speaking', mood=mapped_mood)
-                print(f"DEBUG - Mood detected: {mapped_mood}")
         else:
             clean_message = text
             print("DEBUG - No mood detected in message")
 
         # Step 3: Format message for voice generation
         formatted_message = clean_message
+
+        # Deep debug before formatting
+        print(f"DEBUG - Pre-format message for voice: {repr(formatted_message)}")
         
         # Convert all newlines to spaces for continuous speech
         formatted_message = formatted_message.replace('\n', ' ')
@@ -171,7 +190,7 @@ async def process_response_content(content, chat_log, system_manager, display_ma
     except Exception as e:
         print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Content processing error: {e}")
         traceback.print_exc()
-        return "I apologize, but I encountered an error processing the response."       
+        return "I apologize, but I encountered an error processing the response."
         
 async def execute_calendar_query(tool_call: dict, calendar_service, notification_manager) -> str:
     """
