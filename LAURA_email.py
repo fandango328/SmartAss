@@ -863,9 +863,9 @@ async def generate_response(query: str) -> str:
         if not response or not response.content:
             raise ValueError("Empty response from API")
 
-        # Handle tool use
+        # Handle tool use (modernized, non-blocking pre-recorded audio, single TTS, robust chat log)
         if response.stop_reason == "tool_use":
-            # 1. Append initial assistant response (acknowledgment) to chat_log and log file
+            # 1. Extract and append the brief assistant acknowledgment to the chat log, save it (no TTS here)
             initial_assistant_msg = None
             for block in response.content:
                 if getattr(block, "type", None) == "text":
@@ -881,93 +881,92 @@ async def generate_response(query: str) -> str:
             except Exception as e:
                 print(f"Warning: Failed to save assistant message to log: {e}")
 
-            # 2. Find the tool_call
+            # 2. Find the tool_call block and ensure we have a valid tool call
             tool_call = next((block for block in response.content if getattr(block, "type", None) == "tool_use"), None)
             if not tool_call:
                 raise ValueError("Tool use indicated but no tool call found")
 
-            # 3. Execute tool and append tool_result as user message
+            # 3. Update display to tool-use visual state immediately
+            if display_manager:
+                await display_manager.update_display('tools', specific_image='use')
+
+            # 4. Execute the tool, package result, and append to chat log
             tool_result = await system_manager.execute_tool_with_feedback(tool_call)
-            if tool_result:
-                tool_result_msg = {
-                    "role": "user",
-                    "content": [{
-                        "type": "tool_result",
-                        "tool_use_id": tool_call.id,
-                        "content": tool_result["result"] if isinstance(tool_result, dict) and "result" in tool_result else tool_result,
-                    }]
-                }
-                chat_log.append(tool_result_msg)
-                try:
-                    save_to_log_file(tool_result_msg)
-                except Exception as e:
-                    print(f"Warning: Failed to save tool_result to log: {e}")
+            tool_result_msg = {
+                "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": tool_call.id,
+                    "content": tool_result["content"] if isinstance(tool_result, dict) and "content" in tool_result else tool_result,
+                }]
+            }
+            chat_log.append(tool_result_msg)
+            try:
+                save_to_log_file(tool_result_msg)
+            except Exception as e:
+                print(f"Warning: Failed to save tool_result to log: {e}")
 
-                # 4. Persona-aware pre-recorded audio (tool_sentences/use)
-                current_persona = getattr(config, "ACTIVE_PERSONA", "laura").lower()
-                audio_folder = f"/home/user/LAURA/sounds/{current_persona}/tool_sentences/use"
-                tool_sound = None
-                if os.path.exists(audio_folder):
-                    mp3_files = [f for f in os.listdir(audio_folder) if f.endswith('.mp3')]
-                    if mp3_files:
-                        tool_sound = os.path.join(audio_folder, random.choice(mp3_files))
-                if tool_sound:
-                    await audio_manager.queue_audio(audio_file=tool_sound, priority=True)
-                    await audio_manager.wait_for_queue_empty()
+            # 5. Prepare persona-aware pre-recorded audio (tool_sentences/use)
+            current_persona = getattr(config, "ACTIVE_PERSONA", "laura").lower()
+            audio_folder = f"/home/user/LAURA/sounds/{current_persona}/tool_sentences/use"
+            tool_sound = None
+            if os.path.exists(audio_folder):
+                mp3_files = [f for f in os.listdir(audio_folder) if f.endswith('.mp3')]
+                if mp3_files:
+                    tool_sound = os.path.join(audio_folder, random.choice(mp3_files))
 
-                # 5. Secondary API call with updated chat log
-                final_response = system_manager.anthropic_client.messages.create(
-                    model=config.ANTHROPIC_MODEL,
-                    system=system_content,
-                    messages=sanitize_messages_for_api(chat_log),
-                    max_tokens=1024,
-                    temperature=0.7
-                )
+            # 6. Start the secondary API call to get the final assistant response (do NOT block)
+            #    Use asyncio.to_thread to avoid blocking event loop with sync client
+            import asyncio
+            final_response_future = asyncio.to_thread(
+                system_manager.anthropic_client.messages.create,
+                model=config.ANTHROPIC_MODEL,
+                system=system_content,
+                messages=sanitize_messages_for_api(chat_log),
+                max_tokens=1024,
+                temperature=0.7
+            )
 
-                # 6. Process and TTS the final response
-                if final_response and final_response.content:
-                    processed_content = await process_response_content(
-                        final_response.content, chat_log, system_manager, display_manager, audio_manager, notification_manager
-                    )
-                    try:
-                        final_audio = system_manager.tts_handler.generate_audio(str(processed_content))
-                        with open(AUDIO_FILE, "wb") as f:
-                            f.write(final_audio)
-                        await display_manager.update_display('speaking', mood='casual')
-                        await audio_manager.queue_audio(audio_file=AUDIO_FILE)
-                        await audio_manager.wait_for_queue_empty()
-                        return processed_content
-                    except Exception as e:
-                        print(f"Error in final response audio generation: {e}")
-                        raise
+            # 7. Start pre-recorded audio masking (non-blocking, runs in parallel with API call)
+            tool_audio_task = None
+            if tool_sound:
+                tool_audio_task = asyncio.create_task(audio_manager.queue_audio(audio_file=tool_sound, priority=True))
+
+            # 8. Await the final API response and process it
+            final_response = await final_response_future
+            processed_content = await process_response_content(
+                final_response.content, chat_log, system_manager, display_manager, audio_manager, notification_manager
+            )
+
+            # 9. Generate TTS for the final response (do NOT play yet)
+            final_audio = system_manager.tts_handler.generate_audio(str(processed_content))
+            with open(AUDIO_FILE, "wb") as f:
+                f.write(final_audio)
+
+            # 10. If pre-recorded audio is still playing, wait for it, then .5s buffer; else short buffer
+            if tool_audio_task:
+                await tool_audio_task
+                await asyncio.sleep(0.5)
+            else:
+                await asyncio.sleep(0.2)
+
+            # 11. Play TTS audio, update display, and wait for completion
+            await display_manager.update_display('speaking', mood='casual')
+            await audio_manager.queue_audio(audio_file=AUDIO_FILE)
+            await audio_manager.wait_for_queue_empty()
+            return processed_content
 
         # Non-tool flow
         processed_content = await process_response_content(
             response.content, chat_log, system_manager, display_manager, audio_manager, notification_manager
         )
-        final_audio = system_manager.tts_handler.generate_audio(str(processed_content))
-        with open(AUDIO_FILE, "wb") as f:
-            f.write(final_audio)
-        await display_manager.update_display('speaking', mood='casual')
-        await audio_manager.queue_audio(audio_file=AUDIO_FILE)
-        await audio_manager.wait_for_queue_empty()
         return processed_content
 
     except Exception as e:
         print(f"Error in generate_response: {e}")
         traceback.print_exc()
-        try:
-            await display_manager.update_display('speaking', mood='disappointed')
-            error_msg = "I apologize, but I encountered an error processing your request"
-            error_audio = system_manager.tts_handler.generate_audio(error_msg)
-            with open(AUDIO_FILE, "wb") as f:
-                f.write(error_audio)
-            await audio_manager.queue_audio(audio_file=AUDIO_FILE)
-            await audio_manager.wait_for_queue_empty()
-            return error_msg
-        except Exception as audio_err:
-            print(f"Error handling error notification: {audio_err}")
-            return "An unexpected error occurred"
+        error_msg = "I apologize, but I encountered an error processing your request"
+        return error_msg
                         
 async def wake_word():
     """Wake word detection with notification-aware breaks"""
