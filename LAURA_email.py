@@ -753,6 +753,7 @@ async def generate_response(query: str) -> str:
     display_manager = tool_registry.get_manager('display')
     audio_manager = tool_registry.get_manager('audio')
     token_manager = tool_registry.get_manager('token')
+    notification_manager = tool_registry.get_manager('notification')
 
     now = datetime.now()
     last_interaction = now
@@ -765,6 +766,16 @@ async def generate_response(query: str) -> str:
         if was_command:
             mood = command_response.get('mood', 'casual')
             await display_manager.update_display('speaking', mood=mood)
+            if command_response.get('state') in ['enabled', 'disabled']:
+                status_type = command_response['state'].lower()
+                await display_manager.update_display('tools', specific_image=status_type)
+                audio_file = get_random_audio('tool', f'status/{status_type}')
+                if audio_file:
+                    await audio_manager.queue_audio(audio_file=audio_file, priority=True)
+                    await audio_manager.wait_for_queue_empty()
+            # If the command was a tool-enabling command, reflect tool state visually
+            elif command_response.get('state') == 'use':
+                await display_manager.update_display('tools', specific_image='use')
             return "[CONTINUE]"
 
         # Save user message to log and chat_log
@@ -810,14 +821,18 @@ async def generate_response(query: str) -> str:
         # --- Tool Use Loop ---
         while True:
             response = system_manager.anthropic_client.messages.create(**api_params)
-            if not response or not response.content:
+            if not response:
+                print("DEBUG: Anthropic returned None response object.")
                 raise ValueError("Empty response from API")
+            if not hasattr(response, 'content') or not response.content:
+                print(f"DEBUG: Anthropic raw response: {response}")
+                raise ValueError("Empty response from API (no content field)")
 
             # If tool use is requested, extract the tool call
             if getattr(response, "stop_reason", None) == "tool_use":
-                # Extract assistant's text block (acknowledgement)
-                assistant_ack = ""
+                # Identify the (most recent) tool_use block and its index in the message list
                 tool_call_block = None
+                assistant_ack = ""
                 for block in response.content:
                     if getattr(block, "type", None) == "text" and getattr(block, "text", None):
                         assistant_ack = block.text
@@ -841,41 +856,46 @@ async def generate_response(query: str) -> str:
 
                 # Execute the tool (sync or async)
                 tool_name = getattr(tool_call_block, "name", None)
-                tool_input = getattr(tool_call_block, "input", None)
                 tool_call_id = getattr(tool_call_block, "id", None)
-                if not tool_name:
-                    raise ValueError("Tool use block missing tool name.")
+                if not tool_name or not tool_call_id:
+                    raise ValueError("Tool use block missing tool name or id.")
 
                 try:
-                    # Prefer async tool execution if supported
-                    # You must implement or connect this function appropriately
                     result = await execute_tool(tool_call_block)
                 except Exception as e:
                     print(f"Tool execution error: {e}")
                     result = f"ERROR: Tool '{tool_name}' failed to execute: {e}"
 
-                # Format tool_result content block as per Anthropic API
-                tool_result_block = {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "tool_result",
-                            "tool_use_id": tool_call_id,
-                            "content": result if isinstance(result, str) else str(result)
-                        }
-                    ]
-                }
-                chat_log.append(tool_result_block)
-                try:
-                    save_to_log_file(tool_result_block)
-                except Exception as e:
-                    print(f"Warning: Failed to save tool_result to log: {e}")
+                # --- Correct tool_use/tool_result message protocol ---
+                # Messages to send: all up to and including the assistant tool_use response (not including historical tool_results)
+                # So, build a new message list: all sanitized_messages up to the last message (the user prompt),
+                # then the assistant tool_use response, then the tool_result as a new user message
 
-                # Prepare next API call (send updated chat_log, REMOVE tools for followup)
+                # Use the previous sanitized_messages, append the assistant response (which was just sent), then ONLY the new tool_result
+                tool_result_msg = {
+                    "role": "user",
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": tool_call_id,
+                        "content": result if isinstance(result, str) else str(result),
+                    }]
+                }
+
+                # Compose the next message history for the API call:
+                # - All prior messages, plus the assistant tool_use response, then only this tool_result.
+                messages_for_tool_result = sanitized_messages + [
+                    {
+                        "role": "assistant",
+                        "content": response.content,
+                    },
+                    tool_result_msg
+                ]
+
+                # Next API call (tools param omitted for followup)
                 api_params = {
                     "model": config.ANTHROPIC_MODEL,
                     "system": system_content,
-                    "messages": sanitize_messages_for_api(chat_log),
+                    "messages": messages_for_tool_result,
                     "max_tokens": 1024,
                     "temperature": 0.7
                 }
