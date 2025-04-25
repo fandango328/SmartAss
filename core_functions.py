@@ -63,9 +63,11 @@ async def handle_calendar_query(calendar_manager, query_type, **kwargs):
 async def process_response_content(content, chat_log, system_manager, display_manager, audio_manager, notification_manager):
     """
     Process API response content for voice generation and chat log storage.
+    Handles mood detection, content formatting, ensures original message is saved, and robustly extracts text from 
+    structured content (blocks, dicts, etc.).
     
     Args:
-        content: Raw response from API
+        content: Raw response from API (can be str, dict, or structured content blocks)
         chat_log: Global chat history
         system_manager: System manager instance for validation
         display_manager: Display manager for mood updates
@@ -79,53 +81,97 @@ async def process_response_content(content, chat_log, system_manager, display_ma
     print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Content type: {type(content)}")
     print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Audio state - Speaking: {audio_manager.is_speaking}, Playing: {audio_manager.is_playing}")
     print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Notification queue size: {notification_manager.notification_queue.qsize()}")
-    
+
+    def extract_text_from_content(content):
+        """
+        Recursively extracts all relevant text from content, supporting
+        string, list of blocks, or dicts as returned by LLM/tool APIs.
+        """
+        if isinstance(content, str):
+            return content
+        elif isinstance(content, dict):
+            # Prefer 'text', then 'content'
+            if 'text' in content and isinstance(content['text'], str):
+                return content['text']
+            elif 'content' in content and isinstance(content['content'], str):
+                return content['content']
+            elif 'content' in content and isinstance(content['content'], list):
+                return extract_text_from_content(content['content'])
+            else:
+                # Fallback: join all string values in dict
+                return " ".join(str(v) for v in content.values() if isinstance(v, str))
+        elif isinstance(content, list):
+            # Only join text or valid text fields from blocks
+            result = []
+            for block in content:
+                result.append(extract_text_from_content(block))
+            return " ".join([x for x in result if x])
+        else:
+            return str(content)
+
     try:
-        # Validate content
-        text = validate_llm_response(content)
-        formatted_message = text
+        # Step 1: Parse content into usable text
+        text = extract_text_from_content(content)
+        print(f"DEBUG - Full response text:\n{text}\n")
         
-        # Text normalization
+        # Step 2: Parse mood and preserve complete message
+        # Using [\s\S]* instead of .* to capture ALL content including newlines
+        # This ensures we don't truncate the message after the first line
+        original_message = text  # Store original message before any processing
+        mood_match = re.match(r'^\[(.*?)\]([\s\S]*)', text, re.IGNORECASE)
+        if mood_match:
+            raw_mood = mood_match.group(1)         # Extract mood from [mood]
+            clean_message = mood_match.group(2)     # Get complete message content
+            mapped_mood = None
+            # If you have a mood mapping, use it
+            if 'MOOD_MAPPINGS' in globals():
+                mapped_mood = MOOD_MAPPINGS.get(raw_mood.lower(), None)
+            else:
+                mapped_mood = raw_mood.lower()
+            if mapped_mood and display_manager:
+                await display_manager.update_display('speaking', mood=mapped_mood)
+                print(f"DEBUG - Mood detected: {mapped_mood}")
+        else:
+            clean_message = text
+            print("DEBUG - No mood detected in message")
+
+        # Step 3: Format message for voice generation
+        formatted_message = clean_message
+        
+        # Convert all newlines to spaces for continuous speech
         formatted_message = formatted_message.replace('\n', ' ')
+        # Convert list markers to natural speech transitions
         formatted_message = re.sub(r'(\d+)\.\s*', r'Number \1: ', formatted_message)
         formatted_message = re.sub(r'^\s*-\s*', 'Also, ', formatted_message)
+        # Clean up any multiple spaces from formatting
         formatted_message = re.sub(r'\s+', ' ', formatted_message)
+        # Add natural pauses after sentences
         formatted_message = re.sub(r'(?<=[.!?])\s+(?=[A-Z])', '. ', formatted_message)
-        
-        # Mood processing
-        mood_match = re.match(r'^\[(.*?)\]([\s\S]*)', formatted_message, re.IGNORECASE)
-        if mood_match:
-            raw_mood = mood_match.group(1)
-            clean_message = mood_match.group(2)
-            mapped_mood = MOOD_MAPPINGS.get(raw_mood.lower(), None)
-            
-            if mapped_mood:
-                await display_manager.update_display('speaking', mood=mapped_mood)
-                print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Mood detected: {mapped_mood}")
-            
-            # Save with mood intact
-            chat_log.append({
-                "role": "assistant",
-                "content": formatted_message
-            })
-            
-            # Strip mood for voice
-            formatted_message = clean_message
-        else:
-            chat_log.append({
-                "role": "assistant",
-                "content": formatted_message
-            })
-        
+        # Remove any trailing/leading whitespace
         formatted_message = formatted_message.strip()
-        print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Formatted for voice - Length: {len(formatted_message)}")
         
+        print(f"DEBUG - Formatted message for voice (full):\n{formatted_message}\n")
+        
+        # Step 4: Add complete original response to chat_log
+        assistant_message = {"role": "assistant", "content": original_message}
+        chat_log.append(assistant_message)
+        
+        # Step 5: Save to persistent storage
+        print(f"DEBUG ASSISTANT MESSAGE: {type(assistant_message)} - {assistant_message}")
+        print(f"DEBUG ASSISTANT CONTENT: {type(assistant_message['content'])} - {original_message[:100]}")
+        if 'save_to_log_file' in globals():
+            save_to_log_file(assistant_message)
+        
+        print(f"DEBUG - Assistant response added to chat_log and saved to file")
+        print(f"DEBUG - Chat_log now has {len(chat_log)} messages")
+        
+        # Step 6: Return formatted message for voice generation
         return formatted_message
-        
+
     except Exception as e:
         print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Content processing error: {e}")
         traceback.print_exc()
-        return "I apologize, but I encountered an error processing the response."
+        return "I apologize, but I encountered an error processing the response."       
         
 async def execute_calendar_query(tool_call: dict, calendar_service, notification_manager) -> str:
     """
