@@ -856,7 +856,7 @@ class SystemManager:
             if os.path.exists(tool_audio_path):
                 mp3_files = [f for f in os.listdir(tool_audio_path) if f.endswith('.mp3')]
                 if mp3_files:
-                    audio_file = os.path.join(tool_audio_path, c(mp3_files))
+                    audio_file = os.path.join(tool_audio_path, random.choice(mp3_files))
                     audio_task = asyncio.create_task(self.audio_manager.play_audio(audio_file))
             
             # Validate tool call
