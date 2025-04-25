@@ -7,6 +7,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict, Union, Any
+from config import MOOD_MAPPINGS
 
 async def run_vad_calibration(system_manager, display_manager):
     """Run VAD calibration process with proper manager coordination"""
@@ -81,7 +82,7 @@ async def process_response_content(content, chat_log, system_manager, display_ma
     
     try:
         # Validate content
-        text = system_manager._validate_llm_response(content)
+        text = validate_llm_response(content)
         formatted_message = text
         
         # Text normalization
@@ -96,7 +97,7 @@ async def process_response_content(content, chat_log, system_manager, display_ma
         if mood_match:
             raw_mood = mood_match.group(1)
             clean_message = mood_match.group(2)
-            mapped_mood = system_manager.map_mood(raw_mood)
+            mapped_mood = MOOD_MAPPINGS.get(raw_mood.lower(), None)
             
             if mapped_mood:
                 await display_manager.update_display('speaking', mood=mapped_mood)
@@ -330,44 +331,79 @@ async def handle_tool_sequence(tool_response: str, system_manager, display_manag
         await display_manager.update_display('listening')
         return False
 
-def get_random_audio(category: str, subtype: str) -> Optional[str]:
+def get_random_audio(category: str, subtype: str = None) -> Optional[str]:
     """
-    Get a random audio file from the specified category and subtype.
+    Get a random audio file from the specified category and optional subtype/context.
     
     Args:
-        category (str): Main category folder (e.g., 'tool', 'notification')
-        subtype (str): Subtype folder or specific type (e.g., 'use', 'status/enabled')
+        category (str): Main audio category (e.g., 'tool', 'timeout', 'wake')
+        subtype (str, optional): Subcategory, context, or specific type (e.g., 'use', 'enabled', model name)
         
     Returns:
         Optional[str]: Path to random audio file if found, None otherwise
     """
     try:
-        # Construct base path for audio files
-        audio_base = Path('audio')
-        category_path = audio_base / category
-        
-        # Handle subtypes with potential nested folders
-        if '/' in subtype:
-            subtype_parts = subtype.split('/')
-            for part in subtype_parts:
-                category_path = category_path / part
+        import random
+        from pathlib import Path
+
+        # Base directory for all sounds (adjust as needed)
+        base_sound_dir = Path("/home/user/LAURA/sounds")
+        audio_path = None
+
+        # Special handling for known folder structures
+        if category == "file" and subtype:
+            audio_path = base_sound_dir / "file_sentences" / subtype
+            print(f"Looking in file category path: {audio_path}")
+
+        elif category == "tool" and subtype:
+            if subtype == "use":
+                audio_path = base_sound_dir / "tool_sentences" / "use"
+            elif subtype in ["enabled", "disabled"]:
+                audio_path = base_sound_dir / "tool_sentences" / "status" / subtype
+            else:
+                audio_path = base_sound_dir / "tool_sentences" / subtype
+            print(f"Looking in tool category path: {audio_path}")
+
+        elif category == "wake" and subtype in ["Laura.pmdl", "Wake_up_Laura.pmdl", "GD_Laura.pmdl"]:
+            context_map = {
+                "Laura.pmdl": "standard",
+                "Wake_up_Laura.pmdl": "sleepy", 
+                "GD_Laura.pmdl": "frustrated"
+            }
+            folder = context_map.get(subtype, "standard")
+            audio_path = base_sound_dir / "wake_sentences" / folder
+            print(f"Looking for wake audio in: {audio_path}")
+
         else:
-            category_path = category_path / subtype
-            
-        # Get list of audio files
-        audio_files = [
-            f for f in category_path.glob('*.mp3')
-            if f.is_file() and f.suffix.lower() == '.mp3'
-        ]
-        
-        if not audio_files:
-            print(f"No audio files found in {category_path}")
+            # Default to main category folder for timeout, calibration, etc.
+            audio_path = base_sound_dir / f"{category}_sentences"
+            if subtype and (audio_path / subtype).exists():
+                audio_path = audio_path / subtype
+            print(f"Looking for audio in category folder: {audio_path}")
+
+        # Find audio files in the specified path
+        audio_files = []
+        if audio_path.exists():
+            audio_files = list(audio_path.glob('*.mp3')) + list(audio_path.glob('*.wav'))
+
+        if audio_files:
+            chosen_file = str(random.choice(audio_files))
+            print(f"Found and selected audio file: {chosen_file}")
+            return chosen_file
+        else:
+            print(f"WARNING: No audio files found in {audio_path}")
+
+            # Fallback to parent directory for empty subfolders
+            if subtype and f"{category}_sentences" in str(audio_path):
+                parent_path = base_sound_dir / f"{category}_sentences"
+                if parent_path.exists():
+                    parent_files = list(parent_path.glob('*.mp3')) + list(parent_path.glob('*.wav'))
+                    if parent_files:
+                        print(f"Found fallback files in parent directory: {parent_path}")
+                        return str(random.choice(parent_files))
+
             return None
-            
-        # Select random file
-        chosen_file = random.choice(audio_files)
-        return str(chosen_file)
-        
+
     except Exception as e:
-        print(f"Error getting random audio: {e}")
+        print(f"Error in get_random_audio: {str(e)}")
         return None
