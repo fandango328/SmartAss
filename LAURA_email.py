@@ -773,7 +773,6 @@ async def generate_response(query: str) -> str:
                 if audio_file:
                     await audio_manager.queue_audio(audio_file=audio_file, priority=True)
                     await audio_manager.wait_for_queue_empty()
-            # If the command was a tool-enabling command, reflect tool state visually
             elif command_response.get('state') == 'use':
                 await display_manager.update_display('tools', specific_image='use')
             return "[CONTINUE]"
@@ -818,9 +817,21 @@ async def generate_response(query: str) -> str:
             api_params["tools"] = relevant_tools
             api_params["tool_choice"] = {"type": "auto"}
 
+        print("\n==== Anthropic API PARAMS (INITIAL) ====")
+        for k, v in api_params.items():
+            if k == "messages":
+                print(f"{k}: [{len(v)} messages]")
+            elif k == "tools":
+                print(f"{k}: {[t['name'] for t in v]}")
+            else:
+                print(f"{k}: {repr(v)}")
+        print("========================================\n")
+
         # --- Tool Use Loop ---
         while True:
+            print(f"DEBUG: Sending API call. tools_included={bool(api_params.get('tools'))} | tool_choice={api_params.get('tool_choice')}")
             response = system_manager.anthropic_client.messages.create(**api_params)
+            print(f"DEBUG: API returned. stop_reason={getattr(response, 'stop_reason', None)}")
             if not response:
                 print("DEBUG: Anthropic returned None response object.")
                 raise ValueError("Empty response from API")
@@ -830,17 +841,19 @@ async def generate_response(query: str) -> str:
 
             # If tool use is requested, extract the tool call
             if getattr(response, "stop_reason", None) == "tool_use":
-                # Identify the (most recent) tool_use block and its index in the message list
+                print("DEBUG: Tool use requested by Claude. Parsing content blocks...")
                 tool_call_block = None
                 assistant_ack = ""
                 for block in response.content:
+                    print(f"DEBUG: Block type={getattr(block, 'type', None)}")
                     if getattr(block, "type", None) == "text" and getattr(block, "text", None):
                         assistant_ack = block.text
                     if getattr(block, "type", None) == "tool_use":
                         tool_call_block = block
 
-                # Log assistant's acknowledgement (no TTS yet)
+                # Log assistant's text acknowledgement (never tool_use block itself)
                 if assistant_ack:
+                    print(f"DEBUG: Assistant tool use ack: {assistant_ack}")
                     chat_log.append({"role": "assistant", "content": assistant_ack})
                     try:
                         save_to_log_file({"role": "assistant", "content": assistant_ack})
@@ -848,30 +861,27 @@ async def generate_response(query: str) -> str:
                         print(f"Warning: Failed to save tool-use ack to log: {e}")
 
                 if not tool_call_block:
+                    print("ERROR: Tool use was indicated but no tool_use block found in response.")
                     raise ValueError("Tool use was indicated but no tool_use block found in response.")
 
                 # Update display to tool-use visual
                 if display_manager:
                     await display_manager.update_display('tools', specific_image='use')
 
-                # Execute the tool (sync or async)
                 tool_name = getattr(tool_call_block, "name", None)
                 tool_call_id = getattr(tool_call_block, "id", None)
                 if not tool_name or not tool_call_id:
+                    print("ERROR: Tool use block missing tool name or id.")
                     raise ValueError("Tool use block missing tool name or id.")
 
+                print(f"DEBUG: Executing tool: {tool_name} with ID: {tool_call_id}")
                 try:
                     result = await execute_tool(tool_call_block)
                 except Exception as e:
                     print(f"Tool execution error: {e}")
                     result = f"ERROR: Tool '{tool_name}' failed to execute: {e}"
 
-                # --- Correct tool_use/tool_result message protocol ---
-                # Messages to send: all up to and including the assistant tool_use response (not including historical tool_results)
-                # So, build a new message list: all sanitized_messages up to the last message (the user prompt),
-                # then the assistant tool_use response, then the tool_result as a new user message
-
-                # Use the previous sanitized_messages, append the assistant response (which was just sent), then ONLY the new tool_result
+                # --- Protocol discipline: tool_result is only appended for the immediate API call, never persisted ---
                 tool_result_msg = {
                     "role": "user",
                     "content": [{
@@ -881,8 +891,6 @@ async def generate_response(query: str) -> str:
                     }]
                 }
 
-                # Compose the next message history for the API call:
-                # - All prior messages, plus the assistant tool_use response, then only this tool_result.
                 messages_for_tool_result = sanitized_messages + [
                     {
                         "role": "assistant",
@@ -891,7 +899,11 @@ async def generate_response(query: str) -> str:
                     tool_result_msg
                 ]
 
-                # Next API call (tools param omitted for followup)
+                print("\n==== Anthropic API PARAMS (TOOL FOLLOW-UP) ====")
+                print(f"messages: [{len(messages_for_tool_result)}]")
+                print(f"tool_result_msg: {tool_result_msg}")
+                print("==============================================\n")
+
                 api_params = {
                     "model": config.ANTHROPIC_MODEL,
                     "system": system_content,
@@ -903,10 +915,10 @@ async def generate_response(query: str) -> str:
                 continue
 
             # Not a tool-use response: extract and return final assistant message
+            print("DEBUG: No tool use required, processing final assistant message...")
             processed_content = await process_response_content(
                 response.content, chat_log, system_manager, display_manager, audio_manager, notification_manager
             )
-            # Log assistant message
             chat_log.append({"role": "assistant", "content": processed_content})
             try:
                 save_to_log_file({"role": "assistant", "content": processed_content})
@@ -918,7 +930,8 @@ async def generate_response(query: str) -> str:
         print(f"Error in generate_response: {e}")
         traceback.print_exc()
         return "I apologize, but I encountered an error processing your request."
-                        
+        
+                               
 async def wake_word():
     """Wake word detection with notification-aware breaks"""
     global last_interaction_check, last_interaction
