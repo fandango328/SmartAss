@@ -892,13 +892,16 @@ async def generate_response(query: str) -> str:
 
             # 4. Execute the tool, package result, and append to chat log
             tool_result = await system_manager.execute_tool_with_feedback(tool_call)
+            # Always package tool results as a list, even if only one tool was called
+            tool_results = []
+            tool_results.append({
+                "type": "tool_result",
+                "tool_use_id": tool_call.id,
+                "content": tool_result["content"] if isinstance(tool_result, dict) and "content" in tool_result else tool_result,
+            })
             tool_result_msg = {
                 "role": "user",
-                "content": [{
-                    "type": "tool_result",
-                    "tool_use_id": tool_call.id,
-                    "content": tool_result["content"] if isinstance(tool_result, dict) and "content" in tool_result else tool_result,
-                }]
+                "content": tool_results
             }
             chat_log.append(tool_result_msg)
             try:
