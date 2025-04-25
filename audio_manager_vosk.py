@@ -48,6 +48,30 @@ class AudioManager:
         Args:
             pv_access_key: Optional key for Picovoice integration (unused in current version)
         """
+        # Redirect ALSA/JACK messages to log file
+        import ctypes
+        import datetime
+        
+        # Create logs directory if it doesn't exist
+        os.makedirs('logs', exist_ok=True)
+        
+        # Create log file with timestamp
+        log_file = f"logs/audio_init_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+        
+        # Load ALSA error handler
+        ERROR_HANDLER_FUNC = ctypes.CFUNCTYPE(None, ctypes.c_char_p, ctypes.c_int,
+                                             ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p)
+        def py_error_handler(filename, line, function, err, fmt):
+            with open(log_file, 'a') as f:
+                f.write(f'ALSA: {function} {fmt}\n')
+        
+        c_error_handler = ERROR_HANDLER_FUNC(py_error_handler)
+        try:
+            asound = ctypes.CDLL('libasound.so.2')
+            asound.snd_lib_error_set_handler(c_error_handler)
+        except:
+            pass  # Silently continue if ALSA redirection fails
+        
         # Initialize PyAudio for audio I/O
         self.pa = pyaudio.PyAudio()
         self.audio_stream = None
@@ -75,7 +99,11 @@ class AudioManager:
         self.sample_rate = 16000  # Standard sample rate for speech recognition
         self.frame_length = 2048  # Buffer size for audio frames
         
-        print(f"AudioManager initialized: frame_length={self.frame_length}, sample_rate={self.sample_rate}")
+        print(f"\n=== Audio System Initialization ===")
+        print(f"Sample Rate: {self.sample_rate} Hz")
+        print(f"Frame Length: {self.frame_length} samples")
+        print(f"Audio debug logs: {log_file}")
+        print("=================================\n")
 
     async def get_state(self) -> Dict[str, Any]:
         """
