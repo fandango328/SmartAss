@@ -12,7 +12,7 @@ import os
 import json
 import glob
 import traceback
-from config_cl import CHAT_LOG_MAX_TOKENS, CHAT_LOG_RECOVERY_TOKENS, CHAT_LOG_DIR, SYSTEM_PROMPT, ANTHROPIC_MODEL, SOUND_PATHS, SYSTEM_STATE_COMMANDS
+from config import CHAT_LOG_MAX_TOKENS, CHAT_LOG_RECOVERY_TOKENS, CHAT_LOG_DIR, SYSTEM_PROMPT, ANTHROPIC_MODEL, SOUND_PATHS, SYSTEM_STATE_COMMANDS
 from datetime import datetime
 from decimal import Decimal
 from typing import Dict, Tuple, Optional, Any, List, Union
