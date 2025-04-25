@@ -165,12 +165,6 @@ SCOPES = [
     "https://www.googleapis.com/auth/tasks"
 ]
 
-config = {
-    "TTS_ENGINE": TTS_ENGINE,
-    "ELEVENLABS_KEY": ELEVENLABS_KEY,
-    "VOICE": VOICE,
-    "ELEVENLABS_MODEL": ELEVENLABS_MODEL,
-}
 # Email importance configuration - update this with information about people you care about
 
 
@@ -561,7 +555,13 @@ try:
         remote_transcriber = RemoteTranscriber()
 
     audio_manager = AudioManager(PV_ACCESS_KEY if TRANSCRIPTION_MODE == "remote" else None)
-    tts_handler = TTSHandler(config)
+    tts_config = {
+    "TTS_ENGINE": config.TTS_ENGINE,
+    "ELEVENLABS_KEY": ELEVENLABS_KEY,
+    "VOICE": config.VOICE,
+    "ELEVENLABS_MODEL": ELEVENLABS_MODEL,
+}
+    tts_handler = TTSHandler(tts_config)
     anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY)
 except Exception as e:
     print(f"Critical error during core component initialization: {e}")
@@ -1870,11 +1870,12 @@ async def main():
             from secret import ELEVENLABS_KEY
             
             tts_config = {
-                "TTS_ENGINE": TTS_ENGINE,
+                "TTS_ENGINE": config.TTS_ENGINE,
                 "ELEVENLABS_KEY": ELEVENLABS_KEY,
-                "VOICE": VOICE,
-                "ELEVENLABS_MODEL": ELEVENLABS_MODEL
+                "VOICE": config.VOICE,
+                "ELEVENLABS_MODEL": config.ELEVENLABS_MODEL,
             }
+            tts_handler = TTSHandler(tts_config)
             
             print("TTS Configuration:")
             print(f"- Engine: {tts_config['TTS_ENGINE']}")
