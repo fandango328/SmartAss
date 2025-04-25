@@ -759,6 +759,7 @@ async def generate_response(query: str) -> str:
     token_manager.start_interaction()
 
     try:
+        # === 1. System Command Check ===
         was_command, command_response = token_manager.handle_tool_command(query)
         if was_command:
             success = command_response.get('success', False)
@@ -773,14 +774,14 @@ async def generate_response(query: str) -> str:
                     await audio_manager.wait_for_queue_empty()
             return "[CONTINUE]"
 
-        # Save user message
+        # === 2. Save and Log User Message ===
         chat_message = {"role": "user", "content": query}
         try:
             save_to_log_file(chat_message)
         except Exception as e:
             print(f"Warning: Failed to save chat message to log: {e}")
             traceback.print_exc()
-        
+
         already_added = (
             len(chat_log) > 0 and 
             chat_log[-1]["role"] == "user" and
@@ -788,7 +789,9 @@ async def generate_response(query: str) -> str:
         )
         if not already_added:
             chat_log.append(chat_message)
+            print(f"[DEBUG] Added to chat_log (user message). Type: {type(chat_message)}, value: {repr(chat_message)[:200]}")
 
+        # === 3. Tool Use Detection and Fast-Path ===
         use_tools = token_manager.tools_are_active()
         relevant_tools = []
         if use_tools:
@@ -811,7 +814,7 @@ async def generate_response(query: str) -> str:
                     tool_call = ToolCall(name=tool_to_execute, id="direct-execution", input=tool_args)
                     return await system_manager.execute_tool_with_feedback(tool_call)
 
-        # Prepare sanitized messages for API
+        # === 4. Prepare Messages for API ===
         sanitized_messages = sanitize_messages_for_api(chat_log)
         system_content = config.SYSTEM_PROMPT
 
@@ -824,6 +827,8 @@ async def generate_response(query: str) -> str:
         if use_tools and relevant_tools:
             system_content += "\n\nAvailable Tools:\n" + json.dumps(relevant_tools, indent=2)
 
+        # Compose the user input for the API message
+        api_message_content = None
         if document_manager and document_manager.files_loaded:
             loaded_content = document_manager.get_loaded_content()
             if loaded_content["image_content"]:
@@ -837,15 +842,19 @@ async def generate_response(query: str) -> str:
                         "content": api_message_content
                     })
             else:
+                api_message_content = query
                 if sanitized_messages and sanitized_messages[-1]["role"] == "user":
                     sanitized_messages[-1]["content"] = query
                 else:
                     sanitized_messages.append({"role": "user", "content": query})
         else:
+            api_message_content = query
             if sanitized_messages and sanitized_messages[-1]["role"] == "user":
                 sanitized_messages[-1]["content"] = query
             else:
                 sanitized_messages.append({"role": "user", "content": query})
+
+        print(f"[DEBUG] About to append to chat_log (api_message_content). Type: {type(api_message_content)}, value: {repr(api_message_content)[:200]}")
 
         api_params = {
             "model": config.ANTHROPIC_MODEL,
@@ -862,10 +871,10 @@ async def generate_response(query: str) -> str:
         response = system_manager.anthropic_client.messages.create(**api_params)
         if not response or not response.content:
             raise ValueError("Empty response from API")
-
-        # Handle tool use (modernized, non-blocking pre-recorded audio, single TTS, robust chat log)
+        
+        
         if response.stop_reason == "tool_use":
-            # 1. Extract and append the brief assistant acknowledgment to the chat log, save it (no TTS here)
+            # 1. Extract and log the brief assistant acknowledgment (no TTS here)
             initial_assistant_msg = None
             for block in response.content:
                 if getattr(block, "type", None) == "text":
@@ -875,6 +884,7 @@ async def generate_response(query: str) -> str:
                 initial_assistant_msg = "Processing your request..."
 
             assistant_msg = {"role": "assistant", "content": initial_assistant_msg}
+            print(f"[DEBUG] Appending to chat_log: {assistant_msg}")
             chat_log.append(assistant_msg)
             try:
                 save_to_log_file(assistant_msg)
@@ -890,26 +900,41 @@ async def generate_response(query: str) -> str:
             if display_manager:
                 await display_manager.update_display('tools', specific_image='use')
 
-            # 4. Execute the tool, package result, and append to chat log
-            tool_result = await system_manager.execute_tool_with_feedback(tool_call)
-            # Always package tool results as a list, even if only one tool was called
-            tool_results = []
-            tool_results.append({
+            # 4. Execute the tool and package the result for the chat log
+            try:
+                handler = token_manager.tool_handlers.get(tool_call.name)
+                if not handler:
+                    tool_result_content = f"Unsupported tool: {tool_call.name}"
+                else:
+                    tool_args = tool_call.input if hasattr(tool_call, "input") else {}
+                    if asyncio.iscoroutinefunction(handler):
+                        tool_result_content = await handler(**tool_args)
+                    else:
+                        tool_result_content = handler(**tool_args)
+                    token_manager.record_tool_usage(tool_call.name)
+            except Exception as exc:
+                print(f"Error executing tool {tool_call.name}: {exc}")
+                traceback.print_exc()
+                tool_result_content = f"Error executing tool: {exc}"
+
+            # 5. Package tool result as list for chat log
+            tool_results = [{
                 "type": "tool_result",
-                "tool_use_id": tool_call.id,
-                "content": tool_result["content"] if isinstance(tool_result, dict) and "content" in tool_result else tool_result,
-            })
+                "tool_use_id": getattr(tool_call, "id", "unknown"),
+                "content": tool_result_content["content"] if isinstance(tool_result_content, dict) and "content" in tool_result_content else tool_result_content
+            }]
             tool_result_msg = {
                 "role": "user",
                 "content": tool_results
             }
+            print(f"[DEBUG] Appending to chat_log: {tool_result_msg}")
             chat_log.append(tool_result_msg)
             try:
                 save_to_log_file(tool_result_msg)
             except Exception as e:
                 print(f"Warning: Failed to save tool_result to log: {e}")
 
-            # 5. Prepare persona-aware pre-recorded audio (tool_sentences/use)
+            # 6. Prepare persona-aware pre-recorded audio (tool_sentences/use)
             current_persona = getattr(config, "ACTIVE_PERSONA", "laura").lower()
             audio_folder = f"/home/user/LAURA/sounds/{current_persona}/tool_sentences/use"
             tool_sound = None
@@ -918,9 +943,7 @@ async def generate_response(query: str) -> str:
                 if mp3_files:
                     tool_sound = os.path.join(audio_folder, random.choice(mp3_files))
 
-            # 6. Start the secondary API call to get the final assistant response (do NOT block)
-            #    Use asyncio.to_thread to avoid blocking event loop with sync client
-            import asyncio
+            # 7. Start the secondary API call to get the final assistant response (do NOT block)
             final_response_future = asyncio.to_thread(
                 system_manager.anthropic_client.messages.create,
                 model=config.ANTHROPIC_MODEL,
@@ -930,34 +953,73 @@ async def generate_response(query: str) -> str:
                 temperature=0.7
             )
 
-            # 7. Start pre-recorded audio masking (non-blocking, runs in parallel with API call)
+            # 8. Start pre-recorded audio masking (non-blocking, runs in parallel with API call)
             tool_audio_task = None
             if tool_sound:
                 tool_audio_task = asyncio.create_task(audio_manager.queue_audio(audio_file=tool_sound, priority=True))
 
-            # 8. Await the final API response and process it
+            # 9. Await the final API response and process it
             final_response = await final_response_future
-            processed_content = await process_response_content(
-                final_response.content, chat_log, system_manager, display_manager, audio_manager, notification_manager
-            )
 
-            # 9. Generate TTS for the final response (do NOT play yet)
-            final_audio = system_manager.tts_handler.generate_audio(str(processed_content))
+            # Extract text from final_response.content for TTS and chat log
+            def extract_final_text(content):
+                if isinstance(content, str):
+                    return content
+                elif isinstance(content, list):
+                    return " ".join(
+                        block.get("text", "") if isinstance(block, dict) and "text" in block else str(block)
+                        for block in content
+                    )
+                elif isinstance(content, dict) and "text" in content:
+                    return content["text"]
+                else:
+                    return str(content)
+
+            text = extract_final_text(final_response.content)
+            # Mood detection (optional, can be more complex)
+            mood_match = re.match(r'^\[(.*?)\](.*)', text, re.DOTALL)
+            if mood_match:
+                mood = MOOD_MAPPINGS.get(mood_match.group(1).lower(), "casual")
+                await display_manager.update_display('speaking', mood=mood)
+                text = mood_match.group(2).strip()
+            else:
+                await display_manager.update_display('speaking', mood='casual')
+
+            # Formatting for TTS
+            formatted_message = (
+                text.replace('\n', ' ')
+                    .replace('\r', ' ')
+            )
+            formatted_message = re.sub(r'(\d+)\.\s*', r'Number \1: ', formatted_message)
+            formatted_message = re.sub(r'^\s*-\s*', 'Also, ', formatted_message)
+            formatted_message = re.sub(r'\s+', ' ', formatted_message)
+            formatted_message = re.sub(r'(?<=[.!?])\s+(?=[A-Z])', '. ', formatted_message)
+            formatted_message = formatted_message.strip()
+
+            assistant_message = {"role": "assistant", "content": text}
+            print(f"[DEBUG] Appending to chat_log: {assistant_message}")
+            chat_log.append(assistant_message)
+            try:
+                save_to_log_file(assistant_message)
+            except Exception as e:
+                print(f"Warning: Failed to save assistant message to log: {e}")
+
+            # 10. Generate TTS for the final response (do NOT play yet)
+            final_audio = system_manager.tts_handler.generate_audio(formatted_message)
             with open(AUDIO_FILE, "wb") as f:
                 f.write(final_audio)
 
-            # 10. If pre-recorded audio is still playing, wait for it, then .5s buffer; else short buffer
+            # 11. If pre-recorded audio is still playing, wait for it, then .5s buffer; else short buffer
             if tool_audio_task:
                 await tool_audio_task
                 await asyncio.sleep(0.5)
             else:
                 await asyncio.sleep(0.2)
 
-            # 11. Play TTS audio, update display, and wait for completion
-            await display_manager.update_display('speaking', mood='casual')
+            # 12. Play TTS audio, update display, and wait for completion
             await audio_manager.queue_audio(audio_file=AUDIO_FILE)
             await audio_manager.wait_for_queue_empty()
-            return processed_content
+            return formatted_message
 
         # Non-tool flow
         processed_content = await process_response_content(
@@ -1514,6 +1576,7 @@ async def print_response(chat):
 async def generate_voice(chat):
     """
     Generate voice audio from formatted text.
+    Robustly handles input types and prints warnings if chat is not a string.
     """
     print(f"\n[{datetime.now().strftime('%H:%M:%S.%f')}] === Voice Generation Debug ===")
     print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Input type: {type(chat)}")
@@ -1525,6 +1588,26 @@ async def generate_voice(chat):
         return
 
     try:
+        # Defensive: ensure chat is a string
+        if not isinstance(chat, str):
+            print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] WARNING: Voice generation received non-string input: {type(chat)}")
+            # Try to recover if it's a dict or list
+            if isinstance(chat, dict):
+                # Prefer "content" key if present
+                chat_str = chat.get('content', None)
+                if isinstance(chat_str, str):
+                    chat = chat_str
+                elif isinstance(chat_str, (dict, list)):
+                    chat = str(chat_str)
+                else:
+                    chat = str(chat)
+            elif isinstance(chat, list):
+                # Concatenate any string elements
+                chat = " ".join(str(item) for item in chat)
+            else:
+                chat = str(chat)
+            print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Recovered chat value for TTS: {chat[:150]}")
+
         # Normalize the text
         chat = ' '.join(chat.split())
         
