@@ -684,50 +684,26 @@ async def handle_system_command(transcript):
         return False
 
 async def execute_tool(tool_call):
-    """Execute a tool and return its result."""
+    """Execute a tool using the global tool_registry and return its result."""
     try:
-        # Get the tool handler from TokenManager
-        handler = token_manager.tool_handlers.get(tool_call.name)
+        handler = tool_registry.get_handler(tool_call.name)
         if not handler:
-            return "Unsupported tool called"
-            
-        tool_args = tool_call.input
-        
-        # Special handling for calendar query
-        if tool_call.name == "calendar_query":
-            if tool_args["query_type"] == "next_event":
-                return await handler(get_next_event)
-            elif tool_args["query_type"] == "day_schedule":
-                return await handler(get_day_schedule)
-            else:
-                return "Unsupported query type"
-        
-        # Handle update_calendar_event and cancel_calendar_event special cases
-        if tool_call.name in ["update_calendar_event", "cancel_calendar_event"]:
-            if "event_description" in tool_args and not tool_args.get("event_id"):
-                matching_events = find_calendar_event(tool_args["event_description"])
-                if matching_events:
-                    if len(matching_events) == 1:
-                        tool_args["event_id"] = matching_events[0]["id"]
-                        tool_args.pop("event_description", None)
-                        return await handler(**tool_args)
-                    else:
-                        event_list = "\n".join([
-                            f"{i+1}. {event['summary']} ({event['start_formatted']})"
-                            for i, event in enumerate(matching_events)
-                        ])
-                        return f"I found multiple matching events:\n\n{event_list}\n\nPlease specify which event you'd like to {'update' if tool_call.name == 'update_calendar_event' else 'cancel'}."
-                else:
-                    return "I couldn't find any calendar events matching that description."
-        
-        # Execute the tool with its arguments
-        result = await handler(**tool_args) if asyncio.iscoroutinefunction(handler) else handler(**tool_args)
-        
-        # Record successful tool usage
-        token_manager.record_tool_usage(tool_call.name)
-        
+            return f"Unsupported tool called: {tool_call.name}"
+
+        tool_args = getattr(tool_call, 'input', {}) or {}
+
+        # If the handler is async, await it; otherwise, call directly.
+        if asyncio.iscoroutinefunction(handler):
+            result = await handler(**tool_args)
+        else:
+            result = handler(**tool_args)
+
+        # Optionally, record tool usage if your token_manager supports it.
+        if token_manager and hasattr(token_manager, "record_tool_usage"):
+            token_manager.record_tool_usage(tool_call.name)
+
         return result
-        
+
     except Exception as e:
         print(f"DEBUG: Tool execution error: {e}")
         return f"Error executing tool: {str(e)}"
@@ -773,6 +749,7 @@ async def generate_response(query: str) -> str:
                 if audio_file:
                     await audio_manager.queue_audio(audio_file=audio_file, priority=True)
                     await audio_manager.wait_for_queue_empty()
+            # If the command was a tool-enabling command, reflect tool state visually
             elif command_response.get('state') == 'use':
                 await display_manager.update_display('tools', specific_image='use')
             return "[CONTINUE]"
@@ -817,43 +794,31 @@ async def generate_response(query: str) -> str:
             api_params["tools"] = relevant_tools
             api_params["tool_choice"] = {"type": "auto"}
 
-        print("\n==== Anthropic API PARAMS (INITIAL) ====")
-        for k, v in api_params.items():
-            if k == "messages":
-                print(f"{k}: [{len(v)} messages]")
-            elif k == "tools":
-                print(f"{k}: {[t['name'] for t in v]}")
-            else:
-                print(f"{k}: {repr(v)}")
-        print("========================================\n")
+        last_tool_result = None  # Track the last tool result, in case the model gives no content
 
         # --- Tool Use Loop ---
         while True:
-            print(f"DEBUG: Sending API call. tools_included={bool(api_params.get('tools'))} | tool_choice={api_params.get('tool_choice')}")
             response = system_manager.anthropic_client.messages.create(**api_params)
-            print(f"DEBUG: API returned. stop_reason={getattr(response, 'stop_reason', None)}")
             if not response:
                 print("DEBUG: Anthropic returned None response object.")
                 raise ValueError("Empty response from API")
-            if not hasattr(response, 'content') or not response.content:
+            if not hasattr(response, 'content'):
                 print(f"DEBUG: Anthropic raw response: {response}")
                 raise ValueError("Empty response from API (no content field)")
 
             # If tool use is requested, extract the tool call
             if getattr(response, "stop_reason", None) == "tool_use":
-                print("DEBUG: Tool use requested by Claude. Parsing content blocks...")
+                # Identify the (most recent) tool_use block and its index in the message list
                 tool_call_block = None
                 assistant_ack = ""
                 for block in response.content:
-                    print(f"DEBUG: Block type={getattr(block, 'type', None)}")
                     if getattr(block, "type", None) == "text" and getattr(block, "text", None):
                         assistant_ack = block.text
                     if getattr(block, "type", None) == "tool_use":
                         tool_call_block = block
 
-                # Log assistant's text acknowledgement (never tool_use block itself)
+                # Log assistant's acknowledgement (no TTS yet)
                 if assistant_ack:
-                    print(f"DEBUG: Assistant tool use ack: {assistant_ack}")
                     chat_log.append({"role": "assistant", "content": assistant_ack})
                     try:
                         save_to_log_file({"role": "assistant", "content": assistant_ack})
@@ -861,33 +826,34 @@ async def generate_response(query: str) -> str:
                         print(f"Warning: Failed to save tool-use ack to log: {e}")
 
                 if not tool_call_block:
-                    print("ERROR: Tool use was indicated but no tool_use block found in response.")
                     raise ValueError("Tool use was indicated but no tool_use block found in response.")
 
                 # Update display to tool-use visual
                 if display_manager:
                     await display_manager.update_display('tools', specific_image='use')
 
+                # Execute the tool (sync or async)
                 tool_name = getattr(tool_call_block, "name", None)
                 tool_call_id = getattr(tool_call_block, "id", None)
                 if not tool_name or not tool_call_id:
-                    print("ERROR: Tool use block missing tool name or id.")
                     raise ValueError("Tool use block missing tool name or id.")
 
-                print(f"DEBUG: Executing tool: {tool_name} with ID: {tool_call_id}")
                 try:
                     result = await execute_tool(tool_call_block)
                 except Exception as e:
                     print(f"Tool execution error: {e}")
                     result = f"ERROR: Tool '{tool_name}' failed to execute: {e}"
 
-                # --- Protocol discipline: tool_result is only appended for the immediate API call, never persisted ---
+                # Save the last tool result for fallback in case of empty follow-up
+                last_tool_result = result if isinstance(result, str) else str(result)
+
+                # --- Correct tool_use/tool_result message protocol ---
                 tool_result_msg = {
                     "role": "user",
                     "content": [{
                         "type": "tool_result",
                         "tool_use_id": tool_call_id,
-                        "content": result if isinstance(result, str) else str(result),
+                        "content": last_tool_result,
                     }]
                 }
 
@@ -899,11 +865,7 @@ async def generate_response(query: str) -> str:
                     tool_result_msg
                 ]
 
-                print("\n==== Anthropic API PARAMS (TOOL FOLLOW-UP) ====")
-                print(f"messages: [{len(messages_for_tool_result)}]")
-                print(f"tool_result_msg: {tool_result_msg}")
-                print("==============================================\n")
-
+                # Next API call (tools param omitted for followup)
                 api_params = {
                     "model": config.ANTHROPIC_MODEL,
                     "system": system_content,
@@ -915,15 +877,21 @@ async def generate_response(query: str) -> str:
                 continue
 
             # Not a tool-use response: extract and return final assistant message
-            print("DEBUG: No tool use required, processing final assistant message...")
-            processed_content = await process_response_content(
-                response.content, chat_log, system_manager, display_manager, audio_manager, notification_manager
-            )
-            chat_log.append({"role": "assistant", "content": processed_content})
-            try:
-                save_to_log_file({"role": "assistant", "content": processed_content})
-            except Exception as e:
-                print(f"Warning: Failed to save final assistant message to log: {e}")
+            # If the content is empty (e.g., []), use the last tool result instead of raising error
+            if not response.content or (isinstance(response.content, list) and len(response.content) == 0):
+                if last_tool_result:
+                    processed_content = last_tool_result
+                else:
+                    raise ValueError("Empty response from API (no content field)")
+            else:
+                processed_content = await process_response_content(
+                    response.content, chat_log, system_manager, display_manager, audio_manager, notification_manager
+                )
+                chat_log.append({"role": "assistant", "content": processed_content})
+                try:
+                    save_to_log_file({"role": "assistant", "content": processed_content})
+                except Exception as e:
+                    print(f"Warning: Failed to save final assistant message to log: {e}")
             return processed_content
 
     except Exception as e:
