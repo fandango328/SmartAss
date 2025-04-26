@@ -902,6 +902,15 @@ async def generate_response(query: str) -> str:
                                
 async def wake_word():
     """Wake word detection with notification-aware breaks"""
+    import time
+    import random
+    from datetime import datetime
+    from pathlib import Path
+    import traceback
+    import pyaudio
+    import snowboydetect
+    from colorama import Fore
+
     global last_interaction_check, last_interaction
 
     # One-time initialization
@@ -909,28 +918,46 @@ async def wake_word():
         try:
             print(f"{Fore.YELLOW}Initializing wake word detector...{Fore.WHITE}")
 
+            # Explicitly define resource path
             resource_path = Path("resources/common.res")
-            model_paths = [
-                Path("GD_Laura.pmdl"),
-                Path("Wake_up_Laura.pmdl"),
-                Path("Laura.pmdl")
-            ]
 
-            for path in [resource_path] + model_paths:
-                if not path.exists():
-                    print(f"ERROR: File not found at {path.absolute()}")
-                    return None
+            # Set the directory where all wake word models are kept
+            wakeword_dir = Path("/home/user/LAURA/wakewords")
+            from config import WAKE_WORDS  # Ensure config.py is in your module path
 
+            # Build model paths from filenames in WAKE_WORDS
+            model_paths = [wakeword_dir / name for name in WAKE_WORDS.keys()]
+
+            # Check for missing files
+            missing = [str(path.absolute()) for path in [resource_path] + model_paths if not path.exists()]
+            if missing:
+                print(f"ERROR: The following required file(s) are missing:\n" + "\n".join(missing))
+                return None
+
+            # Build sensitivities list, ensuring order matches models
+            sensitivities = []
+            for p in model_paths:
+                sensitivity = WAKE_WORDS.get(p.name)
+                if sensitivity is None:
+                    print(f"WARNING: No sensitivity found for {p.name}. Defaulting to 0.5.")
+                    sensitivity = 0.5
+                sensitivities.append(str(sensitivity))
+            if len(sensitivities) != len(model_paths):
+                print("ERROR: Sensitivities count does not match model paths count!")
+                return None
+
+            # Initialize the detector
             wake_word.detector = snowboydetect.SnowboyDetect(
                 resource_filename=str(resource_path.absolute()).encode(),
                 model_str=",".join(str(p.absolute()) for p in model_paths).encode()
             )
-            wake_word.detector.SetSensitivity(b"0.5,0.5,0.45")
+            sensitivity_bytes = ",".join(sensitivities).encode()
+            wake_word.detector.SetSensitivity(sensitivity_bytes)
             wake_word.model_names = [p.name for p in model_paths]
             wake_word.pa = pyaudio.PyAudio()
             wake_word.stream = None
             wake_word.last_break = time.time()
-            print(f"{Fore.GREEN}Wake word detector initialized{Fore.WHITE}")
+            print(f"{Fore.GREEN}Wake word detector initialized with models: {wake_word.model_names}{Fore.WHITE}")
         except Exception as e:
             print(f"Error initializing wake word detection: {e}")
             return None
@@ -992,7 +1019,6 @@ async def wake_word():
             wake_word.stream.close()
             wake_word.stream = None
         return None
-
 
 
 def has_conversation_hook(response):
@@ -1505,7 +1531,28 @@ async def generate_voice(chat):
         print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Error in generate_voice: {e}")
         traceback.print_exc()
 
+async def speak_response(response_text, mood=None, source="main"):
+    """
+    Centralized function to update display and play audio for a response.
+    Ensures only one playback per user response.
+    """
+    import inspect
 
+    # Logging for debugging
+    print(f"\n[SPEAK RESPONSE] Source: {source}")
+    print(f"  Text: {repr(response_text)[:100]}...")
+    print(f"  Mood: {mood}")
+    print(f"  Call Stack:\n{''.join(traceback.format_stack(limit=4))}")
+
+    # Mood mapping (if needed)
+    if mood is not None:
+        mood_mapped = map_mood(mood)
+    else:
+        mood_mapped = "casual"
+
+    await display_manager.update_display('speaking', mood=mood_mapped)
+    await generate_voice(response_text)
+    await audio_manager.wait_for_audio_completion()
 
 async def play_queued_notifications():
     """
@@ -2129,7 +2176,7 @@ async def run_main_loop():
                         wake_audio = get_random_audio('wake', detected_model)
 
                         if wake_audio:
-                            await audio_manager.queue_audio(audio_file=wake_audio, priority=True)
+                            await audio_manager.queue_audio(audio_file=wake_audio)
                             await audio_manager.wait_for_queue_empty()
 
                     # Transition to listening state and pause wake word detection
@@ -2204,26 +2251,18 @@ async def run_main_loop():
                                             print("DEBUG - Detected control signal in follow-up, continuing")
                                             continue
                                             
-                                        try:
-                                            await display_manager.update_display('speaking')
-                                            await generate_voice(formatted_response)
+                                            await speak_response(formatted_response, mood=None, source="followup")
                                             
                                             # Check notifications before state transition
                                             if await notification_manager.has_pending_notifications():
                                                 await notification_manager.process_pending_notifications()
                                                 
                                             if isinstance(formatted_response, str) and has_conversation_hook(formatted_response):
-                                                await audio_manager.wait_for_queue_empty()
                                                 await display_manager.update_display('listening')
                                                 await handle_conversation_loop(formatted_response)
                                                 break
                                             else:
-                                                await audio_manager.wait_for_queue_empty()
                                                 break
-                                        except Exception as voice_error:
-                                            print(f"Error during follow-up voice generation: {voice_error}")
-                                            await display_manager.update_display('sleep')
-                                            break
                                 else:
                                     await display_manager.update_display('sleep')
                             except Exception as e:
@@ -2245,15 +2284,7 @@ async def run_main_loop():
                             print("DEBUG - Detected control signal, skipping voice generation")
                             continue
 
-                        # Ensure audio is complete before state transitions
-                        await audio_manager.wait_for_queue_empty()
-                        
-                        # Transition to speaking state
-                        await display_manager.update_display('speaking')
-                        await generate_voice(formatted_response)
-
-                        # Wait for speech to complete
-                        await audio_manager.wait_for_queue_empty()
+                        await speak_response(formatted_response, mood=None, source="main")
 
                         # Check and process any pending notifications
                         if await notification_manager.has_pending_notifications():
