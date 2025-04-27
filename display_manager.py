@@ -7,32 +7,35 @@ from pathlib import Path
 
 class DisplayManager:
     """
-    Manages the visual display system for LAURA with persona-specific resource handling.
-    
-    The display system follows a hierarchical structure:
+    Manages the visual display system for LAURA with persona-specific and fallback resource handling.
+
+    Folder structure (example for persona "laura"):
     /pygame/{persona}/
-    ├── system/                    # System-level states and transitions
-    │   ├── tools/                # Tool-related states
-    │   │   ├── enabled/          # Tool enabled state images
-    │   │   ├── disabled/         # Tool disabled state images
-    │   │   └── use/             # Tool use action images
-    │   ├── calibration/          # Calibration-related images
-    │   ├── document/             # Document operation images
-    │   │   ├── load/            # Document loading state
-    │   │   └── unload/          # Document unloading state
-    │   └── persona/             # Persona transition animations
-    │       ├── in/              # Persona activation animations
-    │       └── out/             # Persona deactivation animations
-    ├── speaking/                 # Speech state with mood variations
-    │   ├── casual/              # Default mood
-    │   ├── excited/             # Elevated mood
-    │   └── .../                 # Other mood states
-    └── {other_states}/          # Basic state images
-    
-    The system implements a fallback chain:
-    1. Try persona-specific resources first
-    2. Fall back to Laura's resources if not found
-    3. Ultimate fallback to thinking state
+    ├── tool_use/                 # Persona-specific tool use images (preferred, new standard)
+    ├── system/                   # System-level states and transitions (legacy/fallback)
+    │   ├── tools/
+    │   │   ├── enabled/
+    │   │   └── disabled/
+    │   ├── calibration/
+    │   ├── document/
+    │   │   ├── load/
+    │   │   └── unload/
+    │   └── persona/
+    │       ├── in/
+    │       └── out/
+    ├── speaking/
+    │   ├── casual/
+    │   ├── excited/
+    │   └── .../
+    └── {other_states}/
+
+    Fallback order for images:
+    1. Persona's own directories (e.g., /pygame/{persona}/tool_use/)
+    2. Laura's fallback directories (e.g., /pygame/laura/tool_use/)
+    3. Ultimate fallback to thinking state (e.g., /pygame/laura/thinking/)
+
+    Use the 'tool_use' folder for immediate tool-use feedback (stop_reason=tools), bridging to TTS playback.
+    System/persona transitions (in/out), calibration, and document states are handled in their respective folders.
     """
 
     def __init__(self):
@@ -378,21 +381,11 @@ class DisplayManager:
                 print(f"Error updating display path: {e}")
                 return False
              
-    async def update_display(self, state, mood=None, transition_path=None, specific_image=None):
+    async def update_display(self, state, mood=None, transition_path=None, tool_name=None):
         """
-        Update display state with comprehensive state and transition handling.
-        
-        The update process:
-        1. Validates and normalizes input parameters
-        2. Handles special system states (tools, calibration, document)
-        3. Manages persona transitions
-        4. Provides fallback mechanisms for missing resources
-        
-        Args:
-            state: Target display state
-            mood: Optional mood for speaking state
-            transition_path: Optional path for transition animations
-            specific_image: Optional specific image to display
+        Update display state with support for persona/fallback tool_use state.
+        For 'tool_use', loads from persona/tool_use/, falls back to laura/tool_use/ if needed.
+        All other logic remains as before.
         """
         async with self.state_lock:
             if mood is None:
@@ -402,7 +395,7 @@ class DisplayManager:
             if (state == self.current_state and 
                 mood == self.current_mood and 
                 transition_path is None and 
-                specific_image is None):
+                tool_name is None):
                 return
 
             try:
@@ -410,31 +403,73 @@ class DisplayManager:
                 self.current_state = state
                 self.current_mood = mood
 
-                # Handle system states with proper subtype validation
+                if state == "tool_use":
+                    # Try persona-specific tool_use first
+                    persona_path = self.base_path / 'tool_use'
+                    laura_path = Path('/home/user/LAURA/pygame/laura/tool_use')
+                    paths_to_try = [persona_path, laura_path]
+                    image_found = False
+                    for base in paths_to_try:
+                        if tool_name:
+                            tool_img = base / f"{tool_name}.png"
+                            if tool_img.exists():
+                                display_img = pygame.transform.scale(
+                                    pygame.image.load(str(tool_img)), (512, 512)
+                                )
+                                self.current_image = display_img
+                                self.screen.blit(self.current_image, (0, 0))
+                                pygame.display.flip()
+                                self.state_entry_time = time.time()
+                                image_found = True
+                                break
+                        # Fallback: display a generic tool_use/default.png or any png in folder
+                        default_img = base / "default.png"
+                        if default_img.exists():
+                            display_img = pygame.transform.scale(
+                                pygame.image.load(str(default_img)), (512, 512)
+                            )
+                            self.current_image = display_img
+                            self.screen.blit(self.current_image, (0, 0))
+                            pygame.display.flip()
+                            self.state_entry_time = time.time()
+                            image_found = True
+                            break
+                        # Try the first available png in the folder
+                        if base.exists():
+                            pngs = list(base.glob("*.png"))
+                            if pngs:
+                                display_img = pygame.transform.scale(
+                                    pygame.image.load(str(pngs[0])), (512, 512)
+                                )
+                                self.current_image = display_img
+                                self.screen.blit(self.current_image, (0, 0))
+                                pygame.display.flip()
+                                self.state_entry_time = time.time()
+                                image_found = True
+                                break
+                    if image_found:
+                        return
+                    # If nothing is found, fall through to normal state handling
+
+                # Handle system states with prior logic (unchanged)
                 if state in ['tools', 'calibration', 'document']:
                     try:
-                        # Validate and determine system state parameters
                         if state == 'tools':
                             state_type = 'tools'
-                            subtype = specific_image if specific_image in self.system_subtypes['tools'] else None
+                            subtype = tool_name if tool_name in self.system_subtypes['tools'] else None
                         elif state == 'calibration':
                             state_type = 'calibration'
                             subtype = None
                         else:  # document
                             state_type = 'document'
-                            subtype = specific_image if specific_image in self.system_subtypes['document'] else None
-
-                        # Get path with fallback chain
+                            subtype = tool_name if tool_name in self.system_subtypes['document'] else None
                         image_path = self._get_system_image_path(state_type, subtype)
-                        
-                        # Load and display appropriate image
                         if image_path.is_file():
                             system_image = pygame.transform.scale(
                                 pygame.image.load(str(image_path)),
                                 (512, 512)
                             )
                         else:
-                            # Handle directory of images
                             png_files = list(image_path.glob('*.png'))
                             if not png_files:
                                 raise FileNotFoundError(f"No PNG files found in {image_path}")
@@ -442,28 +477,24 @@ class DisplayManager:
                                 pygame.image.load(str(png_files[0])),
                                 (512, 512)
                             )
-                        
                         self.current_image = system_image
                         self.screen.blit(self.current_image, (0, 0))
                         pygame.display.flip()
                         self.state_entry_time = time.time()
                         return
-                        
                     except Exception as e:
                         print(f"Error handling system state {state}: {e}")
-                        # Fall through to normal state handling
-                
-                # Handle persona transitions with proper sequencing
+
+                # Handle persona transitions with prior logic (unchanged)
                 if transition_path is not None:
                     try:
                         transition_path = Path(transition_path)
                         if transition_path.exists():
-                            # Handle specific transition image if provided
-                            if specific_image:
-                                specific_path = Path(specific_image)
+                            if tool_name:
+                                specific_path = Path(tool_name)
                                 if specific_path.exists() and specific_path.is_file():
                                     transition_image = pygame.transform.scale(
-                                        pygame.image.load(str(specific_image)),
+                                        pygame.image.load(str(tool_name)),
                                         (512, 512)
                                     )
                                     self.current_image = transition_image
@@ -471,8 +502,6 @@ class DisplayManager:
                                     pygame.display.flip()
                                     self.state_entry_time = time.time()
                                     return
-                            
-                            # Use first image from transition sequence
                             png_files = list(transition_path.glob('*.png'))
                             if png_files:
                                 transition_image = pygame.transform.scale(
@@ -486,7 +515,6 @@ class DisplayManager:
                                 return
                     except Exception as e:
                         print(f"Error handling transition: {e}")
-                        # Fall through to normal state handling
 
                 # Handle normal states with mood variations
                 if state == 'speaking':
@@ -499,18 +527,14 @@ class DisplayManager:
                 else:
                     print(f"Error: Invalid state '{state}'")
                     return
-
                 self.screen.blit(self.current_image, (0, 0))
                 pygame.display.flip()
-                
                 self.state_entry_time = time.time()
                 if state in ['idle', 'sleep']:
                     self.last_image_change = self.state_entry_time
-
             except Exception as e:
                 print(f"Error updating display: {e}")
-                traceback.print_exc()
-                # Try to recover to thinking state
+                import traceback; traceback.print_exc()
                 try:
                     if 'thinking' in self.image_cache:
                         self.current_image = random.choice(self.image_cache['thinking'])
