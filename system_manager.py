@@ -625,15 +625,16 @@ class SystemManager:
                 
             if success:
                 # Use DisplayManager's path resolution
+                status_type = f"{state}d"  # "enabled" or "disabled"
                 await self.display_manager.update_display(
                     'tools', 
-                    specific_image=f"/home/user/LAURA/pygame/laura/tool_use/{state}d"
+                    tool_name=status_type
                 )
                 
                 # Play appropriate audio feedback if audio manager is available
                 if self.audio_manager:
                     audio_folder = os.path.join(
-                        f"/home/user/LAURA/sounds/{config.ACTIVE_PERSONA.lower()}/tool_sentences/status/{state}d"
+                        f"/home/user/LAURA/sounds/{config.ACTIVE_PERSONA.lower()}/tool_sentences/status/{status_type}"
                     )
                     if os.path.exists(audio_folder):
                         mp3_files = [f for f in os.listdir(audio_folder) if f.endswith('.mp3')]
@@ -656,7 +657,7 @@ class SystemManager:
                 except Exception as display_error:
                     print(f"Error updating display: {display_error}")
         return False
-        
+                
     async def show_tool_use(self) -> None:
         """
         Update display and start audio for tool use feedback.
