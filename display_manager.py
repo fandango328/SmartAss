@@ -13,7 +13,7 @@ class DisplayManager:
     /pygame/{persona}/
     ├── tool_use/                 # Persona-specific tool use images (preferred, new standard)
     ├── system/                   # System-level states and transitions (legacy/fallback)
-    │   ├── tools/
+    │   ├── tools_state/
     │   │   ├── enabled/
     │   │   └── disabled/
     │   ├── calibration/
@@ -95,9 +95,10 @@ class DisplayManager:
             'speaking': str(self.base_path / 'speaking'),
             'thinking': str(self.base_path / 'thinking'),
             'wake': str(self.base_path / 'wake'),
+            'tool_use': str(self.base_path / 'tool_use'),
             
             # System states - Under system/ directory
-            'tools': str(self.base_path / 'system' / 'tools'),
+            'tools_state': str(self.base_path / 'system' / 'tools_state'),
             'calibration': str(self.base_path / 'system' / 'calibration'),
             'document': str(self.base_path / 'system' / 'document'),
             'persona': str(self.base_path / 'system' / 'persona'),
@@ -107,7 +108,7 @@ class DisplayManager:
         # Define valid subtypes for system states
         # This prevents invalid state/subtype combinations
         self.system_subtypes = {
-            'tools': ['enabled', 'disabled', 'use'],
+            'tools_state': ['enabled', 'disabled'],
             'document': ['load', 'unload'],
             'persona': ['in', 'out'],
             'calibration': []  # No subtypes for calibration
@@ -231,7 +232,7 @@ class DisplayManager:
         else:
             primary = self.base_path / 'system' / state_type
         paths_to_try.append(primary)
-        
+
         # Add Laura fallback paths
         laura_base = Path('/home/user/LAURA/pygame/laura')
         if subtype:
@@ -435,12 +436,12 @@ class DisplayManager:
                         return
                     # If nothing is found, fall through to normal state handling
 
-                # Handle system states with prior logic (unchanged)
-                if state in ['tools', 'calibration', 'document']:
+                # Handle system states with updated tool state logic
+                if state in ['tools_state', 'calibration', 'document']:
                     try:
-                        if state == 'tools':
-                            state_type = 'tools'
-                            subtype = tool_name if tool_name in self.system_subtypes['tools'] else None
+                        if state == 'tools_state':
+                            state_type = 'tools_state'
+                            subtype = tool_name if tool_name in self.system_subtypes['tools_state'] else None
                         elif state == 'calibration':
                             state_type = 'calibration'
                             subtype = None
