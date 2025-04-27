@@ -722,7 +722,13 @@ async def generate_response(query: str) -> str:
     Returns:
         str: Processed response ready for TTS/logging
     """
-    global chat_log, last_interaction, last_interaction_check
+    global chat_log, last_interaction, last_interaction_check, is_processing
+
+    # Re-entrancy guard
+    if is_processing:
+        print("DEBUG: generate_response called while already processing. Skipping duplicate call.")
+        return "[CONTINUE]"
+    is_processing = True
 
     # Get core managers from registry
     system_manager = tool_registry.get_manager('system')
@@ -1808,22 +1814,18 @@ def sanitize_tool_interactions(chat_history):
 async def main():
     """
     Main entry point for LAURA (Language & Automation User Response Agent).
-    
-    Manages the initialization and lifecycle of core system components:
-    - Token Management: Handles API token usage and limits
-    - Document Management: Controls file loading and processing
-    - Transcription: Manages speech-to-text (local or remote)
-    - Display: Controls visual feedback and animations
-    - Calendar: Monitors and notifies of upcoming events
 
-    The system uses asyncio for concurrent operation of multiple tasks:
-    - Background animations
-    - Main interaction loop
-    - Calendar monitoring
-    - Heartbeat monitoring (for remote transcription)
+    Handles all one-time system, manager, and resource initializations.
+    After setup, schedules and runs all background and main event loop tasks.
 
-    Last Updated: 2025-04-24 16:36:20 UTC
-    Author: fandango328
+    This function should:
+    - Load configuration, environment, and credentials
+    - Instantiate all manager classes and peripherals
+    - Load persistent state (e.g., chat logs)
+    - Assign all core components to globals (if needed)
+    - Start all background and main loops as asyncio tasks
+    - Play a startup sound and set display to listening mode
+    - Await on all tasks to keep the event loop running
     """
     global remote_transcriber, display_manager, transcriber, token_manager
     global chat_log, document_manager, system_manager, keyboard_device
@@ -1989,6 +1991,7 @@ async def main():
 
         # TASK CREATION AND EXECUTION
         print("\n=== Task Management ===")
+        # ----- THE FOLLOWING IS CRITICAL TO START THE ASSISTANT LOOP -----
         tasks = [
             asyncio.create_task(display_manager.rotate_background()),
             asyncio.create_task(run_main_loop()),
@@ -1998,10 +2001,19 @@ async def main():
         if TRANSCRIPTION_MODE == "remote":
             tasks.append(asyncio.create_task(heartbeat(remote_transcriber)))
 
-        # Set initial display state
+        # Play startup sound and display listening state
+        sound_effect_path = "/home/user/LAURA/sounds/sound_effects/successfulloadup.mp3"
+        if os.path.exists(sound_effect_path):
+            try:
+                await audio_manager.queue_audio(audio_file=sound_effect_path)
+                await audio_manager.wait_for_queue_empty()
+            except Exception as e:
+                print(f"Warning: Could not play startup sound effect: {e}")
         await display_manager.update_display('sleep')
-        
-        # Execute all tasks
+        print(f"{Fore.MAGENTA}Listening for wake word or press Raspberry button to begin...{Fore.WHITE}")
+
+        print("\nAll background tasks have been scheduled. System is now running.\n")
+        # Execute all tasks and keep the assistant alive
         await asyncio.gather(*tasks, return_exceptions=True)
 
     except Exception as e:
@@ -2035,101 +2047,32 @@ async def main():
             print(f"{Fore.GREEN}Keyboard device closed successfully{Fore.WHITE}")
 
         print(f"{Fore.GREEN}All resources released{Fore.WHITE}")
-
+        
 async def run_main_loop():
     """
     Core interaction loop managing LAURA's conversation flow.
+
+    This function:
+    - Waits in a loop for a wake event (keyboard or wake-word).
+    - Handles notification playback while idle.
+    - On wake, listens for user input, determines if it's a command or general conversation.
+    - Processes commands or conversation using the LLM.
+    - Ensures only one interaction can be processed at a time by using a processing guard.
+
+    Assumes that all required managers and resources have already been initialized by main().
     """
-    global document_manager, chat_log, system_manager, keyboard_device, notification_manager
+    global document_manager, chat_log, system_manager, keyboard_device, notification_manager, is_processing, last_interaction
     iteration_count = 0
 
-    # Initialize SystemManager if not already initialized
-    async with system_manager_lock:
-        if system_manager is None:
-            print("\n=== System Manager Initialization Debug ===")
-            print(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-            
-            # Verify and debug required global managers
-            required_managers = {
-                'display_manager': display_manager,
-                'audio_manager': audio_manager,
-                'token_manager': token_manager,
-                'document_manager': document_manager
-            }
-            
-            print("\nManager Status:")
-            for name, manager in required_managers.items():
-                status = "✓ Available" if manager is not None else "✗ Missing"
-                print(f"{name}: {status}")
-                if manager is not None:
-                    print(f"  Type: {type(manager).__name__}")
-            
-            missing_managers = [name for name, manager in required_managers.items() 
-                              if manager is None]
-            
-            if missing_managers:
-                print(f"\nError: Required managers not found: {', '.join(missing_managers)}")
-                print("Initialization aborted.")
-                return
-            
-            try:
-                print("\n--- Notification Manager Initialization ---")
-                if notification_manager is None:
-                    print("Status: Creating new instance")
-                    try:
-                        notification_manager = NotificationManager(audio_manager)
-                        await notification_manager.start()
-                        print("Status: Successfully initialized")
-                    except Exception as notif_error:
-                        print(f"Status: Failed - {str(notif_error)}")
-                        traceback.print_exc()
-                        return
-                else:
-                    print("Status: Using existing instance")
-
-                print("\n--- System Manager Creation ---")
-                try:
-                    print("Status: Creating new instance")
-                    system_manager = SystemManager(
-                        email_manager=email_manager,
-                        display_manager=display_manager,
-                        audio_manager=audio_manager,
-                        document_manager=document_manager,
-                        notification_manager=notification_manager,
-                        token_manager=token_manager,
-                        tts_handler=tts_handler,
-                        anthropic_client=anthropic_client
-                    )
-                    
-                    print("Status: Registering managers")
-                    await system_manager.register_managers()
-                    
-                    print("Status: Verifying initialization")
-                    is_init, missing = system_manager.is_initialized()
-                    
-                    if not is_init:
-                        print("\nInitialization verification failed!")
-                        print(f"Missing components: {', '.join(missing)}")
-                        return
-                    
-                    print("\n=== System Manager Initialization Complete ===")
-                    print(f"{Fore.MAGENTA}Listening for wake word or press Raspberry button to begin...{Fore.WHITE}")
-                    
-                except Exception as sys_error:
-                    print(f"\nSystem Manager creation failed: {sys_error}")
-                    traceback.print_exc()
-                    return
-                    
-            except Exception as e:
-                print(f"\nCritical initialization error: {e}")
-                traceback.print_exc()
-                return
-    
     while True:
-        # Start of iteration - clear variables
+        # Processing Guard: Only allow one user interaction at a time
+        if is_processing:
+            await asyncio.sleep(0.1)
+            continue
+        is_processing = True
+
         wake_detected = False
         detected_model = None
-
         iteration_count += 1
 
         try:
@@ -2149,7 +2092,7 @@ async def run_main_loop():
                             events = read_keyboard_events(keyboard_device)
                             for event in events:
                                 if event.type == ecodes.EV_KEY and event.code == 125 and event.value == 1:
-                                    print(f"{Fore.GREEN}LEFTMETA key detected - activating{Fore.WHITE}")
+                                    print(f"{Fore.GREEN}Raspberry key detected - activating{Fore.WHITE}")
                                     wake_detected = True
                                     break
                     except (IOError, BlockingIOError):
@@ -2165,6 +2108,7 @@ async def run_main_loop():
 
                 # If no wake event detected, quick sleep and continue
                 if not wake_detected:
+                    is_processing = False
                     await asyncio.sleep(0.1)
                     continue
 
@@ -2182,7 +2126,7 @@ async def run_main_loop():
                     # Transition to listening state and pause wake word detection
                     await display_manager.update_display('listening')
 
-                    # Properly manage wake word detection state
+                    # Temporarily stop wake word detection during user speech capture
                     wake_word_active = False
                     if hasattr(wake_word, 'state') and wake_word.state.get('stream'):
                         wake_word.state['stream'].stop_stream()
@@ -2193,16 +2137,16 @@ async def run_main_loop():
                     finally:
                         # Always restore wake word detection regardless of transcript result
                         if wake_word_active:
-                            await asyncio.sleep(0.1)  # Small buffer to prevent immediate re-trigger
+                            await asyncio.sleep(0.1)
                             wake_word.state['stream'].start_stream()
 
                     if not transcript:
                         print(f"No input detected. Returning to sleep state.")
                         await display_manager.update_display('sleep')
-                        await asyncio.sleep(0.1)  # Small buffer before next iteration
+                        is_processing = False
+                        await asyncio.sleep(0.1)
                         continue
 
-                    # Process the transcript
                     await audio_manager.wait_for_queue_empty()
                     transcript_lower = transcript.lower().strip()
 
@@ -2215,14 +2159,9 @@ async def run_main_loop():
                             try:
                                 await display_manager.update_display('tools')
                                 success = await system_manager.handle_command(command_type, action, arguments)
-                                
-                                # Wait for any queued audio to complete
                                 await audio_manager.wait_for_queue_empty()
-                                
                                 if success:
                                     await display_manager.update_display('listening')
-                                    
-                                    # Handle follow-up conversation
                                     follow_up = await capture_speech(is_follow_up=True)
                                     while follow_up:
                                         cmd_result = system_manager.detect_command(follow_up)
@@ -2231,73 +2170,56 @@ async def run_main_loop():
                                             await display_manager.update_display('tools')
                                             success = await system_manager.handle_command(cmd_type, action, args)
                                             await audio_manager.wait_for_queue_empty()
-                                            
                                             if success:
                                                 await display_manager.update_display('listening')
                                                 follow_up = await capture_speech(is_follow_up=True)
                                                 continue
                                             break
-                                        
-                                        # Handle non-command follow-up
                                         user_message = {"role": "user", "content": follow_up}
-                                        if not any(msg["role"] == "user" and msg["content"] == follow_up 
-                                                 for msg in chat_log[-2:]):
+                                        if not any(msg["role"] == "user" and msg["content"] == follow_up for msg in chat_log[-2:]):
                                             chat_log.append(user_message)
-                                        
                                         await display_manager.update_display('thinking')
                                         formatted_response = await generate_response(follow_up)
-                                        
                                         if formatted_response == "[CONTINUE]":
                                             print("DEBUG - Detected control signal in follow-up, continuing")
                                             continue
-                                            
-                                            await speak_response(formatted_response, mood=None, source="followup")
-                                            
-                                            # Check notifications before state transition
-                                            if await notification_manager.has_pending_notifications():
-                                                await notification_manager.process_pending_notifications()
-                                                
-                                            if isinstance(formatted_response, str) and has_conversation_hook(formatted_response):
-                                                await display_manager.update_display('listening')
-                                                await handle_conversation_loop(formatted_response)
-                                                break
-                                            else:
-                                                break
+                                        await speak_response(formatted_response, mood=None, source="followup")
+                                        if await notification_manager.has_pending_notifications():
+                                            await notification_manager.process_pending_notifications()
+                                        if isinstance(formatted_response, str) and has_conversation_hook(formatted_response):
+                                            await display_manager.update_display('listening')
+                                            await handle_conversation_loop(formatted_response)
+                                            break
+                                        else:
+                                            break
                                 else:
                                     await display_manager.update_display('sleep')
                             except Exception as e:
                                 print(f"Error handling command: {e}")
                                 traceback.print_exc()
                                 await display_manager.update_display('sleep')
+                            is_processing = False
                             continue
 
                     # Normal conversation flow
                     try:
-                        # Make sure any previous audio has completed
                         await audio_manager.wait_for_queue_empty()
-                        
-                        # Set thinking state and generate response
                         await display_manager.update_display('thinking')
                         formatted_response = await generate_response(transcript)
-
                         if formatted_response == "[CONTINUE]":
                             print("DEBUG - Detected control signal, skipping voice generation")
+                            is_processing = False
                             continue
-
                         await speak_response(formatted_response, mood=None, source="main")
-
-                        # Check and process any pending notifications
                         if await notification_manager.has_pending_notifications():
                             await notification_manager.process_pending_notifications()
-
-                        # Always transition to listening and continue conversation unless explicitly ended
                         await display_manager.update_display('listening')
                         await handle_conversation_loop(formatted_response)
-
                     except Exception as voice_error:
                         print(f"Error during voice generation: {voice_error}")
                         traceback.print_exc()
                         await display_manager.update_display('sleep')
+                        is_processing = False
                         continue
 
             else:
@@ -2308,6 +2230,7 @@ async def run_main_loop():
                         print(f"{Fore.CYAN}Conversation timeout reached ({CONVERSATION_END_SECONDS} seconds), transitioning to sleep state...{Fore.WHITE}")
                         await display_manager.update_display('sleep')
                     await asyncio.sleep(0.1)
+                    is_processing = False
                     continue
                 # If in any other state (besides sleep), ensure we're tracking last_interaction
                 elif current_state not in ['sleep']:
@@ -2322,8 +2245,11 @@ async def run_main_loop():
             else:
                 await display_manager.update_display('idle')
             await asyncio.sleep(0.1)
+            is_processing = False
             continue
 
+        # Always release processing guard at end of loop
+        is_processing = False
 if __name__ == "__main__":
     try:
         display_manager = DisplayManager()
