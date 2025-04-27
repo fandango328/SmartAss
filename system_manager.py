@@ -625,7 +625,10 @@ class SystemManager:
                 
             if success:
                 # Use DisplayManager's path resolution
-                await self.display_manager.update_display('tools', specific_image=f"{state}d")
+                await self.display_manager.update_display(
+                    'tools', 
+                    specific_image=f"/home/user/LAURA/pygame/laura/tool_use/{state}d"
+                )
                 
                 # Play appropriate audio feedback if audio manager is available
                 if self.audio_manager:
