@@ -404,13 +404,11 @@ class DisplayManager:
                 self.current_mood = mood
 
                 if state == "tool_use":
-                    # Try persona-specific tool_use first
                     persona_path = self.base_path / 'tool_use'
                     laura_path = Path('/home/user/LAURA/pygame/laura/tool_use')
-                    paths_to_try = [persona_path, laura_path]
-                    image_found = False
-                    for base in paths_to_try:
-                        if tool_name:
+                    # Prefer tool-specific image if available
+                    if tool_name:
+                        for base in [persona_path, laura_path]:
                             tool_img = base / f"{tool_name}.png"
                             if tool_img.exists():
                                 display_img = pygame.transform.scale(
@@ -420,34 +418,20 @@ class DisplayManager:
                                 self.screen.blit(self.current_image, (0, 0))
                                 pygame.display.flip()
                                 self.state_entry_time = time.time()
-                                image_found = True
-                                break
-                        # Fallback: display a generic tool_use/default.png or any png in folder
-                        default_img = base / "default.png"
-                        if default_img.exists():
-                            display_img = pygame.transform.scale(
-                                pygame.image.load(str(default_img)), (512, 512)
-                            )
-                            self.current_image = display_img
-                            self.screen.blit(self.current_image, (0, 0))
-                            pygame.display.flip()
-                            self.state_entry_time = time.time()
-                            image_found = True
-                            break
-                        # Try the first available png in the folder
+                                return
+                    # Otherwise, randomly pick any PNG from persona or Laura fallback dir
+                    pngs = []
+                    for base in [persona_path, laura_path]:
                         if base.exists():
-                            pngs = list(base.glob("*.png"))
-                            if pngs:
-                                display_img = pygame.transform.scale(
-                                    pygame.image.load(str(pngs[0])), (512, 512)
-                                )
-                                self.current_image = display_img
-                                self.screen.blit(self.current_image, (0, 0))
-                                pygame.display.flip()
-                                self.state_entry_time = time.time()
-                                image_found = True
-                                break
-                    if image_found:
+                            pngs.extend(list(base.glob("*.png")))
+                    if pngs:
+                        display_img = pygame.transform.scale(
+                            pygame.image.load(str(random.choice(pngs))), (512, 512)
+                        )
+                        self.current_image = display_img
+                        self.screen.blit(self.current_image, (0, 0))
+                        pygame.display.flip()
+                        self.state_entry_time = time.time()
                         return
                     # If nothing is found, fall through to normal state handling
 
