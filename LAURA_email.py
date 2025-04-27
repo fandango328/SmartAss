@@ -819,7 +819,7 @@ async def generate_response(query: str) -> str:
                     raise ValueError("Tool use was indicated but no tool_use block found in response.")
 
                 if display_manager:
-                    await display_manager.update_display('tools', specific_image='use')
+                    await display_manager.update_display('tool_use')
 
                 tool_name = getattr(tool_call_block, "name", None)
                 tool_call_id = getattr(tool_call_block, "id", None)
