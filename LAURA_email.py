@@ -748,16 +748,17 @@ async def generate_response(query: str) -> str:
         if was_command:
             mood = command_response.get('mood', 'casual')
             await display_manager.update_display('speaking', mood=mood)
-            if command_response.get('state') in ['enabled', 'disabled']:
-                status_type = command_response['state'].lower()
+            state = command_response.get('state')
+            if state in ['enabled', 'disabled']:
+                status_type = state.lower()
                 await display_manager.update_display('tools', specific_image=status_type)
                 audio_file = get_random_audio('tool', f'status/{status_type}')
                 if audio_file:
                     await audio_manager.queue_audio(audio_file=audio_file, priority=True)
                     await audio_manager.wait_for_queue_empty()
-            # If the command was a tool-enabling command, reflect tool state visually
-            elif command_response.get('state') == 'use':
-                await display_manager.update_display('tools', specific_image='use')
+            elif state == 'use':
+                tool_name = command_response.get('tool_name', None)
+                await display_manager.update_display('tool_use', tool_name=tool_name)
             return "[CONTINUE]"
 
         # Save user message to log and chat_log
@@ -2157,7 +2158,6 @@ async def run_main_loop():
                         is_command, command_type, action, arguments = command_result
                         if is_command:
                             try:
-                                await display_manager.update_display('tools')
                                 success = await system_manager.handle_command(command_type, action, arguments)
                                 await audio_manager.wait_for_queue_empty()
                                 if success:
@@ -2167,7 +2167,6 @@ async def run_main_loop():
                                         cmd_result = system_manager.detect_command(follow_up)
                                         if cmd_result and cmd_result[0]:
                                             is_cmd, cmd_type, action, args = cmd_result
-                                            await display_manager.update_display('tools')
                                             success = await system_manager.handle_command(cmd_type, action, args)
                                             await audio_manager.wait_for_queue_empty()
                                             if success:
@@ -2193,11 +2192,11 @@ async def run_main_loop():
                                         else:
                                             break
                                 else:
-                                    await display_manager.update_display('sleep')
+                                    await display_manager.update_display('idle')
                             except Exception as e:
                                 print(f"Error handling command: {e}")
                                 traceback.print_exc()
-                                await display_manager.update_display('sleep')
+                                await display_manager.update_display('idle')
                             is_processing = False
                             continue
 
