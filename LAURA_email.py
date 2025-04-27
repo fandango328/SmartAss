@@ -724,187 +724,189 @@ async def generate_response(query: str) -> str:
     """
     global chat_log, last_interaction, last_interaction_check, is_processing
 
-    # Re-entrancy guard
     if is_processing:
         print("DEBUG: generate_response called while already processing. Skipping duplicate call.")
         return "[CONTINUE]"
     is_processing = True
 
-    # Get core managers from registry
-    system_manager = tool_registry.get_manager('system')
-    display_manager = tool_registry.get_manager('display')
-    audio_manager = tool_registry.get_manager('audio')
-    token_manager = tool_registry.get_manager('token')
-    notification_manager = tool_registry.get_manager('notification')
-
-    now = datetime.now()
-    last_interaction = now
-    last_interaction_check = now
-    token_manager.start_interaction()
-
     try:
-        # Handle system commands (skip LLM/tool call if so)
-        was_command, command_response = token_manager.handle_tool_command(query)
-        if was_command:
-            mood = command_response.get('mood', 'casual')
-            await display_manager.update_display('speaking', mood=mood)
-            state = command_response.get('state')
-            if state in ['enabled', 'disabled']:
-                status_type = state.lower()
-                await display_manager.update_display('tools', specific_image=status_type)
-                audio_file = get_random_audio('tool', f'status/{status_type}')
-                if audio_file:
-                    await audio_manager.queue_audio(audio_file=audio_file, priority=True)
-                    await audio_manager.wait_for_queue_empty()
-            elif state == 'use':
-                tool_name = command_response.get('tool_name', None)
-                await display_manager.update_display('tool_use', tool_name=tool_name)
-            return "[CONTINUE]"
 
-        # Save user message to log and chat_log
-        chat_message = {"role": "user", "content": query}
+        # Get core managers from registry
+        system_manager = tool_registry.get_manager('system')
+        display_manager = tool_registry.get_manager('display')
+        audio_manager = tool_registry.get_manager('audio')
+        token_manager = tool_registry.get_manager('token')
+        notification_manager = tool_registry.get_manager('notification')
+
+        now = datetime.now()
+        last_interaction = now
+        last_interaction_check = now
+        token_manager.start_interaction()
+
         try:
-            save_to_log_file(chat_message)
-        except Exception as e:
-            print(f"Warning: Failed to save chat message to log: {e}")
-        if not (chat_log and chat_log[-1].get("role") == "user" and chat_log[-1].get("content") == query):
-            chat_log.append(chat_message)
+            # Handle system commands (skip LLM/tool call if so)
+            was_command, command_response = token_manager.handle_tool_command(query)
+            if was_command:
+                mood = command_response.get('mood', 'casual')
+                await display_manager.update_display('speaking', mood=mood)
+                state = command_response.get('state')
+                if state in ['enabled', 'disabled']:
+                    status_type = state.lower()
+                    await display_manager.update_display('tools', specific_image=status_type)
+                    audio_file = get_random_audio('tool', f'status/{status_type}')
+                    if audio_file:
+                        await audio_manager.queue_audio(audio_file=audio_file, priority=True)
+                        await audio_manager.wait_for_queue_empty()
+                elif state == 'use':
+                    tool_name = command_response.get('tool_name', None)
+                    await display_manager.update_display('tool_use', tool_name=tool_name)
+                return "[CONTINUE]"
 
-        # Tool selection and tool definitions
-        use_tools = token_manager.tools_are_active()
-        relevant_tools = []
-        if use_tools:
-            tools_needed, relevant_tools = token_manager.get_tools_for_query(query)
-        else:
+            # Save user message to log and chat_log
+            chat_message = {"role": "user", "content": query}
+            try:
+                save_to_log_file(chat_message)
+            except Exception as e:
+                print(f"Warning: Failed to save chat message to log: {e}")
+            if not (chat_log and chat_log[-1].get("role") == "user" and chat_log[-1].get("content") == query):
+                chat_log.append(chat_message)
+
+            # Tool selection and tool definitions
+            use_tools = token_manager.tools_are_active()
             relevant_tools = []
-
-        # Prepare sanitized messages for API
-        sanitized_messages = sanitize_messages_for_api(chat_log)
-        system_content = config.SYSTEM_PROMPT
-
-        # Add document context if present
-        document_manager = tool_registry.get_manager('document')
-        if document_manager and document_manager.files_loaded:
-            loaded_content = document_manager.get_loaded_content()
-            if loaded_content["system_content"]:
-                system_content += "\n\nLoaded Documents:\n" + loaded_content["system_content"]
-
-        # Build main API parameters
-        api_params = {
-            "model": config.ANTHROPIC_MODEL,
-            "system": system_content,
-            "messages": sanitized_messages,
-            "max_tokens": 1024,
-            "temperature": 0.8
-        }
-        if use_tools and relevant_tools:
-            api_params["tools"] = relevant_tools
-            api_params["tool_choice"] = {"type": "auto"}
-
-        last_tool_result = None  # Track the last tool result, in case the model gives no content
-
-        # --- Tool Use Loop ---
-        while True:
-            response = system_manager.anthropic_client.messages.create(**api_params)
-            if not response:
-                print("DEBUG: Anthropic returned None response object.")
-                raise ValueError("Empty response from API")
-            if not hasattr(response, 'content'):
-                print(f"DEBUG: Anthropic raw response: {response}")
-                raise ValueError("Empty response from API (no content field)")
-
-            # If tool use is requested, extract the tool call
-            if getattr(response, "stop_reason", None) == "tool_use":
-                # Identify the (most recent) tool_use block and its index in the message list
-                tool_call_block = None
-                assistant_ack = ""
-                for block in response.content:
-                    if getattr(block, "type", None) == "text" and getattr(block, "text", None):
-                        assistant_ack = block.text
-                    if getattr(block, "type", None) == "tool_use":
-                        tool_call_block = block
-
-                # Log assistant's acknowledgement (no TTS yet)
-                if assistant_ack:
-                    chat_log.append({"role": "assistant", "content": assistant_ack})
-                    try:
-                        save_to_log_file({"role": "assistant", "content": assistant_ack})
-                    except Exception as e:
-                        print(f"Warning: Failed to save tool-use ack to log: {e}")
-
-                if not tool_call_block:
-                    raise ValueError("Tool use was indicated but no tool_use block found in response.")
-
-                # Update display to tool-use visual
-                if display_manager:
-                    await display_manager.update_display('tools', specific_image='use')
-
-                # Execute the tool (sync or async)
-                tool_name = getattr(tool_call_block, "name", None)
-                tool_call_id = getattr(tool_call_block, "id", None)
-                if not tool_name or not tool_call_id:
-                    raise ValueError("Tool use block missing tool name or id.")
-
-                try:
-                    result = await execute_tool(tool_call_block)
-                except Exception as e:
-                    print(f"Tool execution error: {e}")
-                    result = f"ERROR: Tool '{tool_name}' failed to execute: {e}"
-
-                # Save the last tool result for fallback in case of empty follow-up
-                last_tool_result = result if isinstance(result, str) else str(result)
-
-                # --- Correct tool_use/tool_result message protocol ---
-                tool_result_msg = {
-                    "role": "user",
-                    "content": [{
-                        "type": "tool_result",
-                        "tool_use_id": tool_call_id,
-                        "content": last_tool_result,
-                    }]
-                }
-
-                messages_for_tool_result = sanitized_messages + [
-                    {
-                        "role": "assistant",
-                        "content": response.content,
-                    },
-                    tool_result_msg
-                ]
-
-                # Next API call (tools param omitted for followup)
-                api_params = {
-                    "model": config.ANTHROPIC_MODEL,
-                    "system": system_content,
-                    "messages": messages_for_tool_result,
-                    "max_tokens": 1024,
-                    "temperature": 0.7
-                }
-                # Tool use loop continues if Claude still requests a tool
-                continue
-
-            # Not a tool-use response: extract and return final assistant message
-            # If the content is empty (e.g., []), use the last tool result instead of raising error
-            if not response.content or (isinstance(response.content, list) and len(response.content) == 0):
-                if last_tool_result:
-                    processed_content = last_tool_result
-                else:
-                    raise ValueError("Empty response from API (no content field)")
+            if use_tools:
+                tools_needed, relevant_tools = token_manager.get_tools_for_query(query)
             else:
-                processed_content = await process_response_content(
-                    response.content, chat_log, system_manager, display_manager, audio_manager, notification_manager
-                )
-                chat_log.append({"role": "assistant", "content": processed_content})
-                try:
-                    save_to_log_file({"role": "assistant", "content": processed_content})
-                except Exception as e:
-                    print(f"Warning: Failed to save final assistant message to log: {e}")
-            return processed_content
+                relevant_tools = []
 
-    except Exception as e:
-        print(f"Error in generate_response: {e}")
-        traceback.print_exc()
-        return "I apologize, but I encountered an error processing your request."
+            # Prepare sanitized messages for API
+            sanitized_messages = sanitize_messages_for_api(chat_log)
+            system_content = config.SYSTEM_PROMPT
+
+            # Add document context if present
+            document_manager = tool_registry.get_manager('document')
+            if document_manager and document_manager.files_loaded:
+                loaded_content = document_manager.get_loaded_content()
+                if loaded_content["system_content"]:
+                    system_content += "\n\nLoaded Documents:\n" + loaded_content["system_content"]
+
+            # Build main API parameters
+            api_params = {
+                "model": config.ANTHROPIC_MODEL,
+                "system": system_content,
+                "messages": sanitized_messages,
+                "max_tokens": 1024,
+                "temperature": 0.8
+            }
+            if use_tools and relevant_tools:
+                api_params["tools"] = relevant_tools
+                api_params["tool_choice"] = {"type": "auto"}
+
+            last_tool_result = None  # Track the last tool result, in case the model gives no content
+
+            # --- Tool Use Loop ---
+            while True:
+                response = system_manager.anthropic_client.messages.create(**api_params)
+                if not response:
+                    print("DEBUG: Anthropic returned None response object.")
+                    raise ValueError("Empty response from API")
+                if not hasattr(response, 'content'):
+                    print(f"DEBUG: Anthropic raw response: {response}")
+                    raise ValueError("Empty response from API (no content field)")
+
+                # If tool use is requested, extract the tool call
+                if getattr(response, "stop_reason", None) == "tool_use":
+                    # Identify the (most recent) tool_use block and its index in the message list
+                    tool_call_block = None
+                    assistant_ack = ""
+                    for block in response.content:
+                        if getattr(block, "type", None) == "text" and getattr(block, "text", None):
+                            assistant_ack = block.text
+                        if getattr(block, "type", None) == "tool_use":
+                            tool_call_block = block
+
+                    # Log assistant's acknowledgement (no TTS yet)
+                    if assistant_ack:
+                        chat_log.append({"role": "assistant", "content": assistant_ack})
+                        try:
+                            save_to_log_file({"role": "assistant", "content": assistant_ack})
+                        except Exception as e:
+                            print(f"Warning: Failed to save tool-use ack to log: {e}")
+
+                    if not tool_call_block:
+                        raise ValueError("Tool use was indicated but no tool_use block found in response.")
+
+                    # Update display to tool-use visual
+                    if display_manager:
+                        await display_manager.update_display('tools', specific_image='use')
+
+                    # Execute the tool (sync or async)
+                    tool_name = getattr(tool_call_block, "name", None)
+                    tool_call_id = getattr(tool_call_block, "id", None)
+                    if not tool_name or not tool_call_id:
+                        raise ValueError("Tool use block missing tool name or id.")
+
+                    try:
+                        result = await execute_tool(tool_call_block)
+                    except Exception as e:
+                        print(f"Tool execution error: {e}")
+                        result = f"ERROR: Tool '{tool_name}' failed to execute: {e}"
+
+                    # Save the last tool result for fallback in case of empty follow-up
+                    last_tool_result = result if isinstance(result, str) else str(result)
+
+                    # --- Correct tool_use/tool_result message protocol ---
+                    tool_result_msg = {
+                        "role": "user",
+                        "content": [{
+                            "type": "tool_result",
+                            "tool_use_id": tool_call_id,
+                            "content": last_tool_result,
+                        }]
+                    }
+
+                    messages_for_tool_result = sanitized_messages + [
+                        {
+                            "role": "assistant",
+                            "content": response.content,
+                        },
+                        tool_result_msg
+                    ]
+
+                    # Next API call (tools param omitted for followup)
+                    api_params = {
+                        "model": config.ANTHROPIC_MODEL,
+                        "system": system_content,
+                        "messages": messages_for_tool_result,
+                        "max_tokens": 1024,
+                        "temperature": 0.7
+                    }
+                    # Tool use loop continues if Claude still requests a tool
+                    continue
+
+                # Not a tool-use response: extract and return final assistant message
+                # If the content is empty (e.g., []), use the last tool result instead of raising error
+                if not response.content or (isinstance(response.content, list) and len(response.content) == 0):
+                    if last_tool_result:
+                        processed_content = last_tool_result
+                    else:
+                        raise ValueError("Empty response from API (no content field)")
+                else:
+                    processed_content = await process_response_content(
+                        response.content, chat_log, system_manager, display_manager, audio_manager, notification_manager
+                    )
+                    chat_log.append({"role": "assistant", "content": processed_content})
+                    try:
+                        save_to_log_file({"role": "assistant", "content": processed_content})
+                    except Exception as e:
+                        print(f"Warning: Failed to save final assistant message to log: {e}")
+                        return processed_content
+            except Exception as e:
+                print(f"Error in generate_response: {e}")
+                traceback.print_exc()
+                return "I apologize, but I encountered an error processing your request."
+            finally:
+                is_processing = False  # <-- This ensures the guard is always released, no matter what
         
                                
 async def wake_word():
@@ -2156,8 +2158,10 @@ async def run_main_loop():
                                     await audio_manager.wait_for_queue_empty()
                                     if success:
                                         await display_manager.update_display('listening')
-                                        follow_up = await capture_speech(is_follow_up=True)
-                                        while follow_up:
+                                        while True:
+                                            follow_up = await capture_speech(is_follow_up=True)
+                                            if not follow_up:
+                                                break
                                             cmd_result = system_manager.detect_command(follow_up)
                                             if cmd_result and cmd_result[0]:
                                                 is_cmd, cmd_type, action, args = cmd_result
@@ -2165,7 +2169,6 @@ async def run_main_loop():
                                                 await audio_manager.wait_for_queue_empty()
                                                 if success:
                                                     await display_manager.update_display('listening')
-                                                    follow_up = await capture_speech(is_follow_up=True)
                                                     continue
                                                 break
                                             user_message = {"role": "user", "content": follow_up}
@@ -2174,8 +2177,8 @@ async def run_main_loop():
                                             await display_manager.update_display('thinking')
                                             formatted_response = await generate_response(follow_up)
                                             if formatted_response == "[CONTINUE]":
-                                                print("DEBUG - Detected control signal in follow-up, continuing")
-                                                continue
+                                                print("DEBUG - Detected control signal in follow-up, breaking from follow-up loop")
+                                                break
                                             await speak_response(formatted_response, mood=None, source="followup")
                                             if await notification_manager.has_pending_notifications():
                                                 await notification_manager.process_pending_notifications()
@@ -2193,6 +2196,7 @@ async def run_main_loop():
                                     await display_manager.update_display('idle')
                                 is_processing = False
                                 continue
+                            # If not a system command, fall through to normal conversation flow
 
                         # Normal conversation flow
                         try:
