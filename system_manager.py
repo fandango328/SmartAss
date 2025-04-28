@@ -626,7 +626,7 @@ class SystemManager:
                 # Use DisplayManager's path resolution
                 status_type = f"{state}d"  # "enabled" or "disabled"
                 await self.display_manager.update_display(
-                    'tools', 
+                    'tools_state', 
                     tool_name=status_type
                 )
                 
@@ -830,29 +830,22 @@ class SystemManager:
         """
         Execute a tool and package results for final API call.
         Handles persona-specific tool execution audio feedback.
-        
+
         Args:
             tool_call: Tool execution data from API call
             initial_response: Optional acknowledgment from API
-            
+
         Returns:
-                dict: Package containing tool result for final API call
-                {
-                    'type': 'tool_result',     # Identifies this as a tool result
-                    'tool_use_id': str,        # Original tool call ID
-                    'content': str,            # Raw tool execution result
-                }
+            dict: Package containing tool result for final API call
         """
         try:
-            # Ensure we have current persona configuration
-            import config as config_module
-            importlib.reload(config_module)
-            current_persona = config_module.ACTIVE_PERSONA.lower()
-            
+            importlib.reload(config)
+            current_persona = config.ACTIVE_PERSONA.lower()
+
             # Update display state if available
             if self.display_manager:
-                await self.display_manager.update_display('tools', specific_image='use')
-            
+                await self.display_manager.update_display('tool_use')
+
             # Start tool execution audio
             audio_task = None
             tool_audio_path = f"/home/user/LAURA/sounds/{current_persona}/tool_sentences/use"
@@ -861,42 +854,42 @@ class SystemManager:
                 if mp3_files:
                     audio_file = os.path.join(tool_audio_path, random.choice(mp3_files))
                     audio_task = asyncio.create_task(self.audio_manager.play_audio(audio_file))
-            
+
             # Validate tool call
             if not hasattr(tool_call, 'name') or not tool_call.name:
                 raise ValueError("Invalid tool call - missing tool name")
-                
+
             handler = tool_registry.get_handler(tool_call.name)
             if not handler:
                 raise ValueError(f"Unsupported tool: {tool_call.name}")
-            
+
             # Execute tool with provided arguments
             tool_args = getattr(tool_call, 'input', {}) or {}
             if asyncio.iscoroutinefunction(handler):
                 tool_result = await handler(**tool_args)
             else:
                 tool_result = handler(**tool_args)
-                
+
             if not tool_result:
                 raise ValueError("Empty result from tool execution")
-                
+
             # Record successful usage if token manager available
             if self.token_manager:
                 self.token_manager.record_tool_usage(tool_call.name)
-            
+
             # Package result with tool ID from tool_call matching legacy format
             return {
                 'type': 'tool_result',
                 'tool_use_id': tool_call.id,
                 'content': str(tool_result)
             }
-            
+
         except Exception as e:
             print(f"Error in tool execution: {e}")
             traceback.print_exc()
             return {
                 'type': 'tool_result',
-                'tool_use_id': tool_call.id,
+                'tool_use_id': getattr(tool_call, 'id', None),
                 'content': f"Error executing tool: {str(e)}"
             }
             
@@ -974,7 +967,7 @@ class SystemManager:
                             json.dump(personas_data, f, indent=2)
                         
                         importlib.reload(config_module)
-                        
+                        importlib.reload(config)
                         config_module.ACTIVE_PERSONA = target_persona
                         config_module.ACTIVE_PERSONA_DATA = personas_data["personas"][target_persona]
                         config_module.VOICE = personas_data["personas"][target_persona].get("voice", "L.A.U.R.A.")
