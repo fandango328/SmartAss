@@ -763,12 +763,15 @@ async def generate_response(query: str) -> str:
         sanitized_messages = sanitize_messages_for_api(chat_log)
         system_content = config.SYSTEM_PROMPT
 
-        # Add document context if present
-        document_manager = tool_registry.get_manager('document')
-        if document_manager and document_manager.files_loaded:
-            loaded_content = document_manager.get_loaded_content()
-            if loaded_content["system_content"]:
-                system_content += "\n\nLoaded Documents:\n" + loaded_content["system_content"]
+        # Construct the user message, including document blocks as content
+        if sanitized_messages and sanitized_messages[-1]["role"] == "user":
+            # Insert document blocks into the user's latest message
+            sanitized_messages[-1]["content"] = (
+                sanitized_messages[-1].get("content", []) + document_blocks
+            )
+        else:
+            # If no user message found, create one with document blocks
+            sanitized_messages.append({"role": "user", "content": document_blocks})
 
         # Build main API parameters
         api_params = {
@@ -778,6 +781,7 @@ async def generate_response(query: str) -> str:
             "max_tokens": 1024,
             "temperature": 0.8
         }
+        
         if use_tools and relevant_tools:
             api_params["tools"] = relevant_tools
             api_params["tool_choice"] = {"type": "auto"}
@@ -1037,14 +1041,22 @@ def has_conversation_hook(response):
 
     return True
 
-async def handle_conversation_loop(initial_response):
+async def handle_conversation_loop(initial_response, skip_first=True):
     """Handle ongoing conversation with calendar notification interrupts"""
     global chat_log, last_interaction
 
     res = initial_response
+    first_loop = True
     while has_conversation_hook(res):
         # Now enter listening state for follow-up
         await display_manager.update_display('listening')
+
+        # If this is the very first loop and we're told to skip, don't repeat TTS
+        if first_loop and skip_first:
+            first_loop = False
+        else:
+            # Speak the response if not the skipped initial
+            await speak_response(res, mood=None, source="followup")
 
         # Capture the follow-up speech
         follow_up = await capture_speech(is_follow_up=True)
@@ -1080,16 +1092,6 @@ async def handle_conversation_loop(initial_response):
                 print("DEBUG - Detected [CONTINUE] control signal, skipping voice generation")
                 continue
 
-            await display_manager.update_display('speaking')
-            await generate_voice(res)
-
-            if not has_conversation_hook(res):
-                await audio_manager.wait_for_audio_completion()
-                await display_manager.update_display('idle')
-                print(f"{Fore.MAGENTA}Conversation ended, returning to idle state...{Fore.WHITE}")
-                break
-
-            await audio_manager.wait_for_audio_completion()
         else:
             # No follow-up detected or manual stop, clear conversation hook
             res = ""  # Clear the conversation hook
@@ -1097,7 +1099,7 @@ async def handle_conversation_loop(initial_response):
             if timeout_audio:
                 await audio_manager.play_audio(timeout_audio)
             else:
-                await generate_voice("No input detected. Feel free to ask for assistance when needed")
+                await speak_response("No input detected. Feel free to ask for assistance when needed", mood=None, source="timeout")
             await audio_manager.wait_for_audio_completion()
             await display_manager.update_display('idle')
             print(f"{Fore.MAGENTA}Conversation ended due to timeout or manual stop, returning to idle state...{Fore.WHITE}")
@@ -2190,7 +2192,7 @@ async def run_main_loop():
                             if await notification_manager.has_pending_notifications():
                                 await notification_manager.process_pending_notifications()
                             await display_manager.update_display('listening')
-                            await handle_conversation_loop(formatted_response)
+                            await handle_conversation_loop(formatted_response, skip_first=True)
                         except Exception as voice_error:
                             print(f"Error during voice generation: {voice_error}")
                             traceback.print_exc()
