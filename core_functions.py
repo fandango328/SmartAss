@@ -4,10 +4,11 @@ import os
 import asyncio
 import traceback
 import re
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional, List, Dict, Union, Any
-from config import MOOD_MAPPINGS
+import config
+from config import MOOD_MAPPINGS, ACTIVE_PERSONA
 
 async def run_vad_calibration(system_manager, display_manager):
     """Run VAD calibration process with proper manager coordination"""
@@ -359,10 +360,12 @@ async def handle_tool_sequence(tool_response: str, system_manager, display_manag
         bool: Success status of the sequence
     """
     try:
-        await display_manager.update_display('tools', specific_image='use')
+        # Use new state: 'tool_use' for main tool execution feedback
+        await display_manager.update_display('tool_use', specific_image='use')
         
-        # Queue and play pre-recorded acknowledgment
-        audio_folder = f"/home/user/LAURA/sounds/{config.ACTIVE_PERSONA.lower()}/tool_sentences/use"
+        # Persona-specific sound path
+        persona = config.ACTIVE_PERSONA.lower()
+        audio_folder = f"/home/user/LAURA/sounds/{persona}/tool_sentences/use"
         if os.path.exists(audio_folder):
             mp3_files = [f for f in os.listdir(audio_folder) if f.endswith('.mp3')]
             if mp3_files:
@@ -399,6 +402,7 @@ async def handle_tool_sequence(tool_response: str, system_manager, display_manag
 def get_random_audio(category: str, subtype: str = None) -> Optional[str]:
     """
     Get a random audio file from the specified category and optional subtype/context.
+    Persona-aware: uses persona subdirectory for all categories.
     
     Args:
         category (str): Main audio category (e.g., 'tool', 'timeout', 'wake')
@@ -411,8 +415,9 @@ def get_random_audio(category: str, subtype: str = None) -> Optional[str]:
         import random
         from pathlib import Path
 
-        # Base directory for all sounds (adjust as needed)
-        base_sound_dir = Path("/home/user/LAURA/sounds")
+        persona = config.ACTIVE_PERSONA.lower()
+        # Base directory for all sounds, persona-aware
+        base_sound_dir = Path("/home/user/LAURA/sounds") / persona
         audio_path = None
 
         # Special handling for known folder structures
