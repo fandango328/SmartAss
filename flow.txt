@@ -1,0 +1,70 @@
++----------+   Wake Word    Speech Input                     Hears Response   Follow-up      Hears
+|          |---->[W]------->[S]                                [H1]------------>[F]          [H2]------->[Loop continues until timeout]
+|  USER    |                                                    ^               |              ^
+|          |                                                    |               v              |
++----------+                                                    |              [S]             |
+    [S]                                                         |               |              | 
+     |                                                        Audio             |              |
+     v                                                       Playback           |              |
++----------+  Detect    Transcribe   Process                   [A]            Convers.         |
+|          |-->[D]------->[T]------->[P]                        |             Loop             |
+|  LAURA   |    |                     |                         ^              [L]             |
+|  SYSTEM  |    |                     |                         |               |              |
+|          |    v                     v                         |               |              |
++----------+ Command  ----->  Special Commands                  |              [O]             |     
+     |       Detection           [DC][VC]  - [A]                |               |              |
+   Request                                                      |               |              |
+    [Q]                                                         |               |              |
+     |                                                          |               |              |
+     v                                                          |               v              |
++----------+                                                    |           Text-to-Speech     |
+|          |                                                    |           Generation         |
+| ANTHROPIC|                                                    |              [G]             |
+|   API    |                                                    |               |              |
+|(alt LLM) |                                                    |               v              |
++----------+                                                    |           Audio Playback     |
+      |                                                         |              [A]-------------+
+ Process Query                                                  |                              
+    [PQ]                                                        |    
+      |    Format                                               |                        
+      +----Output-----+                                         |
+             [O]      |                                         |
++----------+          |                                         |                        
+|          |       Tool Use?                                    |                        
+|  TOOLS & |         [TU]------+                                |                        
+|  3RD     |       No |        | Yes                            |                        
+|  PARTIES |          |        |                                ^                        
+|          |          |        V                                |                        
++----------+          |      Execute                            |                       
+     +----------------+---<-- Tools                             |
+     |                         [E]                              |
+    [R]                         |                               | 
+     v                          |                               | 
++----------+                    v                               | 
+|          |                Tool Results                        | 
+|  GEN     |                 [TR] (confirmation print)          |  
+| (ELEVEN  |                                                    |                        
+|  LABS)   |->--Text-to-Speech Generation [G]------->-----------+
++----------+             
+                     
+                       
+
+LEGEND:
+[W]  = Wake Word Detection   [S]  = Speech Input      [T]  = Transcription
+[P]  = Command Processing    [D]  = Detection         [DC] = Document Commands
+[VC] = Voice Calibration     [R]  = Response Gen      [L]  = Conversation Loop
+[Q]  = API Request           [PQ] = Process Query     [TU] = Tool Usage Decision
+[E]  = Execute Tools         [TR] = Tool Results      [FR] = Final Response
+[O]  = Output Formatting     [G]  = TTS Generation    [A]  = Audio Playback
+[H1] = Hears Initial Response
+[H2] = Hears Follow-up Response
+[F]  = Follow-up Input
+
+BACKGROUND PROCESSES (Continuous Operations):
+- Calendar event monitoring and notifications
+- Context and token management
+- Chat history persistence
+- System state management
+- Audio stream monitoring
+- Display updates
+
