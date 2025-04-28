@@ -34,7 +34,7 @@ class DisplayManager:
     2. Laura's fallback directories (e.g., /pygame/laura/tool_use/)
     3. Ultimate fallback to thinking state (e.g., /pygame/laura/thinking/)
 
-    Use the 'tool_use' folder for immediate tool-use feedback (stop_reason=tools), bridging to TTS playback.
+    Use the 'tool_use' folder for immediate tool-use feedback (stop_reason = tool_use), bridging to TTS playback.
     System/persona transitions (in/out), calibration, and document states are handled in their respective folders.
     """
 
@@ -134,8 +134,17 @@ class DisplayManager:
         Configure the pygame display surface.
         All images are scaled to 512x512 for consistency.
         """
-        self.screen = pygame.display.set_mode((512, 512))
-        pygame.display.set_caption("LAURA")
+        self.screen = pygame.Surface((512, 512))
+        
+    def get_surface_image(self):
+        """
+        Return the current display surface as a NumPy array suitable for embedding in a web UI.
+        This enables seamless integration with Gradio's image component.
+        """
+        import numpy as np
+        arr = pygame.surfarray.array3d(self.screen)
+        arr = np.transpose(arr, (1, 0, 2))  # Convert from (width, height, channels) to (height, width, channels)
+        return arr        
     
     def load_image_directories(self):
         """
@@ -351,9 +360,10 @@ class DisplayManager:
                     'speaking': str(self.base_path / 'speaking'),
                     'thinking': str(self.base_path / 'thinking'),
                     'wake': str(self.base_path / 'wake'),
+                    'tool_use': str(self.base_path / 'tool_use'),
                     
                     # System states
-                    'tools': str(self.base_path / 'system' / 'tools'),
+                    'tools_state': str(self.base_path / 'system' / 'tools_state'),
                     'calibration': str(self.base_path / 'system' / 'calibration'),
                     'document': str(self.base_path / 'system' / 'document'),
                     'persona': str(self.base_path / 'system' / 'persona'),
