@@ -52,10 +52,9 @@ class SystemManager:
     
     The system follows a hierarchical structure:
     /system/
-    ├── tools/                # Tool-related states
+    ├── tools_state/                # Tool-related states
     │   ├── enabled/          # Tool activation state
-    │   ├── disabled/         # Tool deactivation state
-    │   └── use/             # Tool execution state
+    │   └── disabled/             # Tool deactivation state
     ├── calibration/          # Calibration resources
     ├── document/            # Document operation states
     │   ├── load/           # Document loading state
