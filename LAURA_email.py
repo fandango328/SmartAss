@@ -763,15 +763,36 @@ async def generate_response(query: str) -> str:
         sanitized_messages = sanitize_messages_for_api(chat_log)
         system_content = config.SYSTEM_PROMPT
 
-        # Construct the user message, including document blocks as content
-        if sanitized_messages and sanitized_messages[-1]["role"] == "user":
-            # Insert document blocks into the user's latest message
-            sanitized_messages[-1]["content"] = (
-                sanitized_messages[-1].get("content", []) + document_blocks
-            )
-        else:
-            # If no user message found, create one with document blocks
-            sanitized_messages.append({"role": "user", "content": document_blocks})
+        # Add document context if present (always define document_blocks as a list)
+        document_blocks = []
+        document_manager = tool_registry.get_manager('document')
+        if document_manager and getattr(document_manager, "files_loaded", False):
+            if hasattr(document_manager, "get_claude_message_blocks"):
+                document_blocks = document_manager.get_claude_message_blocks()
+
+        # Safely insert document blocks into the latest user message if present
+        if document_blocks:
+            if sanitized_messages and sanitized_messages[-1]["role"] == "user":
+                # Always wrap user content as a Claude message block if not already
+                user_content = sanitized_messages[-1].get("content", "")
+                user_content_blocks = []
+                if isinstance(user_content, list):
+                    # Ensure every item is a dict (block), convert string items
+                    for item in user_content:
+                        if isinstance(item, dict):
+                            user_content_blocks.append(item)
+                        elif isinstance(item, str):
+                            user_content_blocks.append({"type": "text", "text": item})
+                elif isinstance(user_content, str):
+                    user_content_blocks = [{"type": "text", "text": user_content}]
+                else:
+                    # Fallback: unexpected type, try to coerce to string
+                    user_content_blocks = [{"type": "text", "text": str(user_content)}]
+                # Concatenate user content blocks and document blocks
+                sanitized_messages[-1]["content"] = user_content_blocks + document_blocks
+            else:
+                # If no user message found, create one with document blocks
+                sanitized_messages.append({"role": "user", "content": document_blocks})
 
         # Build main API parameters
         api_params = {
@@ -891,6 +912,70 @@ async def generate_response(query: str) -> str:
         return "I apologize, but I encountered an error processing your request."
     finally:
         is_processing = False
+
+async def handle_conversation_loop(initial_response, skip_first=True):
+    """Handle ongoing conversation with calendar notification interrupts"""
+    global chat_log, last_interaction
+
+    res = initial_response
+    first_loop = True
+    while has_conversation_hook(res):
+        # Now enter listening state for follow-up
+        await audio_manager.clear_queue()
+        await display_manager.update_display('listening')
+
+        # If this is the very first loop and we're told to skip, don't repeat TTS
+        if first_loop and skip_first:
+            first_loop = False
+        else:
+            # Speak the response if not the skipped initial
+            await speak_response(res, mood=None, source="followup")
+
+        # Capture the follow-up speech
+        follow_up = await capture_speech(is_follow_up=True)
+
+        if follow_up == "[CONTINUE]":
+            continue
+
+        elif follow_up:
+            # Update last interaction time
+            last_interaction = datetime.now()
+
+            # Check if this is a system command
+            cmd_result = system_manager.detect_command(follow_up)
+            if cmd_result and cmd_result[0]:
+                is_cmd, cmd_type, action, args = cmd_result  # Now unpacking 4 values
+                success = await system_manager.handle_command(cmd_type, action, args)
+
+                if success:
+                    await display_manager.update_display('listening')
+                    continue
+                else:
+                    # Clear conversation hook by setting res to empty
+                    res = ""
+                    await display_manager.update_display('idle')
+                    print(f"{Fore.MAGENTA}Conversation ended, returning to idle state...{Fore.WHITE}")
+                    break
+
+            # Generate response for follow-up
+            await display_manager.update_display('thinking')
+            res = await generate_response(follow_up)
+
+            if res == "[CONTINUE]":
+                print("DEBUG - Detected [CONTINUE] control signal, skipping voice generation")
+                continue
+
+        else:
+            # No follow-up detected or manual stop, clear conversation hook and exit loop
+            timeout_audio = get_random_audio("timeout")
+            if timeout_audio:
+                await audio_manager.play_audio(timeout_audio)
+            else:
+                await speak_response("No input detected. Feel free to ask for assistance when needed", mood=None, source="timeout")
+            await audio_manager.wait_for_audio_completion()
+            await display_manager.update_display('idle')
+            print(f"{Fore.MAGENTA}Conversation ended due to timeout or manual stop, returning to idle state...{Fore.WHITE}")
+            return
         
                                        
 async def wake_word():
@@ -1041,60 +1126,22 @@ def has_conversation_hook(response):
 
     return True
 
-async def handle_conversation_loop(initial_response, skip_first=True):
-    """Handle ongoing conversation with calendar notification interrupts"""
+async def handle_conversation_loop(initial_response):
+    """
+    Handle ongoing conversation with calendar notification interrupts.
+    Each loop iteration corresponds to new user input and a new TTS response.
+    The previous assistant response is never replayed.
+    """
     global chat_log, last_interaction
 
-    res = initial_response
-    first_loop = True
-    while has_conversation_hook(res):
-        # Now enter listening state for follow-up
+    while True:
         await display_manager.update_display('listening')
-
-        # If this is the very first loop and we're told to skip, don't repeat TTS
-        if first_loop and skip_first:
-            first_loop = False
-        else:
-            # Speak the response if not the skipped initial
-            await speak_response(res, mood=None, source="followup")
-
-        # Capture the follow-up speech
         follow_up = await capture_speech(is_follow_up=True)
 
         if follow_up == "[CONTINUE]":
             continue
 
-        elif follow_up:
-            # Update last interaction time
-            last_interaction = datetime.now()
-
-            # Check if this is a system command
-            cmd_result = system_manager.detect_command(follow_up)
-            if cmd_result and cmd_result[0]:
-                is_cmd, cmd_type, action, args = cmd_result  # Now unpacking 4 values
-                success = await system_manager.handle_command(cmd_type, action, args)
-
-                if success:
-                    await display_manager.update_display('listening')
-                    continue
-                else:
-                    # Clear conversation hook by setting res to empty
-                    res = ""
-                    await display_manager.update_display('idle')
-                    print(f"{Fore.MAGENTA}Conversation ended, returning to idle state...{Fore.WHITE}")
-                    break
-
-            # Generate response for follow-up
-            await display_manager.update_display('thinking')
-            res = await generate_response(follow_up)
-
-            if res == "[CONTINUE]":
-                print("DEBUG - Detected [CONTINUE] control signal, skipping voice generation")
-                continue
-
-        else:
-            # No follow-up detected or manual stop, clear conversation hook
-            res = ""  # Clear the conversation hook
+        if not follow_up:
             timeout_audio = get_random_audio("timeout")
             if timeout_audio:
                 await audio_manager.play_audio(timeout_audio)
@@ -1103,8 +1150,39 @@ async def handle_conversation_loop(initial_response, skip_first=True):
             await audio_manager.wait_for_audio_completion()
             await display_manager.update_display('idle')
             print(f"{Fore.MAGENTA}Conversation ended due to timeout or manual stop, returning to idle state...{Fore.WHITE}")
-            break
+            return
 
+        # Update last interaction time
+        last_interaction = datetime.now()
+
+        # Check if this is a system command
+        cmd_result = system_manager.detect_command(follow_up)
+        if cmd_result and cmd_result[0]:
+            is_cmd, cmd_type, action, args = cmd_result  # Now unpacking 4 values
+            success = await system_manager.handle_command(cmd_type, action, args)
+
+            if success:
+                await display_manager.update_display('listening')
+                continue
+            else:
+                await display_manager.update_display('idle')
+                print(f"{Fore.MAGENTA}Conversation ended, returning to idle state...{Fore.WHITE}")
+                return
+
+        # Generate and speak response for follow-up
+        await display_manager.update_display('thinking')
+        res = await generate_response(follow_up)
+        if res == "[CONTINUE]":
+            print("DEBUG - Detected [CONTINUE] control signal, skipping voice generation")
+            continue
+
+        await speak_response(res, mood=None, source="followup")
+
+        if not has_conversation_hook(res):
+            await audio_manager.wait_for_audio_completion()
+            await display_manager.update_display('idle')
+            print(f"{Fore.MAGENTA}Conversation ended, returning to idle state...{Fore.WHITE}")
+            return
 async def check_manual_stop():
     if keyboard_device:
         try:
@@ -2038,6 +2116,7 @@ async def run_main_loop():
 
     Assumes that all required managers and resources have already been initialized by main().
     """
+    import traceback
     print("DEBUG: Entered run_main_loop")
     try:
         global document_manager, chat_log, system_manager, keyboard_device, notification_manager, is_processing, last_interaction
@@ -2102,6 +2181,7 @@ async def run_main_loop():
                                 await audio_manager.wait_for_queue_empty()
 
                         # Transition to listening state and pause wake word detection
+                        await audio_manager.clear_queue()
                         await display_manager.update_display('listening')
 
                         # Temporarily stop wake word detection during user speech capture
@@ -2137,6 +2217,7 @@ async def run_main_loop():
                                 success = await system_manager.handle_command(command_type, action, arguments)
                                 await audio_manager.wait_for_queue_empty()
                                 if success:
+                                    await audio_manager.clear_queue()
                                     await display_manager.update_display('listening')
                                     while True:
                                         follow_up = await capture_speech(is_follow_up=True)
@@ -2148,6 +2229,7 @@ async def run_main_loop():
                                             success = await system_manager.handle_command(cmd_type, action, args)
                                             await audio_manager.wait_for_queue_empty()
                                             if success:
+                                                await audio_manager.clear_queue()
                                                 await display_manager.update_display('listening')
                                                 continue
                                             break
@@ -2163,6 +2245,7 @@ async def run_main_loop():
                                         if await notification_manager.has_pending_notifications():
                                             await notification_manager.process_pending_notifications()
                                         if isinstance(formatted_response, str) and has_conversation_hook(formatted_response):
+                                            await audio_manager.clear_queue()
                                             await display_manager.update_display('listening')
                                             await handle_conversation_loop(formatted_response)
                                             break
@@ -2191,8 +2274,9 @@ async def run_main_loop():
                             await speak_response(formatted_response, mood=None, source="main")
                             if await notification_manager.has_pending_notifications():
                                 await notification_manager.process_pending_notifications()
+                            await audio_manager.clear_queue()    
                             await display_manager.update_display('listening')
-                            await handle_conversation_loop(formatted_response, skip_first=True)
+                            await handle_conversation_loop(formatted_response)
                         except Exception as voice_error:
                             print(f"Error during voice generation: {voice_error}")
                             traceback.print_exc()
