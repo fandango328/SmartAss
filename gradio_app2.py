@@ -477,4 +477,188 @@ class GradioInterface:
                         value=[
                             ["Complete project report", "2023-05-01", "High", "In Progress"],
                             ["Review marketing materials", "2023-05-03", "Medium", "Not Started"],
-                            ["Schedule team meeting", "2
+                            ["Schedule team meeting", "2023-05-05", "Low", "Not Started"],
+                            ["Update client presentation", "2023-05-10", "High", "Not Started"],
+                            ["Research competitor products", "2023-05-15", "Medium", "In Progress"]
+                        ]
+                    )
+                    
+                    with gr.Row():
+                        add_task_btn = gr.Button("Add Task")
+                        delete_task_btn = gr.Button("Delete Selected")
+                        
+                    gr.Markdown("### Projects")
+                    
+                    project_list = gr.Dataframe(
+                        headers=["Project", "Deadline", "Status", "Completion"],
+                        datatype=["str", "str", "str", "str"],
+                        row_count=3,
+                        col_count=(4, "fixed"),
+                        value=[
+                            ["Website Redesign", "2023-06-30", "Active", "45%"],
+                            ["Marketing Campaign", "2023-05-15", "Active", "80%"],
+                            ["Product Launch", "2023-07-01", "Planning", "15%"]
+                        ]
+                    )
+                
+                with gr.TabItem("Multi-Device Management"):
+                    gr.Markdown("### Connected Devices")
+                    
+                    device_list = gr.Dataframe(
+                        headers=["Device Name", "Type", "Status", "Last Connected"],
+                        datatype=["str", "str", "str", "str"],
+                        row_count=3,
+                        col_count=(4, "fixed"),
+                        value=[
+                            ["Home Office", "Desktop", "Online", "Now"],
+                            ["Laptop", "Laptop", "Offline", "2 hours ago"],
+                            ["Mobile Phone", "Mobile", "Online", "5 minutes ago"]
+                        ]
+                    )
+                    
+                    with gr.Row():
+                        with gr.Column():
+                            gr.Markdown("### API Access")
+                            api_port = gr.Number(label="API Port", value=5000)
+                            api_toggle = gr.Checkbox(label="Enable Remote API Access", value=False)
+                        
+                        with gr.Column():
+                            gr.Markdown("### Device Authorization")
+                            auth_token = gr.Textbox(
+                                label="Authorization Token", 
+                                value="••••••••••••••••",
+                                type="password"
+                            )
+                            gen_token_btn = gr.Button("Generate New Token")
+                
+                with gr.TabItem("System Monitor"):
+                    with gr.Row():
+                        with gr.Column():
+                            gr.Markdown("### System Resources")
+                            cpu_usage = gr.Label(label="CPU Usage", value="23%")
+                            memory_usage = gr.Label(label="Memory Usage", value="1.2GB / 8GB")
+                            storage = gr.Label(label="Storage", value="5.4GB / 32GB")
+                        
+                        with gr.Column():
+                            gr.Markdown("### Performance")
+                            response_time = gr.Label(label="Avg. Response Time", value="0.8s")
+                            uptime = gr.Label(label="System Uptime", value="3d 5h 42m")
+                    
+                    with gr.Row():
+                        gr.Markdown("### System Log")
+                        system_log = gr.Textbox(
+                            label="",
+                            value="[INFO] System started\n[INFO] Voice detection initialized\n[INFO] All components loaded successfully",
+                            lines=8,
+                            max_lines=8,
+                            interactive=False
+                        )
+            
+            # Event handlers
+            def handle_text_submit(message, history):
+                """Handle text input submission"""
+                if not message.strip():
+                    return "", history
+                
+                # Add user message to history
+                history.append((message, None))
+                
+                # This would connect to the LAURA backend in a real implementation
+                # For now, just echo back a response
+                response = f"I received: {message}"
+                
+                # Update history with assistant response
+                history[-1] = (history[-1][0], response)
+                
+                return "", history
+            
+            def update_avatar_state(state="listening", mood="casual", is_speaking=False):
+                """Update avatar state and return HTML"""
+                return avatar_manager.get_avatar_html(state, mood, is_speaking)
+            
+            def handle_file_upload(file_path):
+                """Handle file upload and extract context"""
+                if file_path is None:
+                    return "Context: None"
+                
+                file_name = Path(file_path).name
+                return f"Context: File loaded - {file_name}"
+            
+            # Connect event handlers
+            text_input.submit(
+                handle_text_submit,
+                inputs=[text_input, conversation_display],
+                outputs=[text_input, conversation_display]
+            ).then(
+                update_avatar_state,
+                inputs=[gr.State("thinking"), gr.State("casual"), gr.State(False)],
+                outputs=[avatar_html]
+            ).then(
+                lambda: time.sleep(1), # Simulate processing time
+                None,
+                None
+            ).then(
+                update_avatar_state,
+                inputs=[gr.State("speaking"), gr.State("casual"), gr.State(True)],
+                outputs=[avatar_html]
+            ).then(
+                lambda: time.sleep(3), # Simulate speaking time
+                None,
+                None
+            ).then(
+                update_avatar_state,
+                inputs=[gr.State("idle"), gr.State("casual"), gr.State(False)],
+                outputs=[avatar_html]
+            )
+            
+            submit_btn.click(
+                handle_text_submit,
+                inputs=[text_input, conversation_display],
+                outputs=[text_input, conversation_display]
+            ).then(
+                update_avatar_state,
+                inputs=[gr.State("thinking"), gr.State("casual"), gr.State(False)],
+                outputs=[avatar_html]
+            ).then(
+                lambda: time.sleep(1), # Simulate processing time
+                None,
+                None
+            ).then(
+                update_avatar_state,
+                inputs=[gr.State("speaking"), gr.State("casual"), gr.State(True)],
+                outputs=[avatar_html]
+            ).then(
+                lambda: time.sleep(3), # Simulate speaking time
+                None,
+                None
+            ).then(
+                update_avatar_state,
+                inputs=[gr.State("idle"), gr.State("casual"), gr.State(False)],
+                outputs=[avatar_html]
+            )
+            
+            file_drop.upload(
+                handle_file_upload,
+                inputs=[file_drop],
+                outputs=[context_display]
+            )
+            
+            # Add footer
+            gr.HTML(
+                """<footer>LAURA - Language & Automation User Response Agent | Version 1.0 | © 2023</footer>"""
+            )
+        
+        return app
+
+    async def process_query(self, query):
+        """Process query using the LAURA backend (to be implemented)"""
+        # This would connect to your existing LAURA script
+        # For now, return a placeholder response
+        await asyncio.sleep(1)  # Simulate processing time
+        return f"Response to: {query}"
+
+# Initialize and launch the interface
+if __name__ == "__main__":
+    interface = GradioInterface()
+    app = interface.build()
+    app.launch(share=False, server_name="0.0.0.0", server_port=7860)
