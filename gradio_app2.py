@@ -63,19 +63,25 @@ class SVGAvatarManager:
                 flex-direction: column;
                 align-items: center;
                 justify-content: center;
-                height: 400px;
+                width: 512px;
+                height: 512px;
+                margin: 0 auto;
                 background: linear-gradient(180deg, #e6f7ff 0%, #c8eaff 100%);
                 border-radius: 10px;
                 position: relative;
                 overflow: hidden;
             }}
             .laura-avatar {{
-                width: 300px;
-                height: 300px;
+                width: 512px;
+                height: 512px;
                 position: relative;
+                display: flex;
+                align-items: center;
+                justify-content: center;
             }}
             .laura-state-indicator {{
-                margin-top: 10px;
+                position: absolute;
+                bottom: 20px;
                 font-size: 18px;
                 font-weight: bold;
                 background-color: rgba(255, 255, 255, 0.7);
@@ -94,34 +100,34 @@ class SVGAvatarManager:
         # Using inline SVG for demonstration - this would be replaced with your SVG content
         # Important: Add proper IDs to the elements that need animation (mouth, eyes, eyebrows)
         svg = f"""
-        <svg viewBox="0 0 300 400" xmlns="http://www.w3.org/2000/svg">
+        <svg viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
             <!-- Background/Face -->
-            <rect width="300" height="400" fill="#e6f7ff" rx="5" ry="5"/>
-            <circle cx="150" cy="150" r="100" fill="#fff0e6" stroke="#333" stroke-width="2"/>
+            <rect width="512" height="512" fill="#e6f7ff" rx="8" ry="8"/>
+            <circle cx="256" cy="256" r="200" fill="#fff0e6" stroke="#333" stroke-width="3"/>
             
             <!-- Hair -->
-            <path d="M50,80 Q150,30 250,80 L250,170 Q150,200 50,170 Z" fill="#8B4513" id="laura-hair"/>
+            <path d="M86,136 Q256,51 426,136 L426,290 Q256,340 86,290 Z" fill="#8B4513" id="laura-hair"/>
             
             <!-- Eyes -->
             <g id="laura-eyes">
-                <circle cx="110" cy="130" r="15" fill="#fff" stroke="#000" stroke-width="2"/>
-                <circle cx="110" cy="130" r="8" fill="#4991D4" id="laura-eye-left"/>
+                <circle cx="188" cy="222" r="26" fill="#fff" stroke="#000" stroke-width="3"/>
+                <circle cx="188" cy="222" r="14" fill="#4991D4" id="laura-eye-left"/>
                 
-                <circle cx="190" cy="130" r="15" fill="#fff" stroke="#000" stroke-width="2"/>
-                <circle cx="190" cy="130" r="8" fill="#4991D4" id="laura-eye-right"/>
+                <circle cx="324" cy="222" r="26" fill="#fff" stroke="#000" stroke-width="3"/>
+                <circle cx="324" cy="222" r="14" fill="#4991D4" id="laura-eye-right"/>
             </g>
             
             <!-- Eyebrows -->
             <g id="laura-eyebrows">
-                <path d="M90,110 Q110,100 130,110" stroke="#8B4513" stroke-width="3" fill="none" id="laura-eyebrow-left"/>
-                <path d="M170,110 Q190,100 210,110" stroke="#8B4513" stroke-width="3" fill="none" id="laura-eyebrow-right"/>
+                <path d="M154,188 Q188,171 222,188" stroke="#8B4513" stroke-width="5" fill="none" id="laura-eyebrow-left"/>
+                <path d="M290,188 Q324,171 358,188" stroke="#8B4513" stroke-width="5" fill="none" id="laura-eyebrow-right"/>
             </g>
             
             <!-- Mouth - with shapes that can be animated -->
-            <path d="M110,180 Q150,190 190,180" stroke="#000" stroke-width="2" fill="#fff0e6" id="laura-mouth"/>
+            <path d="M188,307 Q256,324 324,307" stroke="#000" stroke-width="3" fill="#fff0e6" id="laura-mouth"/>
             
             <!-- LAURA Text -->
-            <text x="150" y="350" text-anchor="middle" font-size="24" font-weight="bold">L.A.U.R.A.</text>
+            <text x="256" y="427" text-anchor="middle" font-size="40" font-weight="bold">L.A.U.R.A.</text>
         </svg>
         """
         return svg
