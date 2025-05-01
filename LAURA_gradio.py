@@ -146,10 +146,6 @@ from function_definitions import (
 from core_functions import get_random_audio, process_response_content
 from tool_registry import tool_registry
 
-
-#BASE_URL = "https://openrouter.ai/api/v1/chat/completions"  # This is for using openrouter, right now i have it configured to use anthropic for handling query
-AUDIO_FILE = "speech.mp3" #gets saved-to/overwritten by elevenlabs after each completed voice generation and delivery
-
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.compose",
     "https://www.googleapis.com/auth/gmail.send",
@@ -1083,7 +1079,7 @@ async def handle_conversation_loop(_):
         if not follow_up:
             timeout_audio = get_random_audio("timeout")
             if timeout_audio:
-                with await audio_manager.queue_audio(audio_file=timeout_audio)
+                await audio_manager.queue_audio(audio_file=timeout_audio)
             else:
                 await speak_response("No input detected. Feel free to ask for assistance when needed", mood=None, source="timeout")
             await audio_manager.wait_for_audio_completion()
@@ -1478,13 +1474,17 @@ async def print_response(chat):
 
 async def generate_voice(chat):
     """
-    Generate voice audio from formatted text.
+    Generate voice audio from formatted text, saving to a unique temporary file for each call.
     Robustly handles input types and prints warnings if chat is not a string.
+    Cleans up temporary audio files after playback is complete.
     """
+    import uuid
+    import os
+
     print(f"\n[{datetime.now().strftime('%H:%M:%S.%f')}] === Voice Generation Debug ===")
     print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Input type: {type(chat)}")
     print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Input preview: {str(chat)[:100]}")
-    
+
     # Skip voice generation for control signals
     if not chat or chat == "[CONTINUE]":
         print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Skipping voice generation - control signal")
@@ -1513,7 +1513,7 @@ async def generate_voice(chat):
 
         # Normalize the text
         chat = ' '.join(chat.split())
-        
+
         if not chat.strip():
             print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Warning: Empty text after normalization")
             return
@@ -1529,56 +1529,66 @@ async def generate_voice(chat):
             print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Error in TTS generation: {tts_error}")
             raise
 
-        # Save and play the audio
-        print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Saving audio to {AUDIO_FILE}")
-        with open(AUDIO_FILE, "wb") as f:
+        # Create a unique temporary audio filename
+        temp_audio_file = f"speech_{uuid.uuid4().hex}.mp3"
+        print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Saving audio to {temp_audio_file}")
+        with open(temp_audio_file, "wb") as f:
             f.write(audio)
 
         print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Queueing audio for playback")
-        with await audio_manager.queue_audio(audio_file=AUDIO_FILE)
+        await audio_manager.queue_audio(audio_file=temp_audio_file)
+        await audio_manager.wait_for_audio_completion()
+
+        # Clean up the temporary audio file after playback is complete
+        try:
+            os.remove(temp_audio_file)
+            print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Deleted temp audio file {temp_audio_file}")
+        except Exception as cleanup_error:
+            print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Warning: Could not delete temp file {temp_audio_file}: {cleanup_error}")
 
     except Exception as e:
         print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Error in generate_voice: {e}")
         traceback.print_exc()
-
+             
 async def speak_response(response_text, mood=None, source="main"):
     """
     Centralized function to update display and play audio for a response.
     Prevents duplicate audio playback by tracking recently played responses.
+    Always uses audio queue for playback.
     """
+    DUPLICATE_RESPONSE_WINDOW_SECONDS = 80  # Set to the max expected response duration
     global recently_played_responses
-    
+
     # Skip empty responses or control signals
     if not response_text or response_text == "[CONTINUE]":
         print("DEBUG: Skipping empty response in speak_response")
         return
-    
+
     # Create a simple hash of the response to use as identifier
     response_hash = hash(response_text[:100])  # First 100 chars is enough to identify
-    
+
     # Check if we already played this exact response very recently
     if response_hash in recently_played_responses:
         last_played = recently_played_responses[response_hash]
-        # If it was played less than 10 seconds ago, skip it
-        if (datetime.now() - last_played).total_seconds() < 10:
+        if (datetime.now() - last_played).total_seconds() < DUPLICATE_RESPONSE_WINDOW_SECONDS:
             print(f"\n[SPEAK RESPONSE] Skipping duplicate response that was just played ({source})")
             print(f"  Text: {repr(response_text)[:50]}...")
             return
-    
+
     # Update the cache (using LRU-like mechanism)
     if len(recently_played_responses) >= MAX_RESPONSE_CACHE:
         # Remove oldest entry
         oldest_key = min(recently_played_responses.items(), key=lambda x: x[1])[0]
         del recently_played_responses[oldest_key]
-    
+
     # Record this response as played
     recently_played_responses[response_hash] = datetime.now()
-    
+
     # Logging for debugging
     print(f"\n[SPEAK RESPONSE] Source: {source}")
     print(f"  Text: {repr(response_text)[:100]}...")
     print(f"  Mood: {mood}")
-    
+
     # Mood mapping (if needed)
     if mood is not None:
         mood_mapped = map_mood(mood)
@@ -1588,7 +1598,7 @@ async def speak_response(response_text, mood=None, source="main"):
     await display_manager.update_display('speaking', mood=mood_mapped)
     await generate_voice(response_text)
     await audio_manager.wait_for_audio_completion()
-
+    
 async def play_queued_notifications():
     """
     Play queued notifications and handle notification state management.
@@ -1633,7 +1643,7 @@ async def play_queued_notifications():
             with open("notification.mp3", "wb") as f:
                 f.write(audio)
 
-            with await audio_manager.queue_audio(audio_file="notification.mp3")
+            await audio_manager.queue_audio(audio_file="notification.mp3")
             await audio_manager.wait_for_audio_completion()
 
         except Exception as e:
@@ -1658,7 +1668,7 @@ async def play_queued_notifications():
                 with open("notification.mp3", "wb") as f:
                     f.write(audio)
 
-                with await audio_manager.queue_audio(audio_file="notification.mp3")
+                await audio_manager.queue_audio(audio_file="notification.mp3")
                 await audio_manager.wait_for_audio_completion()
 
                 # Update last reminder time
