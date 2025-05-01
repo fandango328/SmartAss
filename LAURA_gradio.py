@@ -145,6 +145,7 @@ from function_definitions import (
 
 from core_functions import get_random_audio, process_response_content
 from tool_registry import tool_registry
+AUDIO_FILE = "speech.mp3"
 
 SCOPES = [
     "https://www.googleapis.com/auth/gmail.compose",
@@ -1474,13 +1475,11 @@ async def print_response(chat):
 
 async def generate_voice(chat):
     """
-    Generate voice audio from formatted text, saving to a unique temporary file for each call.
+    Generate voice audio from formatted text.
     Robustly handles input types and prints warnings if chat is not a string.
-    Cleans up temporary audio files after playback is complete.
+    Ensures file is fully written and closed before playback, and validates file integrity.
     """
-    import uuid
-    import os
-
+    global AUDIO_FILE
     print(f"\n[{datetime.now().strftime('%H:%M:%S.%f')}] === Voice Generation Debug ===")
     print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Input type: {type(chat)}")
     print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Input preview: {str(chat)[:100]}")
@@ -1529,27 +1528,28 @@ async def generate_voice(chat):
             print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Error in TTS generation: {tts_error}")
             raise
 
-        # Create a unique temporary audio filename
-        temp_audio_file = f"speech_{uuid.uuid4().hex}.mp3"
-        print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Saving audio to {temp_audio_file}")
-        with open(temp_audio_file, "wb") as f:
-            f.write(audio)
+        # Save and play the audio with explicit flush and sync
+        print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Saving audio to {AUDIO_FILE}")
+        try:
+            with open(AUDIO_FILE, "wb") as f:
+                f.write(audio)
+                f.flush()
+                os.fsync(f.fileno())
+        except Exception as file_error:
+            print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Error writing audio file: {file_error}")
+            raise
+
+        # Validate that the file exists and is non-empty
+        if not os.path.exists(AUDIO_FILE) or os.path.getsize(AUDIO_FILE) < 1024:
+            print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Error: TTS audio file missing or too small after write!")
+            return
 
         print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Queueing audio for playback")
-        await audio_manager.queue_audio(audio_file=temp_audio_file)
-        await audio_manager.wait_for_audio_completion()
-
-        # Clean up the temporary audio file after playback is complete
-        try:
-            os.remove(temp_audio_file)
-            print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Deleted temp audio file {temp_audio_file}")
-        except Exception as cleanup_error:
-            print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Warning: Could not delete temp file {temp_audio_file}: {cleanup_error}")
+        await audio_manager.play_audio(AUDIO_FILE)
 
     except Exception as e:
         print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Error in generate_voice: {e}")
-        traceback.print_exc()
-             
+        traceback.print_exc()                      
 async def speak_response(response_text, mood=None, source="main"):
     """
     Centralized function to update display and play audio for a response.
