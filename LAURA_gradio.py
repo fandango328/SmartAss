@@ -1,4 +1,4 @@
-#!/usr/bin/env python3 edited 13:31
+#!/usr/bin/env python3
 
 # =============================================================================
 # Standard Library Imports - Core
@@ -1102,19 +1102,16 @@ async def handle_conversation_loop(_):
                 return
 
         await display_manager.update_display('thinking')
-        res = await generate_response(follow_up)
-        if res == "[CONTINUE]":
-            print("DEBUG - Detected [CONTINUE] control signal, skipping voice generation")
-            continue
+        response = await generate_response(follow_up)
 
-        # Only handle TTS here; do NOT duplicate in run_main_loop!
-        await speak_response(res, mood=None, source="followup")
+        # Ensure we only TTS non-empty, non-control responses
+        if response and response != "[CONTINUE]":
+            await speak_response(response, mood=None, source="followup")
 
-        if not has_conversation_hook(res):
+        if not has_conversation_hook(response):
             await display_manager.update_display('idle')
             print(f"{Fore.MAGENTA}Conversation ended, returning to idle state...{Fore.WHITE}")
             return
-
 
 async def check_manual_stop():
     if keyboard_device:
@@ -1544,7 +1541,9 @@ async def generate_voice(chat):
 
     except Exception as e:
         print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Error in generate_voice: {e}")
-        traceback.print_exc()                      
+        traceback.print_exc()
+        
+                              
 async def speak_response(response_text, mood=None, source="main"):
     """
     Receives the fully formatted string from process_response_content and sends to TTS.
