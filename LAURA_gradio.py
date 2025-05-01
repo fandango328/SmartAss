@@ -1,4 +1,4 @@
-#!/usr/bin/env python3  - updated 12:28
+#!/usr/bin/env python3
 
 # =============================================================================
 # Standard Library Imports - Core
@@ -707,7 +707,7 @@ async def execute_tool(tool_call):
         print(f"DEBUG: Tool execution error: {e}")
         return f"Error executing tool: {str(e)}"
 
-async def generate_response(query: str) -> str:
+async def generate_response(query: str) -> str:  #line no 710
     """
     Generate a response using Anthropic's Claude model, handling tool use in a fully API-compliant way.
     - Sends user input to Claude, including tool definitions if tools are enabled.
@@ -747,7 +747,7 @@ async def generate_response(query: str) -> str:
             save_to_log_file(chat_message)
         except Exception as e:
             print(f"Warning: Failed to save chat message to log: {e}")
-        if not (chat_log and chat_log[-1].get("role") == "user" and chat_log[-1].get("content") == query):
+        if not (chat_log and chat_log[-1].get("role") == "user" and chat_log[-1].get("content") == query):  #line no 750
             chat_log.append(chat_message)
 
         # Tool selection and tool definitions
@@ -797,7 +797,7 @@ async def generate_response(query: str) -> str:
         api_params = {
             "model": config.ANTHROPIC_MODEL,
             "system": system_content,
-            "messages": sanitized_messages,
+            "messages": sanitized_messages,   #line no 800
             "max_tokens": 1024,
             "temperature": 0.8
         }
@@ -847,7 +847,7 @@ async def generate_response(query: str) -> str:
 
                 tool_name = getattr(tool_call_block, "name", None)
                 tool_call_id = getattr(tool_call_block, "id", None)
-                if not tool_name or not tool_call_id:
+                if not tool_name or not tool_call_id:   #line no 850
                     raise ValueError("Tool use block missing tool name or id.")
 
                 try:
@@ -897,7 +897,7 @@ async def generate_response(query: str) -> str:
             else:
                 processed_content = await process_response_content(
                     response.content, chat_log, system_manager, display_manager, audio_manager, notification_manager
-                )
+                )  #line no 900
                 chat_log.append({"role": "assistant", "content": processed_content})
                 try:
                     save_to_log_file({"role": "assistant", "content": processed_content})
@@ -910,7 +910,7 @@ async def generate_response(query: str) -> str:
         traceback.print_exc()
         return "I apologize, but I encountered an error processing your request."
     finally:
-        is_processing = False
+        is_processing = False  #line no 913
 
         
                                        
@@ -1547,37 +1547,23 @@ async def generate_voice(chat):
         traceback.print_exc()                      
 async def speak_response(response_text, mood=None, source="main"):
     """
-    Centralized function to update display and play audio for a response.
-    Prevents duplicate audio playback by tracking recently played responses.
-    Always uses audio queue for playback.
-    Ensures only the latest assistant response (as a string) is submitted to TTS.
+    Receives the fully formatted string from process_response_content and sends to TTS.
+    No further parsing, flattening, or extraction is done here.
     """
-    DUPLICATE_RESPONSE_WINDOW_SECONDS = 80  # Set to the max expected response duration
+    DUPLICATE_RESPONSE_WINDOW_SECONDS = 80
     global recently_played_responses
 
-    # Handle case where response_text is list or dict due to message blocks
-    if isinstance(response_text, list):
-        # Extract only text blocks from the list, join with newlines
-        extracted = []
-        for item in response_text:
-            if isinstance(item, dict) and item.get("type") == "text":
-                extracted.append(item.get("text", ""))
-            elif isinstance(item, str):
-                extracted.append(item)
-        response_text = "\n".join([s for s in extracted if s.strip()])
-    elif isinstance(response_text, dict):
-        # If dict, extract 'content' if exists
-        response_text = response_text.get("content", str(response_text))
+    # Defensive: ensure input is a string
+    if not isinstance(response_text, str):
+        print(f"WARNING: speak_response received non-string input: {type(response_text)}. Converting to string.")
+        response_text = str(response_text)
 
-    # Skip empty responses or control signals
     if not response_text or response_text == "[CONTINUE]":
         print("DEBUG: Skipping empty response in speak_response")
         return
 
-    # Create a simple hash of the response to use as identifier
-    response_hash = hash(response_text[:100])  # First 100 chars is enough to identify
-
-    # Check if we already played this exact response very recently
+    # Deduplication (optional, as before)
+    response_hash = hash(response_text[:100])
     if response_hash in recently_played_responses:
         last_played = recently_played_responses[response_hash]
         if (datetime.now() - last_played).total_seconds() < DUPLICATE_RESPONSE_WINDOW_SECONDS:
@@ -1585,21 +1571,15 @@ async def speak_response(response_text, mood=None, source="main"):
             print(f"  Text: {repr(response_text)[:50]}...")
             return
 
-    # Update the cache (using LRU-like mechanism)
     if len(recently_played_responses) >= MAX_RESPONSE_CACHE:
-        # Remove oldest entry
         oldest_key = min(recently_played_responses.items(), key=lambda x: x[1])[0]
         del recently_played_responses[oldest_key]
-
-    # Record this response as played
     recently_played_responses[response_hash] = datetime.now()
 
-    # Logging for debugging
     print(f"\n[SPEAK RESPONSE] Source: {source}")
     print(f"  Text: {repr(response_text)[:100]}...")
     print(f"  Mood: {mood}")
 
-    # Mood mapping (if needed)
     if mood is not None:
         mood_mapped = map_mood(mood)
     else:
