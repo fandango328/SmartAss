@@ -172,21 +172,8 @@ async def process_response_content(content, chat_log, system_manager, display_ma
         
         print(f"DEBUG - Formatted message for voice (full):\n{formatted_message}\n")
         
-        # Step 4: Add complete original response to chat_log
-        assistant_message = {"role": "assistant", "content": original_message}
-        chat_log.append(assistant_message)
-        
-        # Step 5: Save to persistent storage
-        print(f"DEBUG ASSISTANT MESSAGE: {type(assistant_message)} - {assistant_message}")
-        print(f"DEBUG ASSISTANT CONTENT: {type(assistant_message['content'])} - {original_message[:100]}")
-        if 'save_to_log_file' in globals():
-            save_to_log_file(assistant_message)
-        
-        print(f"DEBUG - Assistant response added to chat_log and saved to file")
-        print(f"DEBUG - Chat_log now has {len(chat_log)} messages")
-        
-        # Step 6: Return formatted message for voice generation
-        return formatted_message
+        # Step 4: Return formatted message for voice generation
+        return original_message, formatted_message
 
     except Exception as e:
         print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Content processing error: {e}")
