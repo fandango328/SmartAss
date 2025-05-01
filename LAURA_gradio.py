@@ -409,6 +409,8 @@ email_manager: Optional[EmailManager] = None  # Add this line
 snowboy = None  # Type hint not added as snowboydetect types aren't standard
 system_manager_lock = asyncio.Lock()
 is_processing = False
+recently_played_responses = {}  # Cache of recently played responses
+MAX_RESPONSE_CACHE = 10  # Maximum number of responses to keep in cache
 
 # =============================================================================
 # Google Integration Setup  - DO NOT FUCK WITH THIS AT ALL!!!  THIS SETS UP THE CHROMIUM BROWSER TO PROVIDE WITH A REFREST TOKEN AFTER YOU LOG IN, YOU SHOULD NOT HAVE A BROWSER POP-UP WHEN RELOGGING IN.
@@ -1540,16 +1542,41 @@ async def generate_voice(chat):
 async def speak_response(response_text, mood=None, source="main"):
     """
     Centralized function to update display and play audio for a response.
-    Ensures only one playback per user response.
+    Prevents duplicate audio playback by tracking recently played responses.
     """
-    import inspect
-
+    global recently_played_responses
+    
+    # Skip empty responses or control signals
+    if not response_text or response_text == "[CONTINUE]":
+        print("DEBUG: Skipping empty response in speak_response")
+        return
+    
+    # Create a simple hash of the response to use as identifier
+    response_hash = hash(response_text[:100])  # First 100 chars is enough to identify
+    
+    # Check if we already played this exact response very recently
+    if response_hash in recently_played_responses:
+        last_played = recently_played_responses[response_hash]
+        # If it was played less than 10 seconds ago, skip it
+        if (datetime.now() - last_played).total_seconds() < 10:
+            print(f"\n[SPEAK RESPONSE] Skipping duplicate response that was just played ({source})")
+            print(f"  Text: {repr(response_text)[:50]}...")
+            return
+    
+    # Update the cache (using LRU-like mechanism)
+    if len(recently_played_responses) >= MAX_RESPONSE_CACHE:
+        # Remove oldest entry
+        oldest_key = min(recently_played_responses.items(), key=lambda x: x[1])[0]
+        del recently_played_responses[oldest_key]
+    
+    # Record this response as played
+    recently_played_responses[response_hash] = datetime.now()
+    
     # Logging for debugging
     print(f"\n[SPEAK RESPONSE] Source: {source}")
     print(f"  Text: {repr(response_text)[:100]}...")
     print(f"  Mood: {mood}")
-    print(f"  Call Stack:\n{''.join(traceback.format_stack(limit=4))}")
-
+    
     # Mood mapping (if needed)
     if mood is not None:
         mood_mapped = map_mood(mood)
@@ -1884,18 +1911,30 @@ async def main():
         from colorama import Fore
 
         keyboard_devices = []
+        print(f"{Fore.CYAN}Available input devices:{Fore.WHITE}")
         for path in list_devices():
             try:
                 device = InputDevice(path)
+                print(f"  - {device.path}: {device.name}")
                 try:
                     select.select([device.fd], [], [], 0)
-                    if "Pi 500" in device.name and "Keyboard" in device.name and "Mouse" not in device.name:
-                        try:
-                            device.grab()
-                            device.ungrab()
-                            keyboard_devices.append(device)
-                        except Exception:
-                            device.close()
+                    # Pi 500 keyboard can appear as multiple devices - we want event10 specifically
+                    # for META key events based on testing
+                    if "Pi 500" in device.name and "Keyboard" in device.name:
+                        # Priority list - event10 is most important for META key
+                        priority = 0
+                        if "event10" in device.path:
+                            priority = 100  # Highest priority - this has the META key
+                        elif "Mouse" not in device.name and "Consumer" not in device.name and "System" not in device.name:
+                            priority = 50   # Medium priority - general keyboard
+                        
+                        if priority > 0:
+                            try:
+                                device.grab()
+                                device.ungrab()
+                                keyboard_devices.append((device, priority))
+                            except Exception:
+                                device.close()
                     else:
                         device.close()
                 except Exception:
@@ -1904,8 +1943,10 @@ async def main():
                 print(f"Error with device {path}: {e}")
 
         if keyboard_devices:
-            keyboard_device = keyboard_devices[0]
-            print(f"{Fore.GREEN}Using keyboard device: {keyboard_device.path}{Fore.WHITE}")
+            # Sort by priority (highest first)
+            keyboard_devices.sort(key=lambda x: x[1], reverse=True)
+            keyboard_device = keyboard_devices[0][0]  # Get the device from the tuple
+            print(f"{Fore.GREEN}Using keyboard device: {keyboard_device.path} ({keyboard_device.name}){Fore.WHITE}")
             print(f"{Fore.GREEN}Using keyboard without exclusive access to allow normal typing{Fore.WHITE}")
         else:
             print(f"{Fore.YELLOW}No valid Pi 500 Keyboard found{Fore.WHITE}")
