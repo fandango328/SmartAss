@@ -11,7 +11,6 @@ import gc
 import psutil
 import json
 import time
-import base64
 import struct
 import random
 import asyncio
@@ -69,9 +68,10 @@ from anthropic import (
 # =============================================================================
 # Third-Party Imports - Google Services
 # =============================================================================
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
+from google_creds import get_google_creds
+creds = get_google_creds(debug=True)
+
+
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
@@ -146,21 +146,6 @@ from function_definitions import (
 from core_functions import get_random_audio, process_response_content
 from tool_registry import tool_registry
 AUDIO_FILE = "speech.mp3"
-
-SCOPES = [
-    "https://www.googleapis.com/auth/gmail.compose",
-    "https://www.googleapis.com/auth/gmail.send",
-    "https://www.googleapis.com/auth/gmail.labels",
-    "https://www.googleapis.com/auth/gmail.settings.basic",
-    "https://www.googleapis.com/auth/gmail.settings.sharing",
-    "https://mail.google.com/",
-    "https://www.googleapis.com/auth/contacts",
-    "https://www.googleapis.com/auth/contacts.readonly",
-    "https://www.googleapis.com/auth/calendar",
-    "https://www.googleapis.com/auth/calendar.events",
-    "https://www.googleapis.com/auth/calendar.readonly",
-    "https://www.googleapis.com/auth/tasks"
-]
 
 # Email importance configuration - update this with information about people you care about
 
@@ -409,100 +394,7 @@ is_processing = False
 recently_played_responses = {}  # Cache of recently played responses
 MAX_RESPONSE_CACHE = 10  # Maximum number of responses to keep in cache
 
-# =============================================================================
-# Google Integration Setup  - DO NOT FUCK WITH THIS AT ALL!!!  THIS SETS UP THE CHROMIUM BROWSER TO PROVIDE WITH A REFREST TOKEN AFTER YOU LOG IN, YOU SHOULD NOT HAVE A BROWSER POP-UP WHEN RELOGGING IN.
-# =============================================================================
-creds = None  # Global declaration
-try:
-    webbrowser.register('chromium', None, webbrowser.Chrome('/usr/bin/chromium'))
 
-    if USE_GOOGLE:
-        if os.path.exists("token.json"):
-            try:
-                creds = Credentials.from_authorized_user_file("token.json", SCOPES)  #This is your refresh token.  As long as you don't switch wifi networks the refresh token should log you back in automatically if you need to restart the script, or the device
-                print("Loaded existing credentials from token.json")
-            except Exception as e:
-                print(f"Error loading credentials: {e}")
-                if os.path.exists("token.json"):
-                    os.remove("token.json")
-                creds = None
-
-        if not creds or not creds.valid:
-            try:
-                if creds and creds.expired and creds.refresh_token:
-                    print("Refreshing expired credentials")
-                    creds.refresh(Request())
-                else:
-                    print("Initiating new OAuth2 flow")
-                    # Create a new InstalledAppFlow with custom OAuth2 session
-                    from google_auth_oauthlib.flow import InstalledAppFlow
-                    from requests_oauthlib import OAuth2Session
-
-                    flow = InstalledAppFlow.from_client_secrets_file(
-                        "credentials.json",
-                        scopes=SCOPES,
-                    )
-
-                    # Configure the session with offline access
-                    session = OAuth2Session(
-                        client_id=flow.client_config['client_id'],
-                        scope=SCOPES,
-                        redirect_uri='http://localhost:8080/'
-                    )
-
-                    # Update flow's session with our configured one
-                    flow.oauth2session = session
-
-                    # Generate authorization URL with offline access
-                    auth_url, _ = flow.authorization_url(
-                        access_type='offline',
-                        include_granted_scopes='true',
-                        prompt='consent'  # Force consent screen
-                    )
-
-                    print("Opening browser for authentication...")
-                    creds = flow.run_local_server(
-                        host='localhost',
-                        port=8080,
-                        access_type='offline',
-                        prompt='consent',
-                        authorization_prompt_message="Please complete authentication in the opened browser window",
-                        success_message="Authentication completed successfully. You may close this window."
-                    )
-
-                    print("\nDetailed Token Information:")
-                    print(f"Valid: {creds.valid}")
-                    print(f"Expired: {creds.expired}")
-                    print(f"Has refresh_token attribute: {hasattr(creds, 'refresh_token')}")
-                    if hasattr(creds, 'refresh_token'):
-                        print(f"Refresh token value present: {bool(creds.refresh_token)}")
-                        print(f"Token expiry: {creds.expiry}")
-
-                if creds and creds.valid:
-                    if not hasattr(creds, 'refresh_token') or not creds.refresh_token:
-                        print("\nWARNING: No refresh token received!")
-                        print("This might require re-authentication on next run.")
-                        print("Try revoking access at https://myaccount.google.com/permissions")
-                        print("Then delete token.json and run again.")
-                    else:
-                        print("\nSaving credentials with refresh token to token.json")
-                        with open("token.json", "w") as token:
-                            token.write(creds.to_json())
-                        print("Credentials saved successfully")
-                else:
-                    print("Warning: Invalid credentials state")
-
-            except Exception as e:
-                print(f"Error during Google authentication: {e}")
-                traceback.print_exc()
-                if os.path.exists("token.json"):
-                    os.remove("token.json")
-                creds = None
-
-except Exception as e:
-    print(f"Error setting up Google integration: {e}")
-    traceback.print_exc()
-    USE_GOOGLE = False
 # =============================================================================
 # Manager Initialization
 # =============================================================================
