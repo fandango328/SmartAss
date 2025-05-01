@@ -895,15 +895,15 @@ async def generate_response(query: str) -> str:  #line no 710
                 else:
                     raise ValueError("Empty response from API (no content field)")
             else:
-                processed_content = await process_response_content(
+                original_message, processed_content = await process_response_content(
                     response.content, chat_log, system_manager, display_manager, audio_manager, notification_manager
-                )  #line no 900
-                chat_log.append({"role": "assistant", "content": processed_content})
+                )
+                chat_log.append({"role": "assistant", "content": original_message})
                 try:
-                    save_to_log_file({"role": "assistant", "content": processed_content})
+                    save_to_log_file({"role": "assistant", "content": original_message})
                 except Exception as e:
                     print(f"Warning: Failed to save final assistant message to log: {e}")
-            return processed_content
+                return processed_content
 
     except Exception as e:
         print(f"Error in generate_response: {e}")
