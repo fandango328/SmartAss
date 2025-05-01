@@ -1065,16 +1065,16 @@ def has_conversation_hook(response):
 
     return True
 
-async def handle_conversation_loop(initial_response):
+async def handle_conversation_loop(_):
     """
-    Handle ongoing conversation with calendar notification interrupts.
-    Each loop iteration corresponds to new user input and a new TTS response.
-    The previous assistant response is never replayed.
+    Follow-up conversation handler: Only speaks *new* assistant replies in response to user input.
+    Ensures previous assistant replies are never replayed, preventing double playback.
     """
     global chat_log, last_interaction
 
     while True:
         await display_manager.update_display('listening')
+        # Wait for new user input; do NOT speak any previous assistant message on entry
         follow_up = await capture_speech(is_follow_up=True)
 
         if follow_up == "[CONTINUE]":
@@ -1083,7 +1083,7 @@ async def handle_conversation_loop(initial_response):
         if not follow_up:
             timeout_audio = get_random_audio("timeout")
             if timeout_audio:
-                await audio_manager.play_audio(timeout_audio)
+                with await audio_manager.queue_audio(audio_file=timeout_audio)
             else:
                 await speak_response("No input detected. Feel free to ask for assistance when needed", mood=None, source="timeout")
             await audio_manager.wait_for_audio_completion()
@@ -1097,7 +1097,7 @@ async def handle_conversation_loop(initial_response):
         # Check if this is a system command
         cmd_result = system_manager.detect_command(follow_up)
         if cmd_result and cmd_result[0]:
-            is_cmd, cmd_type, action, args = cmd_result  # Now unpacking 4 values
+            is_cmd, cmd_type, action, args = cmd_result
             success = await system_manager.handle_command(cmd_type, action, args)
 
             if success:
@@ -1108,7 +1108,7 @@ async def handle_conversation_loop(initial_response):
                 print(f"{Fore.MAGENTA}Conversation ended, returning to idle state...{Fore.WHITE}")
                 return
 
-        # Generate and speak response for follow-up
+        # Generate and speak response for *new* follow-up only
         await display_manager.update_display('thinking')
         res = await generate_response(follow_up)
         if res == "[CONTINUE]":
@@ -1122,6 +1122,8 @@ async def handle_conversation_loop(initial_response):
             await display_manager.update_display('idle')
             print(f"{Fore.MAGENTA}Conversation ended, returning to idle state...{Fore.WHITE}")
             return
+
+
 async def check_manual_stop():
     if keyboard_device:
         try:
@@ -1533,7 +1535,7 @@ async def generate_voice(chat):
             f.write(audio)
 
         print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Queueing audio for playback")
-        await audio_manager.play_audio(AUDIO_FILE)
+        with await audio_manager.queue_audio(audio_file=AUDIO_FILE)
 
     except Exception as e:
         print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Error in generate_voice: {e}")
@@ -1631,7 +1633,7 @@ async def play_queued_notifications():
             with open("notification.mp3", "wb") as f:
                 f.write(audio)
 
-            await audio_manager.play_audio("notification.mp3")
+            with await audio_manager.queue_audio(audio_file="notification.mp3")
             await audio_manager.wait_for_audio_completion()
 
         except Exception as e:
@@ -1656,7 +1658,7 @@ async def play_queued_notifications():
                 with open("notification.mp3", "wb") as f:
                     f.write(audio)
 
-                await audio_manager.play_audio("notification.mp3")
+                with await audio_manager.queue_audio(audio_file="notification.mp3")
                 await audio_manager.wait_for_audio_completion()
 
                 # Update last reminder time
@@ -2252,9 +2254,10 @@ async def run_main_loop():
                             await speak_response(formatted_response, mood=None, source="main")
                             if await notification_manager.has_pending_notifications():
                                 await notification_manager.process_pending_notifications()
-                            await audio_manager.clear_queue()    
+                            await audio_manager.clear_queue()
                             await display_manager.update_display('listening')
-                            await handle_conversation_loop(formatted_response)
+                            # Only hand off to the conversation loop for follow-up, which will do its own TTS
+                            await handle_conversation_loop(None)
                         except Exception as voice_error:
                             print(f"Error during voice generation: {voice_error}")
                             traceback.print_exc()
@@ -2296,7 +2299,7 @@ async def run_main_loop():
         import traceback
         traceback.print_exc()
         raise
-               
+                      
 if __name__ == "__main__":
     try:
         display_manager = DisplayManager()
