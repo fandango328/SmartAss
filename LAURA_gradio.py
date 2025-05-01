@@ -1066,12 +1066,12 @@ async def handle_conversation_loop(_):
     """
     Follow-up conversation handler: Only speaks *new* assistant replies in response to user input.
     Ensures previous assistant replies are never replayed, preventing double playback.
+    Only this loop handles TTS for follow-up interactions.
     """
     global chat_log, last_interaction
 
     while True:
         await display_manager.update_display('listening')
-        # Wait for new user input; do NOT speak any previous assistant message on entry
         follow_up = await capture_speech(is_follow_up=True)
 
         if follow_up == "[CONTINUE]":
@@ -1083,20 +1083,16 @@ async def handle_conversation_loop(_):
                 await audio_manager.queue_audio(audio_file=timeout_audio)
             else:
                 await speak_response("No input detected. Feel free to ask for assistance when needed", mood=None, source="timeout")
-            await audio_manager.wait_for_audio_completion()
             await display_manager.update_display('idle')
             print(f"{Fore.MAGENTA}Conversation ended due to timeout or manual stop, returning to idle state...{Fore.WHITE}")
             return
 
-        # Update last interaction time
         last_interaction = datetime.now()
 
-        # Check if this is a system command
         cmd_result = system_manager.detect_command(follow_up)
         if cmd_result and cmd_result[0]:
             is_cmd, cmd_type, action, args = cmd_result
             success = await system_manager.handle_command(cmd_type, action, args)
-
             if success:
                 await display_manager.update_display('listening')
                 continue
@@ -1105,17 +1101,16 @@ async def handle_conversation_loop(_):
                 print(f"{Fore.MAGENTA}Conversation ended, returning to idle state...{Fore.WHITE}")
                 return
 
-        # Generate and speak response for *new* follow-up only
         await display_manager.update_display('thinking')
         res = await generate_response(follow_up)
         if res == "[CONTINUE]":
             print("DEBUG - Detected [CONTINUE] control signal, skipping voice generation")
             continue
 
+        # Only handle TTS here; do NOT duplicate in run_main_loop!
         await speak_response(res, mood=None, source="followup")
 
         if not has_conversation_hook(res):
-            await audio_manager.wait_for_audio_completion()
             await display_manager.update_display('idle')
             print(f"{Fore.MAGENTA}Conversation ended, returning to idle state...{Fore.WHITE}")
             return
@@ -1555,9 +1550,24 @@ async def speak_response(response_text, mood=None, source="main"):
     Centralized function to update display and play audio for a response.
     Prevents duplicate audio playback by tracking recently played responses.
     Always uses audio queue for playback.
+    Ensures only the latest assistant response (as a string) is submitted to TTS.
     """
     DUPLICATE_RESPONSE_WINDOW_SECONDS = 80  # Set to the max expected response duration
     global recently_played_responses
+
+    # Handle case where response_text is list or dict due to message blocks
+    if isinstance(response_text, list):
+        # Extract only text blocks from the list, join with newlines
+        extracted = []
+        for item in response_text:
+            if isinstance(item, dict) and item.get("type") == "text":
+                extracted.append(item.get("text", ""))
+            elif isinstance(item, str):
+                extracted.append(item)
+        response_text = "\n".join([s for s in extracted if s.strip()])
+    elif isinstance(response_text, dict):
+        # If dict, extract 'content' if exists
+        response_text = response_text.get("content", str(response_text))
 
     # Skip empty responses or control signals
     if not response_text or response_text == "[CONTINUE]":
@@ -1598,7 +1608,7 @@ async def speak_response(response_text, mood=None, source="main"):
     await display_manager.update_display('speaking', mood=mood_mapped)
     await generate_voice(response_text)
     await audio_manager.wait_for_audio_completion()
-    
+        
 async def play_queued_notifications():
     """
     Play queued notifications and handle notification state management.
@@ -2261,12 +2271,13 @@ async def run_main_loop():
                                 await asyncio.sleep(0.1)
                                 is_processing = False
                                 continue
+                            # Only play TTS for the initial query here
                             await speak_response(formatted_response, mood=None, source="main")
                             if await notification_manager.has_pending_notifications():
                                 await notification_manager.process_pending_notifications()
                             await audio_manager.clear_queue()
                             await display_manager.update_display('listening')
-                            # Only hand off to the conversation loop for follow-up, which will do its own TTS
+                            # For follow-up queries, immediately hand off to the conversation loop (which does its own TTS)
                             await handle_conversation_loop(None)
                         except Exception as voice_error:
                             print(f"Error during voice generation: {voice_error}")
