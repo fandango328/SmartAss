@@ -55,10 +55,10 @@ except Exception as e:
     ACTIVE_PERSONA = "laura"
     ACTIVE_PERSONA_DATA = PERSONALITIES_DATA["personas"]["laura"]
 
-ANTHROPIC_MODEL = "claude-3-5-haiku-20241022" # Or whichever Claude model you want to use          
+ANTHROPIC_MODEL = "claude-3-7-sonnet-20250219" # Or whichever Claude model you want to use          claude-3-5-haiku-20241022
 
 CHAT_LOG_MAX_TOKENS = 80000  # Maximum tokens to keep in memory
-CHAT_LOG_RECOVERY_TOKENS = 1000 # Tokens to recover on startup
+CHAT_LOG_RECOVERY_TOKENS = 4000 # Tokens to recover on startup
 CHAT_LOG_DIR = "chat_logs"  # Directory to store chat logs
 
 # Let the system use whatever profile is set as active in the JSON file
@@ -71,8 +71,8 @@ WHISPER_MODEL_SIZE = "tiny"  # Options: "tiny" "small" "small-q8_0"
 WHISPER_MODEL_PATH = f"models/ggml-{WHISPER_MODEL_SIZE}.bin"  # Path to whisper model
 
 # Vosk Configuration
-VOSK_MODEL_PATH = "models/vosk-model-small-en-us-0.15"  # For 8GB Pi4
-#VOSK_MODEL_PATH = "models/vosk-model-en-us-0.22"      # For 8GB Pi 500
+#VOSK_MODEL_PATH = "models/vosk-model-small-en-us-0.15"  # For 8GB Pi4
+VOSK_MODEL_PATH = "models/vosk-model-en-us-0.22"      # For 8GB Pi 500
 
 # Transcription server configuration
 TRANSCRIPTION_SERVER = {
@@ -126,9 +126,16 @@ VOICE_TIMEOUT = 3  # Timeout in seconds for voice detection
 VOICE_START_TIMEOUT = 6  # Timeout in seconds for starting voice detection
 
 WAKE_WORDS = {
+    # LAURA
     "GD_Laura.pmdl": 0.5,
     "Wake_up_Laura.pmdl": 0.5,
-    "Laura.pmdl": 0.45
+    "Laura.pmdl": 0.45,
+    # MAX
+    "wakeupmax.pmdl": 0.45,
+    "maxwtf.pmdl": 0.5,
+    "alrightmax.pmdl": 0.5,
+    "maxpromptmore.pmdl": 0.5,
+    "heymax.pmdl": 0.45,
 }
 
 # Updated MOODS list
