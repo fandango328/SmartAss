@@ -2,9 +2,12 @@ import pygame
 import json
 import asyncio
 import random
+import config
+import cairosvg
+import io
+import numpy as np
 import time
 from pathlib import Path
-import config
 
 class DisplayManager:
     """
@@ -564,3 +567,123 @@ class DisplayManager:
             except Exception as e:
                 print(f"Error playing transition sequence: {e}")
                 return False
+
+class AuraVisualizer:
+    def __init__(
+        self,
+        svg_path,
+        window_size=600,
+        fps=30,
+        mood="casual",
+        base_radius_active=None,
+        radius_variation_active=None,
+        base_radius_idle=None,
+        radius_variation_idle=None,
+        idle_energy=0.3,
+        aura_center_y_factor=0.45
+    ):
+        self.window_size = window_size
+        self.fps = fps
+        self.mood = mood
+        self.gradient_colors = config.get_mood_color(mood)
+        self.base_radius_active = base_radius_active or int(window_size * 0.5)
+        self.radius_variation_active = radius_variation_active or int(window_size * 0.35)
+        self.base_radius_idle = base_radius_idle or int(window_size * 0.4)
+        self.radius_variation_idle = radius_variation_idle or int(window_size * 0.35)
+        self.idle_energy = idle_energy
+        self.aura_center_y_factor = aura_center_y_factor
+
+        pygame.init()
+        self.surface = pygame.Surface((window_size, window_size), pygame.SRCALPHA)
+
+        self.svg_height = window_size
+        self.svg_width = int(self.svg_height * 0.8)
+        self.silhouette = self.svg_to_surface(svg_path, self.svg_width, self.svg_height)
+        self.bounding_rect = self.silhouette.get_bounding_rect()
+        self.y_offset = window_size - self.bounding_rect.bottom
+        self.silhouette_rect = self.silhouette.get_rect()
+        self.silhouette_rect.left = (window_size - self.svg_width) // 2
+        self.silhouette_rect.top = self.y_offset
+
+        self.current_energy = 0.0
+        self.target_energy = 0.0
+        self.audio_playing = False
+        self.idle_start_time = None
+        self.last_update_time = time.time()
+        self.idle_frame = 0
+
+    def svg_to_surface(self, svg_path, width, height):
+        png_bytes = cairosvg.svg2png(url=str(svg_path), output_width=width, output_height=height)
+        image = pygame.image.load(io.BytesIO(png_bytes)).convert_alpha()
+        return image
+
+    def set_mood(self, mood):
+        """Update the current mood and corresponding gradient colors."""
+        self.mood = mood
+        self.gradient_colors = config.get_mood_color(mood)
+
+    def set_energy(self, energy, active=True):
+        self.target_energy = np.clip(energy, 0.0, 1.0)
+        self.audio_playing = active
+        if not active and self.idle_start_time is None:
+            self.idle_start_time = time.time()
+
+    def update(self):
+        now = time.time()
+        dt = now - self.last_update_time
+        self.last_update_time = now
+
+        if self.audio_playing:
+            base_radius = self.base_radius_active
+            radius_variation = self.radius_variation_active
+            self.current_energy += (self.target_energy - self.current_energy) * 0.35
+            self.idle_start_time = None
+        else:
+            if self.idle_start_time is None:
+                self.idle_start_time = now
+            t = now - self.idle_start_time
+            base_radius = self.base_radius_idle
+            radius_variation = self.radius_variation_idle
+            pulse = 0.5 + 0.5 * np.sin(2 * np.pi * 1.5 * t)
+            self.target_energy = self.idle_energy + (pulse - 0.5) * 0.05
+            self.target_energy = np.clip(self.target_energy, self.idle_energy - 0.025, self.idle_energy + 0.025)
+            self.current_energy += (self.target_energy - self.current_energy) * 0.25
+            self.idle_frame += 1
+
+        self.surface.fill((0, 0, 0, 0))
+        aura_cx = self.silhouette_rect.centerx
+        aura_cy = self.silhouette_rect.top + int(self.svg_height * self.aura_center_y_factor)
+        # Use self.gradient_colors, which are now mood-dependent
+        self.draw_audio_gradient(
+            self.surface, (aura_cx, aura_cy), base_radius, radius_variation, self.current_energy, self.gradient_colors
+        )
+        self.surface.blit(self.silhouette, self.silhouette_rect)
+
+    def draw_audio_gradient(self, surface, center, base_radius, variation, energy, colors):
+        w, h = surface.get_size()
+        cx, cy = center
+        max_radius = base_radius + energy * variation
+        pink_portion = 0.45
+        for r in range(int(max_radius), 0, -2):
+            t_linear = r / max_radius
+            if t_linear < pink_portion:
+                t = 0
+            else:
+                t = (t_linear - pink_portion) / (1 - pink_portion)
+            color = [
+                int(colors[0][i] * (1 - t) + colors[1][i] * t)
+                for i in range(3)
+            ]
+            alpha = int(220 * (1 - t_linear) ** 2)
+            s = pygame.Surface((w, h), pygame.SRCALPHA)
+            pygame.draw.circle(s, (*color, alpha), center, r)
+            surface.blit(s, (0, 0))
+
+    def get_surface_image(self):
+        arr = pygame.surfarray.array3d(self.surface)
+        arr = np.transpose(arr, (1, 0, 2))
+        return arr
+
+    def reset(self):
+        self.idle_start_time = None
+        self.idle_frame = 0
