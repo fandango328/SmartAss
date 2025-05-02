@@ -138,65 +138,67 @@ WAKE_WORDS = {
     "heymax.pmdl": 0.45,
 }
 
-# Updated MOODS list
-MOODS = [
-    "amused", "annoyed", "caring", "casual", "cheerful", "concerned", 
-    "confused", "curious", "disappointed", "embarrassed", "excited",
-    "frustrated", "interested", "sassy", "scared", "surprised",
-    "suspicious", "thoughtful"
+# Define 12 core moods
+CORE_MOODS = [
+    "curious", "thoughtful", "cheerful", "casual", "sassy", "caring",
+    "annoyed", "concerned", "confused", "embarrassed", "surprised", "suspicious"
 ]
 
+# Map ALL mood variants to a single core mood (no duplicates, no ambiguity)
 MOOD_MAPPINGS = {
-    # Base moods mapping to themselves
-    "amused": "amused",
-    "annoyed": "annoyed",
-    "caring": "caring",
-    "casual": "casual",
-    "cheerful": "cheerful",
-    "concerned": "concerned",
-    "confused": "confused",
-    "curious": "curious",
-    "disappointed": "disappointed",
+    # Curious
+    "curious": "curious", "interested": "curious", "intrigued": "curious", "engaged": "curious", "attentive": "curious",
+    # Thoughtful
+    "thoughtful": "thoughtful", "reflective": "thoughtful", "focused": "thoughtful", "pensive": "thoughtful",
+    "deeply reflective": "thoughtful", "informative": "thoughtful", "professional": "thoughtful", "serious": "thoughtful",
+    # Cheerful
+    "cheerful": "cheerful", "pleased": "cheerful", "approving": "cheerful", "appreciative": "cheerful",
+    "agreeing": "cheerful", "enthusiastic": "cheerful", "encouraging": "cheerful", "confident": "cheerful",
+    # Casual
+    "casual": "casual", "friendly": "casual", "comfortable": "casual", "practical": "casual", "supportive": "casual",
+    # Sassy
+    "sassy": "sassy", "playful": "sassy", "laughing": "sassy", "witty": "sassy", "chuckling": "sassy",
+    # Caring
+    "caring": "caring", "understanding": "caring", "helpful": "caring", "warm": "caring", "empathetic": "caring",
+    "sympathetic": "caring", "compassionate": "caring", "deeply empathetic": "caring",
+    # Annoyed
+    "annoyed": "annoyed", "frustrated": "annoyed",
+    # Concerned
+    "concerned": "concerned", "apologetic": "concerned", "disappointed": "concerned", "sheepish": "concerned",
+    # Confused
+    "confused": "confused", "slightly confused": "confused",
+    # Embarrassed
     "embarrassed": "embarrassed",
-    "excited": "excited",
-    "frustrated": "frustrated",
-    "interested": "interested",
-    "sassy": "sassy",
-    "scared": "scared",
-    "surprised": "surprised",
-    "suspicious": "suspicious",
-    "thoughtful": "thoughtful",
-    
-    # Variant mappings
-    "understanding": "caring",
-    "helpful": "caring",
-    "warm": "caring",
-    "empathetic": "caring",
-    "sympathetic": "caring",
-    "compassionate": "caring",
-    "deeply empathetic": "caring",
-    "friendly": "casual",
-    "comfortable": "casual",
-    "practical": "casual",
-    "pleased": "cheerful",
-    "approving": "cheerful",
-    "appreciative": "cheerful",
-    "intrigued": "curious",
-    "engaged": "curious",
-    "attentive": "curious",
-    "apologetic": "disappointed",
-    "sheepish": "embarrassed",
-    "playful": "sassy",
-    "laughing": "sassy",
-    "impressed": "surprised",
-    "anticipatory": "surprised",
-    "direct": "suspicious",
-    "reflective": "thoughtful",
-    "focused": "thoughtful",
-    "pensive": "thoughtful",
-    "deeply reflective": "thoughtful",
-    "informative": "thoughtful"
+    # Surprised
+    "surprised": "surprised", "excited": "surprised", "impressed": "surprised", "anticipatory": "surprised", "passionate": "surprised",
+    # Suspicious
+    "suspicious": "suspicious", "direct": "suspicious"
 }
+
+# Color/gradient mapping for each core mood (center, edge color as (R,G,B))
+MOOD_COLORS = {
+    "curious":      [(64, 224, 208), (0, 206, 209)],
+    "thoughtful":   [(70, 130, 180), (100, 149, 237)],
+    "cheerful":     [(255, 255, 102), (255, 215, 0)],
+    "casual":       [(135, 206, 250), (176, 224, 230)],
+    "sassy":        [(255, 20, 147), (199, 21, 133)],
+    "caring":       [(255, 182, 193), (255, 240, 245)],
+    "annoyed":      [(255, 69, 0), (139, 0, 0)],
+    "concerned":    [(255, 140, 0), (255, 215, 0)],
+    "confused":     [(186, 85, 211), (72, 61, 139)],
+    "embarrassed":  [(255, 182, 193), (255, 160, 122)],
+    "surprised":    [(255, 255, 255), (135, 206, 250)],
+    "suspicious":   [(192, 192, 192), (105, 105, 105)],
+}
+
+def map_mood(mood: str) -> str:
+    """Map any mood string to the core mood for display and color logic."""
+    return MOOD_MAPPINGS.get(mood.lower(), "casual")
+
+def get_mood_color(mood: str):
+    """Get the color gradient (center, edge) for a given mood."""
+    mood_key = map_mood(mood)
+    return MOOD_COLORS.get(mood_key, MOOD_COLORS["casual"])
 
 # Load the persona-specific system prompt
 PERSONA_SYSTEM_PROMPT = ACTIVE_PERSONA_DATA.get("system_prompt", "You are an AI assistant.")
