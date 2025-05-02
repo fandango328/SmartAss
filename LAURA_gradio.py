@@ -403,7 +403,7 @@ try:
     notification_manager = NotificationManager(audio_manager)
     
     # Initialize email manager with Google credentials
-    email_manager = EmailManager(creds) if USE_GOOGLE else None
+    email_manager = EmailManager() if USE_GOOGLE else None
     
     # Initialize document manager
     document_manager = DocumentManager()  # Document manager no longer needs email_manager
@@ -1869,7 +1869,7 @@ async def main():
         print("\nInitializing Email Manager...")
         try:
             if USE_GOOGLE:
-                email_manager = EmailManager(creds)
+                email_manager = EmailManager()
             else:
                 email_manager = None
         except Exception as e:
