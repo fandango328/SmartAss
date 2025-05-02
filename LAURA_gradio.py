@@ -78,6 +78,7 @@ from googleapiclient.errors import HttpError
 # =============================================================================
 # Local Module Imports
 # =============================================================================
+
 from laura_tools import AVAILABLE_TOOLS as TOOLS
 from tts_handler import TTSHandler
 from display_manager import DisplayManager
@@ -98,6 +99,7 @@ from tool_context import TOOL_CONTEXTS
 from token_manager import TokenManager
 from document_manager import DocumentManager
 from notification_manager import NotificationManager
+import gradio_app2
 import config
 from config import (
     TRANSCRIPTION_SERVER,
@@ -1476,7 +1478,7 @@ async def speak_response(response_text, mood=None, source="main"):
     else:
         mood_mapped = "casual"
 
-    await display_manager.update_display('speaking', mood=mood_mapped)
+    await display_manager.self.aura.set_mood(mood)
     await generate_voice(response_text)
     await audio_manager.wait_for_audio_completion()
         
@@ -1518,7 +1520,7 @@ async def play_queued_notifications():
 
         try:
             await audio_manager.wait_for_audio_completion()
-            await display_manager.update_display('speaking', mood='casual')
+            await display_manager.self.aura.set_mood(mood)
 
             audio = tts_handler.generate_audio(message)
             with open("notification.mp3", "wb") as f:
@@ -1543,7 +1545,7 @@ async def play_queued_notifications():
 
             try:
                 await audio_manager.wait_for_audio_completion()
-                await display_manager.update_display('speaking', mood='casual')
+                await display_manager.self.aura.set_mood(mood)
 
                 audio = tts_handler.generate_audio(reminder_message)
                 with open("notification.mp3", "wb") as f:
@@ -1563,7 +1565,7 @@ async def play_queued_notifications():
         PENDING_NOTIFICATIONS.pop(notification_id, None)
 
     # Restore previous display state
-    await display_manager.update_display(previous_state, mood=previous_mood)
+    await display_manager.self.aura.set_mood(mood) mood=previous_mood)
 
 async def check_upcoming_events():
     """Calendar notification system that can interrupt conversation flow"""
@@ -1941,6 +1943,16 @@ async def main():
         print("\nAll background tasks have been scheduled. System is now running. Keep the assistant alive...\n")
         # Execute all tasks and keep the assistant alive
         await asyncio.gather(*tasks, return_exceptions=True)
+
+        # LAUNCH GRADIO UI AFTER INITIALIZATION
+        try:
+            import gradio_app2  # Make sure gradio_app2.py has a function to launch the app and accepts display_manager
+            import threading
+            gradio_thread = threading.Thread(target=gradio_app2.launch_gradio_app, args=(display_manager,), daemon=True)
+            gradio_thread.start()
+            print("Gradio UI launched in background thread.")
+        except Exception as e:
+            print(f"Error launching Gradio UI: {e}")
 
     except Exception as e:
         print(f"Critical error in main function: {e}")
