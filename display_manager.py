@@ -122,7 +122,6 @@ class DisplayManager:
         if 'sleep' in self.image_cache:
             self.current_image = random.choice(self.image_cache['sleep'])
             self.screen.blit(self.current_image, (0, 0))
-            pygame.display.flip()
             self.last_image_change = time.time()
             self.state_entry_time = time.time()
             self.initialized = True
@@ -314,7 +313,6 @@ class DisplayManager:
                                     new_image = random.choice(current_options)
                                     self.current_image = new_image
                                     self.screen.blit(self.current_image, (0, 0))
-                                    pygame.display.flip()
                                     self.last_image_change = current_time
                 
                 await asyncio.sleep(0.5)
@@ -380,7 +378,6 @@ class DisplayManager:
                     self.current_mood = 'casual'
                     self.current_image = random.choice(self.image_cache['sleep'])
                     self.screen.blit(self.current_image, (0, 0))
-                    pygame.display.flip()
                     self.last_image_change = time.time()
                     self.state_entry_time = time.time()
                     return True
@@ -427,7 +424,6 @@ class DisplayManager:
                                 )
                                 self.current_image = display_img
                                 self.screen.blit(self.current_image, (0, 0))
-                                pygame.display.flip()
                                 self.state_entry_time = time.time()
                                 return
                     # Otherwise, randomly pick any PNG from persona or Laura fallback dir
@@ -441,7 +437,6 @@ class DisplayManager:
                         )
                         self.current_image = display_img
                         self.screen.blit(self.current_image, (0, 0))
-                        pygame.display.flip()
                         self.state_entry_time = time.time()
                         return
                     # If nothing is found, fall through to normal state handling
@@ -474,7 +469,6 @@ class DisplayManager:
                             )
                         self.current_image = system_image
                         self.screen.blit(self.current_image, (0, 0))
-                        pygame.display.flip()
                         self.state_entry_time = time.time()
                         return
                     except Exception as e:
@@ -494,7 +488,6 @@ class DisplayManager:
                                     )
                                     self.current_image = transition_image
                                     self.screen.blit(self.current_image, (0, 0))
-                                    pygame.display.flip()
                                     self.state_entry_time = time.time()
                                     return
                             png_files = list(transition_path.glob('*.png'))
@@ -505,7 +498,6 @@ class DisplayManager:
                                 )
                                 self.current_image = transition_image
                                 self.screen.blit(self.current_image, (0, 0))
-                                pygame.display.flip()
                                 self.state_entry_time = time.time()
                                 return
                     except Exception as e:
@@ -523,7 +515,6 @@ class DisplayManager:
                     print(f"Error: Invalid state '{state}'")
                     return
                 self.screen.blit(self.current_image, (0, 0))
-                pygame.display.flip()
                 self.state_entry_time = time.time()
                 if state in ['idle', 'sleep']:
                     self.last_image_change = self.state_entry_time
@@ -534,7 +525,6 @@ class DisplayManager:
                     if 'thinking' in self.image_cache:
                         self.current_image = random.choice(self.image_cache['thinking'])
                         self.screen.blit(self.current_image, (0, 0))
-                        pygame.display.flip()
                 except:
                     pass
 
@@ -574,7 +564,6 @@ class DisplayManager:
                     )
                     self.current_image = frame_image
                     self.screen.blit(self.current_image, (0, 0))
-                    pygame.display.flip()
                     await asyncio.sleep(frame_delay)
                     
                 return True
