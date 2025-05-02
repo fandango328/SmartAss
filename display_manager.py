@@ -4,6 +4,7 @@ import asyncio
 import random
 import time
 from pathlib import Path
+import config
 
 class DisplayManager:
     """
@@ -67,12 +68,7 @@ class DisplayManager:
         
         # Define valid moods for speaking state
         # These must match subdirectory names in the speaking/ directory
-        self.moods = [
-            "amused", "annoyed", "caring", "casual", "cheerful", "concerned",
-            "confused", "curious", "disappointed", "embarrassed", "excited",
-            "frustrated", "interested", "sassy", "scared", "surprised",
-            "suspicious", "thoughtful"
-        ]
+        self.moods = list(config.MOOD_COLORS.keys())
         
         # Load active persona configuration
         # This determines which resource set to use as primary
@@ -159,15 +155,11 @@ class DisplayManager:
         
         Images are cached to prevent repeated disk access and ensure smooth transitions.
         """
-        print(f"\nLoading images from: {self.base_path}")
-        
         for state, directory in self.states.items():
-            try:
-                if state == 'speaking':
-                    # Speaking state requires mood-specific image sets
-                    self.image_cache[state] = {}
-                    for mood in self.moods:
-                        mood_path = Path(directory) / mood
+            if state == 'speaking':
+                self.image_cache[state] = {}
+                for mood in self.moods:
+                    mood_path = Path(directory) / mood
                         if mood_path.exists():
                             png_files = list(mood_path.glob('*.png'))
                             if png_files:
@@ -398,6 +390,7 @@ class DisplayManager:
         async with self.state_lock:
             if mood is None:
                 mood = self.current_mood
+            mood = config.map_mood(mood)
 
             # Skip redundant updates unless transitioning
             if (state == self.current_state and 
