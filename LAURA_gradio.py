@@ -1750,62 +1750,45 @@ async def main():
     - Start all background and main loops as asyncio tasks
     - Play a startup sound and set display to listening mode
     - Await on all tasks to keep the event loop running
+    - Handle all resource cleanup in the finally block
     """
 
     global remote_transcriber, display_manager, transcriber, token_manager
     global chat_log, document_manager, system_manager, keyboard_device
     global audio_manager, tts_handler, anthropic_client, notification_manager, email_manager
-    display_manager = DisplayManager(SVG_PATH, BOOT_IMG_PATH, window_size=512)
-    await display_manager.start_async_tasks()
-    tasks = []
 
+    tasks = []
     try:
         print("\n=== Core Manager Initialization ===")
 
         # 1. Display Manager
         print("\nInitializing Display Manager...")
-        try:
-            SVG_PATH = "/home/user/LAURA/svg files/silhouette.svg"
-            BOOT_IMG_PATH = "/home/user/LAURA/pygame/laura/speaking/interested/interested01.png"
-            display_manager = DisplayManager(svg_path=SVG_PATH, boot_img_path=BOOT_IMG_PATH, window_size=WINDOW_SIZE)
-
-            
-        except Exception as e:
-            print(f"Critical Error: Display initialization failed: {e}")
-            return
+        SVG_PATH = "/home/user/LAURA/svg files/silhouette.svg"
+        BOOT_IMG_PATH = "/home/user/LAURA/pygame/laura/speaking/interested/interested01.png"
+        WINDOW_SIZE = 512
+        display_manager = DisplayManager(svg_path=SVG_PATH, boot_img_path=BOOT_IMG_PATH, window_size=WINDOW_SIZE)
+        await display_manager.start_async_tasks()
 
         # 2. Audio Manager
         print("\nInitializing Audio Manager...")
-        try:
-            audio_manager = AudioManager()
-        except Exception as e:
-            print(f"Critical Error: Audio initialization failed: {e}")
-            return
+        audio_manager = AudioManager()
 
         # 3. TTS Handler
         print("\nInitializing TTS Handler...")
-        try:
-            tts_config = {
-                "TTS_ENGINE": config.TTS_ENGINE,
-                "ELEVENLABS_KEY": ELEVENLABS_KEY,
-                "VOICE": config.VOICE,
-                "ELEVENLABS_MODEL": config.ELEVENLABS_MODEL,
-            }
-            tts_handler = TTSHandler(tts_config)
-            print("TTS Handler initialized successfully")
-        except Exception as e:
-            print(f"Critical Error: TTS initialization failed: {e}")
-            return
+        tts_config = {
+            "TTS_ENGINE": config.TTS_ENGINE,
+            "ELEVENLABS_KEY": ELEVENLABS_KEY,
+            "VOICE": config.VOICE,
+            "ELEVENLABS_MODEL": config.ELEVENLABS_MODEL,
+        }
+        tts_handler = TTSHandler(tts_config)
+        print("TTS Handler initialized successfully")
 
         # 4. Anthropic Client and Token Management
         print("\nInitializing Token Management...")
-        try:
-            anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY)
-            token_manager = TokenManager(anthropic_client=anthropic_client)
-            token_manager.start_session()
-        except Exception as e:
-            print(f"Critical Error: Token management initialization failed: {e}")
-            return
+        anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY)
+        token_manager = TokenManager(anthropic_client=anthropic_client)
+        token_manager.start_session()
 
         # 5. Keyboard Initialization
         print("\n=== Keyboard Initialization ===")
@@ -1821,16 +1804,12 @@ async def main():
                 print(f"  - {device.path}: {device.name}")
                 try:
                     select.select([device.fd], [], [], 0)
-                    # Pi 500 keyboard can appear as multiple devices - we want event10 specifically
-                    # for META key events based on testing
                     if "Pi 500" in device.name and "Keyboard" in device.name:
-                        # Priority list - event10 is most important for META key
                         priority = 0
                         if "event10" in device.path:
-                            priority = 100  # Highest priority - this has the META key
+                            priority = 100
                         elif "Mouse" not in device.name and "Consumer" not in device.name and "System" not in device.name:
-                            priority = 50   # Medium priority - general keyboard
-                        
+                            priority = 50
                         if priority > 0:
                             try:
                                 device.grab()
@@ -1846,9 +1825,8 @@ async def main():
                 print(f"Error with device {path}: {e}")
 
         if keyboard_devices:
-            # Sort by priority (highest first)
             keyboard_devices.sort(key=lambda x: x[1], reverse=True)
-            keyboard_device = keyboard_devices[0][0]  # Get the device from the tuple
+            keyboard_device = keyboard_devices[0][0]
             print(f"{Fore.GREEN}Using keyboard device: {keyboard_device.path} ({keyboard_device.name}){Fore.WHITE}")
             print(f"{Fore.GREEN}Using keyboard without exclusive access to allow normal typing{Fore.WHITE}")
         else:
@@ -1860,52 +1838,36 @@ async def main():
 
         # Document Manager
         print("\nInitializing Document Manager...")
-        try:
-            document_manager = DocumentManager()
-        except Exception as e:
-            print(f"Error: Document manager initialization failed: {e}")
-            return
+        document_manager = DocumentManager()
 
         # Notification Manager
         print("\nInitializing Notification Manager...")
-        try:
-            notification_manager = NotificationManager(audio_manager)
-            await notification_manager.start()
-        except Exception as e:
-            print(f"Error: Notification manager initialization failed: {e}")
-            return
+        notification_manager = NotificationManager(audio_manager)
+        await notification_manager.start()
 
         # Email Manager
         print("\nInitializing Email Manager...")
-        try:
-            if USE_GOOGLE:
-                email_manager = EmailManager()
-            else:
-                email_manager = None
-        except Exception as e:
-            print(f"Error: Email manager initialization failed: {e}")
+        if USE_GOOGLE:
+            email_manager = EmailManager()
+        else:
             email_manager = None
 
         # 7. System Manager
         print("\nInitializing System Manager...")
-        try:
-            system_manager = SystemManager(
-                email_manager=email_manager,
-                display_manager=display_manager,
-                audio_manager=audio_manager,
-                document_manager=document_manager,
-                notification_manager=notification_manager,
-                token_manager=token_manager,
-                tts_handler=tts_handler,
-                anthropic_client=anthropic_client
-            )
-            await system_manager.register_managers()
-            is_init, missing = system_manager.is_initialized()
-            if not is_init:
-                raise RuntimeError(f"System initialization incomplete. Missing: {', '.join(missing)}")
-        except Exception as e:
-            print(f"Critical Error: System manager initialization failed: {e}")
-            return
+        system_manager = SystemManager(
+            email_manager=email_manager,
+            display_manager=display_manager,
+            audio_manager=audio_manager,
+            document_manager=document_manager,
+            notification_manager=notification_manager,
+            token_manager=token_manager,
+            tts_handler=tts_handler,
+            anthropic_client=anthropic_client
+        )
+        await system_manager.register_managers()
+        is_init, missing = system_manager.is_initialized()
+        if not is_init:
+            raise RuntimeError(f"System initialization incomplete. Missing: {', '.join(missing)}")
 
         # 8. Transcription Setup
         print("\n=== Transcription System Initialization ===")
@@ -1944,22 +1906,14 @@ async def main():
                 await audio_manager.wait_for_queue_empty()
             except Exception as e:
                 print(f"Warning: Could not play startup sound effect: {e}")
+                
+        display_manager.finish_boot()        
         await display_manager.update_display('sleep')
         print(f"{Fore.MAGENTA}Listening for wake word or press Raspberry button to begin...{Fore.WHITE}")
 
         print("\nAll background tasks have been scheduled. System is now running. Keep the assistant alive...\n")
         # Execute all tasks and keep the assistant alive
         await asyncio.gather(*tasks, return_exceptions=True)
-
-        # LAUNCH GRADIO UI AFTER INITIALIZATION
-        try:
-            import gradio_app2  # Make sure gradio_app2.py has a function to launch the app and accepts display_manager
-            import threading
-            gradio_thread = threading.Thread(target=gradio_app2.launch_gradio_app, args=(display_manager,), daemon=True)
-            gradio_thread.start()
-            print("Gradio UI launched in background thread.")
-        except Exception as e:
-            print(f"Error launching Gradio UI: {e}")
 
     except Exception as e:
         print(f"Critical error in main function: {e}")
@@ -1991,8 +1945,7 @@ async def main():
             keyboard_device.close()
             print("Keyboard device closed successfully")
 
-        print("All resources released")
-                
+        print("All resources released")               
 async def run_main_loop():
     """
     Core interaction loop managing LAURA's conversation flow.
@@ -2213,45 +2166,6 @@ async def run_main_loop():
                       
 if __name__ == "__main__":
     try:
-        SVG_PATH = "/home/user/LAURA/svg files/silhouette.svg"
-        BOOT_IMG_PATH = "/home/user/LAURA/pygame/laura/speaking/interested/interested01.png"
-        display_manager = DisplayManager(SVG_PATH, BOOT_IMG_PATH, window_size=512)
         asyncio.run(main())
-        
     except KeyboardInterrupt:
         print("\nExiting Virtual Assistant - Cleaning up resources...")
-
-        # First stop any active processes
-        if 'audio_manager' in globals() and audio_manager:
-            try:
-                print("Cleaning up audio manager...")
-                asyncio.run(audio_manager.cleanup())
-            except Exception as e:
-                print(f"Error cleaning up audio manager: {e}")
-
-        # Release the transcriber resources explicitly
-        if 'transcriber' in globals() and transcriber:
-            try:
-                print("Cleaning up transcriber...")
-                transcriber.cleanup()
-                transcriber = None  # Explicitly clear the reference
-            except Exception as e:
-                print(f"Error cleaning up transcriber: {e}")
-
-        # Clean up remaining components
-        if 'remote_transcriber' in globals() and remote_transcriber:
-            try:
-                asyncio.run(remote_transcriber.cleanup())
-            except Exception as e:
-                print(f"Error cleaning up remote transcriber: {e}")
-
-        if 'display_manager' in globals() and display_manager:
-            try:
-                display_manager.cleanup()
-            except Exception as e:
-                print(f"Error cleaning up display manager: {e}")
-
-        # Final garbage collection pass
-        import gc
-        gc.collect()
-        print("Cleanup complete!")
