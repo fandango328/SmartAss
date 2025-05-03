@@ -71,8 +71,8 @@ WHISPER_MODEL_SIZE = "tiny"  # Options: "tiny" "small" "small-q8_0"
 WHISPER_MODEL_PATH = f"models/ggml-{WHISPER_MODEL_SIZE}.bin"  # Path to whisper model
 
 # Vosk Configuration
-#VOSK_MODEL_PATH = "models/vosk-model-small-en-us-0.15"  # For 8GB Pi4
-VOSK_MODEL_PATH = "models/vosk-model-en-us-0.22"      # For 8GB Pi 500
+VOSK_MODEL_PATH = "models/vosk-model-small-en-us-0.15"  # For 8GB Pi4
+#VOSK_MODEL_PATH = "models/vosk-model-en-us-0.22"      # For 8GB Pi 500
 
 # Transcription server configuration
 TRANSCRIPTION_SERVER = {
@@ -191,6 +191,28 @@ MOOD_COLORS = {
     "suspicious":   [(192, 192, 192), (105, 105, 105)],
 }
 
+DISPLAY_STATE_TO_MOOD = {
+    "tools_state": "thoughtful",
+    "tool_use": "curious",
+    "calibration": "thoughtful",
+    "document": "thoughtful",
+    "persona": "cheerful",
+    "system": "thoughtful",
+    "wake": "cheerful",
+    "listening": "curious",
+    "thinking": "thoughtful",
+    "speaking": "casual",
+    "idle": "casual",
+    "sleep": "casual",
+}
+def state_to_mood(state):
+    return DISPLAY_STATE_TO_MOOD.get(state, "casual")
+
+def map_mood(mood):
+    if not isinstance(mood, str):
+        return "casual"
+    return MOOD_MAPPINGS.get(mood.lower(), "casual")
+    
 def map_mood(mood: str) -> str:
     """Map any mood string to the core mood for display and color logic."""
     return MOOD_MAPPINGS.get(mood.lower(), "casual")
@@ -300,3 +322,12 @@ CALENDAR_NOTIFICATION_SENTENCES = [
 ]
 DEBUG_CALENDAR = False  # Control calendar debug messages
 CALENDAR_NOTIFICATION_INTERVALS = [15, 10, 5, 2]  # Minutes before event to notify
+
+SVG_PATH = "/home/user/LAURA/svg files/silhouette.svg"
+BOOT_IMG_PATH = "/home/user/LAURA/pygame/laura/speaking/interested/interested01.png"
+WINDOW_SIZE = 512
+
+def map_mood(mood):
+    if not isinstance(mood, str) or not mood:
+        return "casual"
+    return MOOD_MAPPINGS.get(mood.lower(), "casual")
