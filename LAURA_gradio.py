@@ -99,7 +99,6 @@ from tool_context import TOOL_CONTEXTS
 from token_manager import TokenManager
 from document_manager import DocumentManager
 from notification_manager import NotificationManager
-import gradio_app2
 import config
 from config import (
     TRANSCRIPTION_SERVER,
@@ -110,7 +109,7 @@ from config import (
     VAD_SETTINGS,
     VOICE,
     ACTIVE_PERSONA,
-    MOODS,
+    CORE_MOODS,
     MOOD_MAPPINGS,
     USE_GOOGLE,
     CONVERSATION_END_SECONDS,
@@ -1478,7 +1477,7 @@ async def speak_response(response_text, mood=None, source="main"):
     else:
         mood_mapped = "casual"
 
-    await display_manager.self.aura.set_mood(mood)
+    display_manager.aura.set_mood(mood)
     await generate_voice(response_text)
     await audio_manager.wait_for_audio_completion()
         
@@ -1520,7 +1519,7 @@ async def play_queued_notifications():
 
         try:
             await audio_manager.wait_for_audio_completion()
-            await display_manager.self.aura.set_mood(mood)
+            display_manager.aura.set_mood(mood)
 
             audio = tts_handler.generate_audio(message)
             with open("notification.mp3", "wb") as f:
@@ -1545,7 +1544,7 @@ async def play_queued_notifications():
 
             try:
                 await audio_manager.wait_for_audio_completion()
-                await display_manager.self.aura.set_mood(mood)
+                display_manager.aura.set_mood(previous_mood)
 
                 audio = tts_handler.generate_audio(reminder_message)
                 with open("notification.mp3", "wb") as f:
@@ -1565,7 +1564,7 @@ async def play_queued_notifications():
         PENDING_NOTIFICATIONS.pop(notification_id, None)
 
     # Restore previous display state
-    await display_manager.self.aura.set_mood(mood) mood=previous_mood)
+    display_manager.aura.set_mood(previous_mood)
 
 async def check_upcoming_events():
     """Calendar notification system that can interrupt conversation flow"""
@@ -1761,7 +1760,10 @@ async def main():
         # 1. Display Manager
         print("\nInitializing Display Manager...")
         try:
-            display_manager = DisplayManager()
+            SVG_PATH = "/home/user/LAURA/svg files/silhouette.svg"
+            BOOT_IMG_PATH = "/home/user/LAURA/pygame/laura/speaking/interested/interested01.png"
+            display_manager = DisplayManager(SVG_PATH, BOOT_IMG_PATH, window_size=512)
+            
         except Exception as e:
             print(f"Critical Error: Display initialization failed: {e}")
             return
@@ -1922,7 +1924,6 @@ async def main():
         # 10. Task Creation and Execution
         print("\n=== Task Management ===")
         tasks = [
-            asyncio.create_task(display_manager.rotate_background()),
             asyncio.create_task(run_main_loop()),
             asyncio.create_task(check_upcoming_events())
         ]
@@ -2206,8 +2207,11 @@ async def run_main_loop():
                       
 if __name__ == "__main__":
     try:
-        display_manager = DisplayManager()
+        SVG_PATH = "/home/user/LAURA/svg files/silhouette.svg"
+        BOOT_IMG_PATH = "/home/user/LAURA/pygame/laura/speaking/interested/interested01.png"
+        display_manager = DisplayManager(SVG_PATH, BOOT_IMG_PATH, window_size=512)
         asyncio.run(main())
+        
     except KeyboardInterrupt:
         print("\nExiting Virtual Assistant - Cleaning up resources...")
 
