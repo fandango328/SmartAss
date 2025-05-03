@@ -126,6 +126,9 @@ from config import (
     CHAT_LOG_DIR,
     SYSTEM_STATE_COMMANDS,
     TTS_ENGINE,
+    SVG_PATH, 
+    BOOT_IMG_PATH, 
+    WINDOW_SIZE,
     ANTHROPIC_MODEL,
     CALENDAR_NOTIFICATION_SENTENCES
 )
@@ -1748,10 +1751,12 @@ async def main():
     - Play a startup sound and set display to listening mode
     - Await on all tasks to keep the event loop running
     """
+
     global remote_transcriber, display_manager, transcriber, token_manager
     global chat_log, document_manager, system_manager, keyboard_device
     global audio_manager, tts_handler, anthropic_client, notification_manager, email_manager
-
+    display_manager = DisplayManager(SVG_PATH, BOOT_IMG_PATH, window_size=512)
+    await display_manager.start_async_tasks()
     tasks = []
 
     try:
@@ -1762,7 +1767,8 @@ async def main():
         try:
             SVG_PATH = "/home/user/LAURA/svg files/silhouette.svg"
             BOOT_IMG_PATH = "/home/user/LAURA/pygame/laura/speaking/interested/interested01.png"
-            display_manager = DisplayManager(SVG_PATH, BOOT_IMG_PATH, window_size=512)
+            display_manager = DisplayManager(svg_path=SVG_PATH, boot_img_path=BOOT_IMG_PATH, window_size=WINDOW_SIZE)
+
             
         except Exception as e:
             print(f"Critical Error: Display initialization failed: {e}")
