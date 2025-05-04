@@ -1,12 +1,50 @@
 from pathlib import Path
 import json
+import os
 
 # =======================
 # FREQUENTLY UPDATED: STT, CHATLOG/SESSION, LLM, TTS
 # =======================
 
+# --- LLM MODEL SELECTION (Multi-provider: Anthropic/OpenAI/...) ---
+MODELS_FILE = os.path.join("llm_integrations", "models.json")
+try:
+    with open(MODELS_FILE, 'r') as f:
+        MODELS_DATA = json.load(f)
+    ACTIVE_PROVIDER = MODELS_DATA.get("active_provider", "anthropic")
+
+    # Anthropic
+    ANTHROPIC_MODELS = MODELS_DATA.get("anthropic_models", {})
+    ACTIVE_ANTHROPIC_MODEL_KEY = MODELS_DATA.get("active_anthropic_model", "claude-3-7-sonnet")
+    ACTIVE_ANTHROPIC_MODEL = ANTHROPIC_MODELS.get(ACTIVE_ANTHROPIC_MODEL_KEY, {})
+    ANTHROPIC_MODEL = ACTIVE_ANTHROPIC_MODEL.get("api_name", "claude-3-7-sonnet-20250219")
+    ANTHROPIC_MODEL_ALIAS = ACTIVE_ANTHROPIC_MODEL.get("api_alias", None)
+    ANTHROPIC_MODEL_MAX_TOKENS = ACTIVE_ANTHROPIC_MODEL.get("max_tokens", 200000)
+
+    # OpenAI
+    OPENAI_MODELS = MODELS_DATA.get("openai_models", {})
+    ACTIVE_OPENAI_MODEL_KEY = MODELS_DATA.get("active_openai_model", "gpt-4.1")
+    ACTIVE_OPENAI_MODEL = OPENAI_MODELS.get(ACTIVE_OPENAI_MODEL_KEY, {})
+    OPENAI_MODEL = ACTIVE_OPENAI_MODEL.get("api_name", "gpt-4.1")
+except Exception as e:
+    print(f"Error loading models configuration: {e}")
+    # Safe fallbacks for both providers
+    ACTIVE_PROVIDER = "anthropic"
+    ANTHROPIC_MODELS = {}
+    ANTHROPIC_MODEL = "claude-3-7-sonnet-20250219"
+    ANTHROPIC_MODEL_ALIAS = None
+    ANTHROPIC_MODEL_MAX_TOKENS = 200000
+    OPENAI_MODELS = {}
+    OPENAI_MODEL = "gpt-4.1"
+    
 # --- STT (Speech-To-Text) ---
-VOSK_MODEL_PATH = "models/vosk-model-small-en-us-0.15"  # UPDATE FREQUENTLY
+VOSK_MODEL_OPTIONS = {
+    "small": "models/vosk-model-small-en-us-0.15",
+    "medium": "models/vosk-model-en-us-0.22",
+    "large": "models/vosk-model-large-en-us-0.22"
+}
+VOSK_MODEL_SIZE = "small"  # <-- QUICK SELECT (change to "medium" or "large" as desired)
+VOSK_MODEL_PATH = VOSK_MODEL_OPTIONS[VOSK_MODEL_SIZE]
 WHISPER_MODEL_SIZE = "tiny"                             # UPDATE FREQUENTLY
 WHISPER_MODEL_PATH = f"models/ggml-{WHISPER_MODEL_SIZE}.bin"  # UPDATE FREQUENTLY
 TRANSCRIPTION_MODE = "local"  # Options: "local", "remote"
@@ -25,9 +63,6 @@ CHAT_LOG_RECOVERY_TOKENS = 4000  # UPDATE FREQUENTLY
 CHAT_LOG_DIR = "chat_logs"       # UPDATE FREQUENTLY
 CONVERSATION_END_SECONDS = 1200  # UPDATE FREQUENTLY
 
-# --- LLM (Language Model) ---
-ANTHROPIC_MODEL = "claude-3-7-sonnet-20250219"  # UPDATE FREQUENTLY
-
 # --- TTS (Text-To-Speech) ---
 TTS_ENGINE = "elevenlabs"  # "elevenlabs" or "local" -- UPDATE FREQUENTLY
 VOICE = "L.A.U.R.A."       # ElevenLabs specific -- UPDATE FREQUENTLY
@@ -45,7 +80,7 @@ LOCAL_TTS_PAYLOAD = {
 
 VOICE_TIMEOUT = 3
 VOICE_START_TIMEOUT = 6
-
+USE_GOOGLE = False
 # =======================
 # SYSTEM PROMPT & MOODS
 # =======================
@@ -278,4 +313,14 @@ SYSTEM_STATE_COMMANDS = {
     }
 }
 
+WAKE_WORDS = {
+    "GD_Laura.pmdl": 0.5,
+    "Wake_up_Laura.pmdl": 0.5,
+    "Laura.pmdl": 0.45,
+    "wakeupmax.pmdl": 0.45,
+    "maxwtf.pmdl": 0.5,
+    "alrightmax.pmdl": 0.5,
+    "maxpromptmore.pmdl": 0.5,
+    "heymax.pmdl": 0.45,
+}
 # Place any rarely updated globals or advanced features at the bottom.
