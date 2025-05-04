@@ -26,6 +26,11 @@ try:
     ACTIVE_OPENAI_MODEL_KEY = MODELS_DATA.get("active_openai_model", "gpt-4.1")
     ACTIVE_OPENAI_MODEL = OPENAI_MODELS.get(ACTIVE_OPENAI_MODEL_KEY, {})
     OPENAI_MODEL = ACTIVE_OPENAI_MODEL.get("api_name", "gpt-4.1")
+
+    # --- Common LLM Parameters (for main loop and adapters) ---
+    MAX_TOKENS = MODELS_DATA.get("max_tokens", 4096)
+    TEMPERATURE = MODELS_DATA.get("temperature", 0.7)
+
 except Exception as e:
     print(f"Error loading models configuration: {e}")
     # Safe fallbacks for both providers
@@ -36,8 +41,12 @@ except Exception as e:
     ANTHROPIC_MODEL_MAX_TOKENS = 200000
     OPENAI_MODELS = {}
     OPENAI_MODEL = "gpt-4.1"
-    
-# --- STT (Speech-To-Text) ---
+    MAX_TOKENS = 4096
+    TEMPERATURE = 0.7
+
+# =======================
+# STT (Speech-To-Text)
+# =======================
 VOSK_MODEL_OPTIONS = {
     "small": "models/vosk-model-small-en-us-0.15",
     "medium": "models/vosk-model-en-us-0.22",
@@ -57,13 +66,17 @@ TRANSCRIPTION_SERVER = {
     "port": 8765
 }
 
-# --- Chatlog / Session Management ---
+# =======================
+# Chatlog / Session Management
+# =======================
 CHAT_LOG_MAX_TOKENS = 80000      # UPDATE FREQUENTLY
 CHAT_LOG_RECOVERY_TOKENS = 4000  # UPDATE FREQUENTLY
 CHAT_LOG_DIR = "chat_logs"       # UPDATE FREQUENTLY
 CONVERSATION_END_SECONDS = 1200  # UPDATE FREQUENTLY
 
-# --- TTS (Text-To-Speech) ---
+# =======================
+# TTS (Text-To-Speech)
+# =======================
 TTS_ENGINE = "elevenlabs"  # "elevenlabs" or "local" -- UPDATE FREQUENTLY
 VOICE = "L.A.U.R.A."       # ElevenLabs specific -- UPDATE FREQUENTLY
 ELEVENLABS_MODEL = "eleven_flash_v2_5"  # UPDATE FREQUENTLY
@@ -81,11 +94,11 @@ LOCAL_TTS_PAYLOAD = {
 VOICE_TIMEOUT = 3
 VOICE_START_TIMEOUT = 6
 USE_GOOGLE = False
+
 # =======================
 # SYSTEM PROMPT & MOODS
 # =======================
 
-# Load persona and personalities (below the hot path)
 PERSONALITIES_FILE = "personalities.json"
 try:
     with open(PERSONALITIES_FILE, 'r') as f:
@@ -145,7 +158,6 @@ CORE_MOODS = [
 ]
 
 MOOD_MAPPINGS = {
-    # ... (same as before) ...
     "curious": "curious", "interested": "curious", "intrigued": "curious", "engaged": "curious", "attentive": "curious",
     "thoughtful": "thoughtful", "reflective": "thoughtful", "focused": "thoughtful", "pensive": "thoughtful",
     "deeply reflective": "thoughtful", "informative": "thoughtful", "professional": "thoughtful", "serious": "thoughtful",
