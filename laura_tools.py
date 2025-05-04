@@ -1,6 +1,6 @@
 """
 LAURA Tools Configuration
-Last Updated: 2025-04-23
+Last Updated: 2025-05-04
 
 Purpose:
     Defines available tools and their schemas for LAURA voice assistant.
@@ -421,9 +421,8 @@ class ToolRegistry:
         return [tool for tool in self.tool_definitions 
                 if tool['name'] in self.tool_handlers]
 
-# Global tool registry instance
+# Create global registry instance
 tool_registry = ToolRegistry()
-
 def get_tool_by_name(tool_name):
     """Get tool definition by name."""
     return next((tool for tool in AVAILABLE_TOOLS if tool['name'] == tool_name), None)
@@ -431,4 +430,15 @@ def get_tool_by_name(tool_name):
 def get_tools_by_category(category):
     """Get all tools in a category."""
     return [tool for tool in AVAILABLE_TOOLS if tool['name'] in globals().get(f"{category}_TOOLS", [])]
+
+def get_openai_functions():
+    """Format AVAILABLE_TOOLS for OpenAI's function-calling API."""
+    return [
+        {
+            "name": tool["name"],
+            "description": tool["description"],
+            "parameters": tool["input_schema"],
+        }
+        for tool in AVAILABLE_TOOLS
+    ]
 
