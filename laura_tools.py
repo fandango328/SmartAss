@@ -5,13 +5,17 @@ Last Updated: 2025-05-04
 Purpose:
     Defines available tools and their schemas for LAURA voice assistant.
     Structured for compatibility with various LLM APIs.
+
+This file manages the LLM function-calling tools ONLY (for OpenAI, Anthropic, etc.)
 """
+
+from typing import Dict, Any, Callable, Optional
 
 # Tool definitions
 AVAILABLE_TOOLS = [
     {
         "name": "draft_email",
-        "description": "Draft a new email with a recipient and content. This tool creates a draft email in the user's Gmail account. It should be used when the user wants to compose or prepare an email message. The tool will create the draft but will not send it automatically.",
+        "description": "Draft a new email with a recipient and content. This tool creates a draft email in the user's Gmail account. It should be used when the user wants to compose or prepare an email.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -98,7 +102,7 @@ AVAILABLE_TOOLS = [
     },
     {
         "name": "get_location",
-        "description": "Get current location based on WiFi networks. This tool scans nearby WiFi networks and uses them to determine the current geographic location. It can return the location in different formats including coordinates or street address.",
+        "description": "Get current location based on WiFi networks. This tool scans nearby WiFi networks and uses them to determine the current geographic location. It can return the location in different formats.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -113,7 +117,7 @@ AVAILABLE_TOOLS = [
     },
     {
         "name": "calibrate_voice_detection",
-        "description": "Calibrate the voice detection system to improve speech recognition. This tool runs a calibration process that measures background noise and voice levels to optimize how the system detects when you're speaking.",
+        "description": "Calibrate the voice detection system to improve speech recognition. This tool runs a calibration process that measures background noise and voice levels to optimize how the system detects speech.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -391,38 +395,36 @@ UTILITY_TOOLS = ['get_current_time', 'get_location', 'calibrate_voice_detection'
 CONTACT_TOOLS = ['manage_contacts']
 
 class ToolRegistry:
-    """Central registry for all tool handlers and definitions"""
-    
-    def __init__(self):
-        self.tool_handlers = {}
-        self.tool_definitions = AVAILABLE_TOOLS
-        
-    def register_handler(self, name: str, handler):
-        """Register a single tool handler"""
-        if name not in [tool['name'] for tool in self.tool_definitions]:
-            raise ValueError(f"Tool {name} not defined in AVAILABLE_TOOLS")
-        self.tool_handlers[name] = handler
-        
-    def register_handlers(self, handlers: dict):
-        """Register multiple tool handlers at once"""
+    """Manages tool and manager registration with proper dependency tracking."""
+
+    def __init__(self) -> None:
+        self._handlers: Dict[str, Callable] = {}
+        self._managers: Dict[str, Any] = {}
+        self._initialized: bool = False
+
+    def register_manager(self, name: str, manager: Any) -> None:
+        if manager is None:
+            raise ValueError(f"Cannot register None as manager for {name}")
+        self._managers[name] = manager
+
+    def get_manager(self, name: str) -> Optional[Any]:
+        return self._managers.get(name)
+
+    def register_handlers(self, handlers: Dict[str, Callable]) -> None:
         for name, handler in handlers.items():
-            self.register_handler(name, handler)
-            
-    def get_handler(self, name: str):
-        """Get a tool handler by name"""
-        return self.tool_handlers.get(name)
-        
-    def get_definition(self, name: str):
-        """Get a tool definition by name"""
-        return next((tool for tool in self.tool_definitions if tool['name'] == name), None)
-        
-    def get_available_tools(self):
-        """Get list of available tool definitions"""
-        return [tool for tool in self.tool_definitions 
-                if tool['name'] in self.tool_handlers]
+            if handler is None:
+                raise ValueError(f"Cannot register None as handler for {name}")
+            self._handlers[name] = handler
+
+    def get_handler(self, name: str) -> Optional[Callable]:
+        return self._handlers.get(name)
+
+    def initialize(self) -> None:
+        self._initialized = True
 
 # Create global registry instance
 tool_registry = ToolRegistry()
+
 def get_tool_by_name(tool_name):
     """Get tool definition by name."""
     return next((tool for tool in AVAILABLE_TOOLS if tool['name'] == tool_name), None)
@@ -441,4 +443,3 @@ def get_openai_functions():
         }
         for tool in AVAILABLE_TOOLS
     ]
-
