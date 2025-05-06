@@ -15,6 +15,7 @@ from response_handler import ResponseHandler
 # Import the main loop handler
 from main_loop import process_input
 from tts_handler import TTSHandler
+
 # Constants and configuration
 LOGS_DIR = Path("logs")
 LOGS_DIR.mkdir(exist_ok=True)
@@ -216,6 +217,12 @@ async def push_notification(
         "timestamp": datetime.utcnow().isoformat()
     }
 
+async def main():
+    print("[MCP] Starting SmartAss MCP Server.")
+    await mcp.start()  # Start the FastMCP server and keep it running
+
 if __name__ == "__main__":
-    print("Starting SmartAss MCP Server...")
-    mcp.run()
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\n[MCP] Server stopped by user.")
