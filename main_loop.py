@@ -2,11 +2,11 @@ import asyncio
 import config
 import json
 from typing import Dict, Any, Optional
-from laura_tools import tool_registry, get_openai_functions
+from laura_tools import tool_registry, get_llm_tool_definitions
 from function_definitions import sanitize_messages_for_api
 
-from anthropic_adapter import AnthropicLLMAdapter
-from openai_adapter import OpenAILLMAdapter
+from llm_integrations.anthropic_adapter import AnthropicLLMAdapter
+from llm_integrations.openai_adapter import OpenAILLMAdapter
 
 # Initialize the appropriate LLM adapter based on configuration
 if config.ACTIVE_PROVIDER == "anthropic":
@@ -14,7 +14,7 @@ if config.ACTIVE_PROVIDER == "anthropic":
     tool_definitions = tool_registry.get_available_tools()
 elif config.ACTIVE_PROVIDER == "openai":
     AdapterClass = OpenAILLMAdapter
-    tool_definitions = get_openai_functions()
+    tool_definitions = tool_registry.get_llm_tool_definitions()
 else:
     raise ValueError(f"Unsupported provider: {config.ACTIVE_PROVIDER}")
 
