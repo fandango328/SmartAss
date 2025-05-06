@@ -12,6 +12,9 @@ from mcp.server.fastmcp import FastMCP, Context
 from input_orchestrator import InputOrchestrator
 from response_handler import ResponseHandler
 
+# Import the main loop handler
+from main_loop import process_input
+from tts_handler import TTSHandler
 # Constants and configuration
 LOGS_DIR = Path("logs")
 LOGS_DIR.mkdir(exist_ok=True)
@@ -19,12 +22,15 @@ LOGS_DIR.mkdir(exist_ok=True)
 # Session registry
 SESSION_REGISTRY: Dict[str, Dict[str, Any]] = {}
 
-# Initialize handlers (you'll connect these to your actual pipeline)
-response_handler = ResponseHandler()
-orchestrator = InputOrchestrator(main_loop_handler=None)  # Connect your main loop here
+# Initialize response handler with TTS capabilities if needed
+tts_handler = None  # Replace with TTSHandler() if you want TTS functionality
+response_handler = ResponseHandler(tts_handler=tts_handler)
+
+# Initialize the orchestrator with the main loop handler
+orchestrator = InputOrchestrator(main_loop_handler=process_input)
 
 # Create the MCP server
-mcp = FastMCP("LAURA MCP Server")
+mcp = FastMCP("SmartAss MCP Server")
 
 def generate_session_id(device_id: str) -> str:
     """Generate a unique session ID using device ID and timestamp"""
@@ -84,6 +90,7 @@ async def register_device(
     }
 
 @mcp.tool()
+@mcp.tool()
 async def process_input(
     session_id: str,
     input_type: str,
@@ -113,7 +120,7 @@ async def process_input(
 
     event_data = {
         "session_id": session_id,
-        "input_type": input_type,
+        "type": input_type,
         "payload": payload,
         "output_mode": output_mode,
         "broadcast": broadcast,
@@ -121,22 +128,28 @@ async def process_input(
     }
     await log_event(session_id, "input", event_data)
 
-    # Process the input through your orchestration pipeline
-    # This is where you'd connect to your actual processing logic
     try:
-        # You'll replace this with your actual orchestrator call
-        # processed_result = await orchestrator.queue_input(event_data)
-        processed_result = {
-            "text": "Processed: " + str(payload.get("text", "")),
-            "audio": None,
-            "mood": "casual",
-            "session_id": session_id
+        # Add input to orchestrator queue
+        await orchestrator.add_input(event_data)
+        
+        # Create an input event for processing
+        input_event = {
+            "session_id": session_id,
+            "type": input_type,
+            "payload": payload,
         }
-
+        
+        # Process the input using the main loop handler directly for immediate response
+        processed_result = await orchestrator.main_loop_handler(input_event)
+        
+        if "error" in processed_result:
+            await log_event(session_id, "error", {"error": processed_result["error"]})
+            raise ValueError(processed_result["error"])
+            
         # Format response based on requested output modes
         response_payload = await response_handler.handle_response(
-            assistant_content=processed_result["text"],
-            chat_log=None,
+            assistant_content=processed_result.get("text", ""),
+            chat_log=None,  # Could enhance this to pass proper chat logs
             session_capabilities={"output": output_mode},
             session_id=session_id
         )
@@ -145,8 +158,14 @@ async def process_input(
 
         # Handle broadcast if needed
         if broadcast and ctx:
-            # You can implement broadcast logic using ctx.notify
-            pass
+            # Find other sessions and send notification via ctx.notify
+            for other_id in SESSION_REGISTRY:
+                if other_id != session_id:
+                    await ctx.notify("broadcast", {
+                        "from_session": session_id,
+                        "message": processed_result.get("text", ""),
+                        "timestamp": datetime.utcnow().isoformat()
+                    })
 
         return response_payload
         
@@ -198,5 +217,5 @@ async def push_notification(
     }
 
 if __name__ == "__main__":
-    print("Starting LAURA MCP Server...")
+    print("Starting SmartAss MCP Server...")
     mcp.run()
