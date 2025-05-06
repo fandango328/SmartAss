@@ -19,8 +19,6 @@ from vosk_transcriber import VoskTranscriber
 from display_manager import DisplayManager
 
 # MCP protocol client imports (replace with your actual MCP client library)
-# from mcp.client import MCPClient  # <-- Replace with your actual client
-# For demo, use websockets for a simple example
 import websockets
 
 # Wake word detection
@@ -40,10 +38,19 @@ PERSONA = config.ACTIVE_PERSONA
 VOICE = config.VOICE
 TTS_ENGINE = config.TTS_ENGINE
 
+DEVICE_ID = getattr(config, "DEVICE_ID", "pi500-client")
+DEVICE_CAPABILITIES = {
+    "input": ["text", "audio"],
+    "output": ["text", "audio"],
+    "persona": PERSONA,
+    "voice": VOICE,
+    "tts_engine": TTS_ENGINE,
+}
+
 # ========== MCP SERVER CONFIG ==========
 MCP_SERVER_URI = "ws://localhost:8765"  # Update to your MCP server address/port
 
-# ========== CLIENT LOGIC ==========
+OUTPUT_MODE = getattr(config, "OUTPUT_MODE", ["text", "audio"])
 
 def find_pi_keyboard():
     for path in list_devices():
@@ -54,7 +61,6 @@ def find_pi_keyboard():
 
 class WakeWordDetector:
     def __init__(self):
-        # Build model paths and sensitivities
         self.model_paths = [str(WAKEWORD_DIR / name) for name in WAKE_WORDS]
         self.sensitivities = ",".join(str(WAKE_WORDS[name]) for name in WAKE_WORDS)
         self.model_names = list(WAKE_WORDS.keys())
@@ -90,26 +96,21 @@ class WakeWordDetector:
 
 class PiMCPClient:
     def __init__(self):
-        # Audio and display managers
         self.audio_manager = AudioManager()
         self.display_manager = DisplayManager(
             svg_path=config.SVG_PATH,
             boot_img_path=config.BOOT_IMG_PATH,
             window_size=config.WINDOW_SIZE
         )
-        # Vosk Transcriber
         self.stt = VoskTranscriber(config.VOSK_MODEL_PATH)
-        # Wakeword and keyboard
         self.wakeword = WakeWordDetector()
         self.keyboard = find_pi_keyboard()
-        # Session logging
         self.chat_log_dir = CHAT_LOG_DIR
         os.makedirs(self.chat_log_dir, exist_ok=True)
-        # Notification queue
         self.notification_queue = asyncio.Queue()
-        # Persona and voice are controlled by server instructions only
         self.persona = PERSONA
         self.voice = VOICE
+        self.session_id = None
 
     async def save_log(self, role, content):
         today = datetime.now().strftime("%Y-%m-%d")
@@ -146,12 +147,11 @@ class PiMCPClient:
         return self.wakeword.detect()
 
     async def record_and_transcribe(self) -> Optional[str]:
-        # Use audio_manager and vosk for robust Pi-optimized recording
         self.stt.reset()
         stream, _ = await self.audio_manager.start_listening()
         voice_detected = False
         start_time = time.time()
-        max_length = 15  # seconds
+        max_length = 15
         silence_frames = 0
         min_voice_time = 1.5
         energies = []
@@ -180,7 +180,6 @@ class PiMCPClient:
         return self.stt.get_final_text().strip()
 
     async def play_audio(self, audio_bytes):
-        # Save and play audio using the audio manager (mp3/wav)
         fname = "assistant_response.mp3"
         with open(fname, "wb") as f:
             f.write(audio_bytes)
@@ -188,28 +187,56 @@ class PiMCPClient:
         await self.audio_manager.wait_for_audio_completion()
 
     async def handle_notification(self, msg):
-        # Plays notification and updates display
         await self.display_manager.update_display("speaking", mood="cheerful")
         await self.audio_manager.queue_audio(audio_file=None, generated_text=msg)
         await self.audio_manager.wait_for_audio_completion()
         await self.display_manager.update_display("idle")
 
+    async def register_device(self, ws):
+        register_msg = {
+            "tool": "register_device",
+            "args": {
+                "device_id": DEVICE_ID,
+                "capabilities": DEVICE_CAPABILITIES
+            }
+        }
+        await ws.send(json.dumps(register_msg))
+        resp_raw = await ws.recv()
+        try:
+            resp = json.loads(resp_raw)
+            self.session_id = resp["session_id"]
+            print(f"Registered, session_id: {self.session_id}")
+        except Exception:
+            print("Failed to register device, response:", resp_raw)
+            raise RuntimeError("Device registration failed")
+
+    async def send_process_input(self, ws, transcript):
+        request = {
+            "tool": "process_input",
+            "args": {
+                "session_id": self.session_id,
+                "input_type": "text",
+                "payload": {"text": transcript},
+                "output_mode": OUTPUT_MODE,
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+        }
+        await ws.send(json.dumps(request))
+
     async def run(self):
-        # Connect to MCP server
         print(f"Connecting to MCP server at {MCP_SERVER_URI}...")
         async with websockets.connect(MCP_SERVER_URI) as ws:
             print("Connected.")
+            await self.register_device(ws)
             await self.display_manager.update_display("idle")
             while True:
                 await self.display_manager.update_display("idle")
-                # Idle: check for notification
                 try:
                     notif = self.notification_queue.get_nowait()
                     await self.handle_notification(notif)
                     continue
                 except asyncio.QueueEmpty:
                     pass
-                # Listen for wake
                 wake_model = None
                 if self.listen_keyboard():
                     print("Keyboard wake")
@@ -222,32 +249,20 @@ class PiMCPClient:
                 if not wake_model:
                     await asyncio.sleep(0.05)
                     continue
-                # Play wake sound if available
                 await self.display_manager.update_display("listening")
-                # Record and transcribe
                 transcript = await self.record_and_transcribe()
                 if not transcript:
                     await self.display_manager.update_display("idle")
                     continue
                 await self.save_log("user", transcript)
-                # Send to MCP server
-                request = {
-                    "timestamp": datetime.utcnow().isoformat(),
-                    "persona": self.persona,
-                    "voice": self.voice,
-                    "input_type": "text",
-                    "payload": {"text": transcript},
-                }
-                await ws.send(json.dumps(request))
+                await self.send_process_input(ws, transcript)
                 await self.display_manager.update_display("thinking")
-                # Wait for server response
                 response_raw = await ws.recv()
                 try:
                     response = json.loads(response_raw)
                 except Exception:
                     print("Invalid server response")
                     continue
-                # Handle persona/voice/mood update if present
                 if response.get("persona"):
                     self.persona = response["persona"]
                 if response.get("voice"):
@@ -257,7 +272,6 @@ class PiMCPClient:
                 if "audio" in response and response["audio"]:
                     await self.play_audio(bytes(response["audio"]))
                 elif "text" in response and response["text"]:
-                    # Optionally run TTS locally if no audio provided
                     await self.audio_manager.queue_audio(audio_file=None, generated_text=response["text"])
                     await self.audio_manager.wait_for_audio_completion()
                 await self.display_manager.update_display("idle")
