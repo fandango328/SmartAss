@@ -1,0 +1,605 @@
+Understand how MCP connects clients, servers, and LLMs
+
+The Model Context Protocol (MCP) is built on a flexible, extensible architecture that enables seamless communication between LLM applications and integrations. This document covers the core architectural components and concepts.
+
+​
+Overview
+MCP follows a client-server architecture where:
+
+Hosts are LLM applications (like Claude Desktop or IDEs) that initiate connections
+Clients maintain 1:1 connections with servers, inside the host application
+Servers provide context, tools, and prompts to clients
+Server Process
+
+Server Process
+
+Host
+
+Transport Layer
+
+Transport Layer
+
+MCP Client
+
+MCP Client
+
+MCP Server
+
+MCP Server
+
+​
+Core components
+​
+Protocol layer
+The protocol layer handles message framing, request/response linking, and high-level communication patterns.
+
+TypeScript
+Python
+
+Copy
+class Session(BaseSession[RequestT, NotificationT, ResultT]):
+    async def send_request(
+        self,
+        request: RequestT,
+        result_type: type[Result]
+    ) -> Result:
+        """Send request and wait for response. Raises McpError if response contains error."""
+        # Request handling implementation
+
+    async def send_notification(
+        self,
+        notification: NotificationT
+    ) -> None:
+        """Send one-way notification that doesn't expect response."""
+        # Notification handling implementation
+
+    async def _received_request(
+        self,
+        responder: RequestResponder[ReceiveRequestT, ResultT]
+    ) -> None:
+        """Handle incoming request from other side."""
+        # Request handling implementation
+
+    async def _received_notification(
+        self,
+        notification: ReceiveNotificationT
+    ) -> None:
+        """Handle incoming notification from other side."""
+        # Notification handling implementation
+Key classes include:
+
+Protocol
+Client
+Server
+​
+Transport layer
+The transport layer handles the actual communication between clients and servers. MCP supports multiple transport mechanisms:
+
+Stdio transport
+
+Uses standard input/output for communication
+Ideal for local processes
+HTTP with SSE transport
+
+Uses Server-Sent Events for server-to-client messages
+HTTP POST for client-to-server messages
+All transports use JSON-RPC 2.0 to exchange messages. See the specification for detailed information about the Model Context Protocol message format.
+
+​
+Message types
+MCP has these main types of messages:
+
+Requests expect a response from the other side:
+
+
+Copy
+interface Request {
+  method: string;
+  params?: { ... };
+}
+Results are successful responses to requests:
+
+
+Copy
+interface Result {
+  [key: string]: unknown;
+}
+Errors indicate that a request failed:
+
+
+Copy
+interface Error {
+  code: number;
+  message: string;
+  data?: unknown;
+}
+Notifications are one-way messages that don’t expect a response:
+
+
+Copy
+interface Notification {
+  method: string;
+  params?: { ... };
+}
+​
+Connection lifecycle
+​
+1. Initialization
+Server
+Client
+Server
+Client
+Connection ready for use
+initialize request
+initialize response
+initialized notification
+Client sends initialize request with protocol version and capabilities
+Server responds with its protocol version and capabilities
+Client sends initialized notification as acknowledgment
+Normal message exchange begins
+​
+2. Message exchange
+After initialization, the following patterns are supported:
+
+Request-Response: Client or server sends requests, the other responds
+Notifications: Either party sends one-way messages
+​
+3. Termination
+Either party can terminate the connection:
+
+Clean shutdown via close()
+Transport disconnection
+Error conditions
+​
+Error handling
+MCP defines these standard error codes:
+
+
+Copy
+enum ErrorCode {
+  // Standard JSON-RPC error codes
+  ParseError = -32700,
+  InvalidRequest = -32600,
+  MethodNotFound = -32601,
+  InvalidParams = -32602,
+  InternalError = -32603
+}
+SDKs and applications can define their own error codes above -32000.
+
+Errors are propagated through:
+
+Error responses to requests
+Error events on transports
+Protocol-level error handlers
+​
+Implementation example
+Here’s a basic example of implementing an MCP server:
+
+TypeScript
+Python
+
+Copy
+import asyncio
+import mcp.types as types
+from mcp.server import Server
+from mcp.server.stdio import stdio_server
+
+app = Server("example-server")
+
+@app.list_resources()
+async def list_resources() -> list[types.Resource]:
+    return [
+        types.Resource(
+            uri="example://resource",
+            name="Example Resource"
+        )
+    ]
+
+async def main():
+    async with stdio_server() as streams:
+        await app.run(
+            streams[0],
+            streams[1],
+            app.create_initialization_options()
+        )
+
+if __name__ == "__main__":
+    asyncio.run(main())
+​
+Best practices
+​
+Transport selection
+Local communication
+
+Use stdio transport for local processes
+Efficient for same-machine communication
+Simple process management
+Remote communication
+
+Use SSE for scenarios requiring HTTP compatibility
+Consider security implications including authentication and authorization
+​
+Message handling
+Request processing
+
+Validate inputs thoroughly
+Use type-safe schemas
+Handle errors gracefully
+Implement timeouts
+Progress reporting
+
+Use progress tokens for long operations
+Report progress incrementally
+Include total progress when known
+Error management
+
+Use appropriate error codes
+Include helpful error messages
+Clean up resources on errors
+​
+Security considerations
+Transport security
+
+Use TLS for remote connections
+Validate connection origins
+Implement authentication when needed
+Message validation
+
+Validate all incoming messages
+Sanitize inputs
+Check message size limits
+Verify JSON-RPC format
+Resource protection
+
+Implement access controls
+Validate resource paths
+Monitor resource usage
+Rate limit requests
+Error handling
+
+Don’t leak sensitive information
+Log security-relevant errors
+Implement proper cleanup
+Handle DoS scenarios
+​
+Debugging and monitoring
+Logging
+
+Log protocol events
+Track message flow
+Monitor performance
+Record errors
+Diagnostics
+
+Implement health checks
+Monitor connection state
+Track resource usage
+Profile performance
+Testing
+
+Test different transports
+Verify error handling
+Check edge cases
+
+
+Overview
+
+Copy page
+
+Introduction to the Model Context Protocol (MCP) Java SDK
+
+Java SDK for the Model Context Protocol enables standardized integration between AI models and tools.
+
+​
+Breaking Changes in 0.8.x ⚠️
+Note: Version 0.8.x introduces several breaking changes including a new session-based architecture. If you’re upgrading from 0.7.0, please refer to the Migration Guide for detailed instructions.
+
+​
+Features
+MCP Client and MCP Server implementations supporting:
+Protocol version compatibility negotiation
+Tool discovery, execution, list change notifications
+Resource management with URI templates
+Roots list management and notifications
+Prompt handling and management
+Sampling support for AI model interactions
+Multiple transport implementations:
+Default transports (included in core mcp module, no external web frameworks required):
+Stdio-based transport for process-based communication
+Java HttpClient-based SSE client transport for HTTP SSE Client-side streaming
+Servlet-based SSE server transport for HTTP SSE Server streaming
+Optional Spring-based transports (convenience if using Spring Framework):
+WebFlux SSE client and server transports for reactive HTTP streaming
+WebMVC SSE transport for servlet-based HTTP streaming
+Supports Synchronous and Asynchronous programming paradigms
+The core io.modelcontextprotocol.sdk:mcp module provides default STDIO and SSE client and server transport implementations without requiring external web frameworks.
+
+Spring-specific transports are available as optional dependencies for convenience when using the Spring Framework.
+
+​
+Architecture
+The SDK follows a layered architecture with clear separation of concerns:
+
+MCP Stack Architecture
+
+Client/Server Layer (McpClient/McpServer): Both use McpSession for sync/async operations, with McpClient handling client-side protocol operations and McpServer managing server-side protocol operations.
+Session Layer (McpSession): Manages communication patterns and state using DefaultMcpSession implementation.
+Transport Layer (McpTransport): Handles JSON-RPC message serialization/deserialization via:
+StdioTransport (stdin/stdout) in the core module
+HTTP SSE transports in dedicated transport modules (Java HttpClient, Spring WebFlux, Spring WebMVC)
+The MCP Client is a key component in the Model Context Protocol (MCP) architecture, responsible for establishing and managing connections with MCP servers. It implements the client-side of the protocol.
+
+Java MCP Client Architecture
+
+The MCP Server is a foundational component in the Model Context Protocol (MCP) architecture that provides tools, resources, and capabilities to clients. It implements the server-side of the protocol.
+
+Java MCP Server Architecture
+
+Key Interactions:
+
+Client/Server Initialization: Transport setup, protocol compatibility check, capability negotiation, and implementation details exchange.
+Message Flow: JSON-RPC message handling with validation, type-safe response processing, and error handling.
+Resource Management: Resource discovery, URI template-based access, subscription system, and content retrieval.
+​
+Dependencies
+Add the following Maven dependency to your project:
+
+Maven
+Gradle
+The core MCP functionality:
+
+
+Copy
+<dependency>
+    <groupId>io.modelcontextprotocol.sdk</groupId>
+    <artifactId>mcp</artifactId>
+</dependency>
+The core mcp module already includes default STDIO and SSE transport implementations and doesn’t require external web frameworks.
+
+If you’re using the Spring Framework and want to use Spring-specific transport implementations, add one of the following optional dependencies:
+
+
+Copy
+<!-- Optional: Spring WebFlux-based SSE client and server transport -->
+<dependency>
+    <groupId>io.modelcontextprotocol.sdk</groupId>
+    <artifactId>mcp-spring-webflux</artifactId>
+</dependency>
+
+<!-- Optional: Spring WebMVC-based SSE server transport -->
+<dependency>
+    <groupId>io.modelcontextprotocol.sdk</groupId>
+    <artifactId>mcp-spring-webmvc</artifactId>
+</dependency>
+​
+Bill of Materials (BOM)
+The Bill of Materials (BOM) declares the recommended versions of all the dependencies used by a given release. Using the BOM from your application’s build script avoids the need for you to specify and maintain the dependency versions yourself. Instead, the version of the BOM you’re using determines the utilized dependency versions. It also ensures that you’re using supported and tested versions of the dependencies by default, unless you choose to override them.
+
+Add the BOM to your project:
+
+Maven
+Gradle
+
+Copy
+<dependencyManagement>
+    <dependencies>
+        <dependency>
+            <groupId>io.modelcontextprotocol.sdk</groupId>
+            <artifactId>mcp-bom</artifactId>
+            <version>0.9.0</version>
+            <type>pom</type>
+            <scope>import</scope>
+        </dependency>
+    </dependencies>
+</dependencyManagement>
+Replace the version number with the version of the BOM you want to use.
+
+​
+Available Dependencies
+The following dependencies are available and managed by the BOM:
+
+Core Dependencies
+io.modelcontextprotocol.sdk:mcp - Core MCP library providing the base functionality and APIs for Model Context Protocol implementation, including default STDIO and SSE client and server transport implementations. No external web frameworks required.
+Optional Transport Dependencies (convenience if using Spring Framework)
+io.modelcontextprotocol.sdk:mcp-spring-webflux - WebFlux-based Server-Sent Events (SSE) transport implementation for reactive applications.
+io.modelcontextprotocol.sdk:mcp-spring-webmvc - WebMVC-based Server-Sent Events (SSE) transport implementation for servlet-based applications.
+Testing Dependencies
+io.modelcontextprotocol.sdk:mcp-test - Testing utilities and support for MCP-based applications.
+
+
+
+quick guide example
+
+# server.py
+from mcp.server.fastmcp import FastMCP
+
+# Create an MCP server
+mcp = FastMCP("Demo")
+
+
+# Add an addition tool
+@mcp.tool()
+def add(a: int, b: int) -> int:
+    """Add two numbers"""
+    return a + b
+
+
+# Add a dynamic greeting resource
+@mcp.resource("greeting://{name}")
+def get_greeting(name: str) -> str:
+    """Get a personalized greeting"""
+    return f"Hello, {name}!"
+
+Core Concepts
+Server
+The FastMCP server is your core interface to the MCP protocol. It handles connection management, protocol compliance, and message routing:
+
+# Add lifespan support for startup/shutdown with strong typing
+from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
+
+from fake_database import Database  # Replace with your actual DB type
+
+from mcp.server.fastmcp import Context, FastMCP
+
+# Create a named server
+mcp = FastMCP("My App")
+
+# Specify dependencies for deployment and development
+mcp = FastMCP("My App", dependencies=["pandas", "numpy"])
+
+
+@dataclass
+class AppContext:
+    db: Database
+
+
+@asynccontextmanager
+async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
+    """Manage application lifecycle with type-safe context"""
+    # Initialize on startup
+    db = await Database.connect()
+    try:
+        yield AppContext(db=db)
+    finally:
+        # Cleanup on shutdown
+        await db.disconnect()
+
+
+# Pass lifespan to server
+mcp = FastMCP("My App", lifespan=app_lifespan)
+
+
+# Access type-safe lifespan context in tools
+@mcp.tool()
+def query_db(ctx: Context) -> str:
+    """Tool that uses initialized resources"""
+    db = ctx.request_context.lifespan_context.db
+    return db.query()
+Resources
+Resources are how you expose data to LLMs. They're similar to GET endpoints in a REST API - they provide data but shouldn't perform significant computation or have side effects:
+
+from mcp.server.fastmcp import FastMCP
+
+mcp = FastMCP("My App")
+
+
+@mcp.resource("config://app")
+def get_config() -> str:
+    """Static configuration data"""
+    return "App configuration here"
+
+
+@mcp.resource("users://{user_id}/profile")
+def get_user_profile(user_id: str) -> str:
+    """Dynamic user data"""
+    return f"Profile data for user {user_id}"
+Tools
+Tools let LLMs take actions through your server. Unlike resources, tools are expected to perform computation and have side effects:
+
+import httpx
+from mcp.server.fastmcp import FastMCP
+
+mcp = FastMCP("My App")
+
+
+@mcp.tool()
+def calculate_bmi(weight_kg: float, height_m: float) -> float:
+    """Calculate BMI given weight in kg and height in meters"""
+    return weight_kg / (height_m**2)
+
+
+@mcp.tool()
+async def fetch_weather(city: str) -> str:
+    """Fetch current weather for a city"""
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"https://api.weather.com/{city}")
+        return response.text
+Prompts
+Prompts are reusable templates that help LLMs interact with your server effectively:
+
+from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.prompts import base
+
+mcp = FastMCP("My App")
+
+
+@mcp.prompt()
+def review_code(code: str) -> str:
+    return f"Please review this code:\n\n{code}"
+
+
+@mcp.prompt()
+def debug_error(error: str) -> list[base.Message]:
+    return [
+        base.UserMessage("I'm seeing this error:"),
+        base.UserMessage(error),
+        base.AssistantMessage("I'll help debug that. What have you tried so far?"),
+    ]
+Images
+FastMCP provides an Image class that automatically handles image data:
+
+from mcp.server.fastmcp import FastMCP, Image
+from PIL import Image as PILImage
+
+mcp = FastMCP("My App")
+
+
+@mcp.tool()
+def create_thumbnail(image_path: str) -> Image:
+    """Create a thumbnail from an image"""
+    img = PILImage.open(image_path)
+    img.thumbnail((100, 100))
+    return Image(data=img.tobytes(), format="png")
+Context
+The Context object gives your tools and resources access to MCP capabilities:
+
+from mcp.server.fastmcp import FastMCP, Context
+
+mcp = FastMCP("My App")
+
+
+@mcp.tool()
+async def long_task(files: list[str], ctx: Context) -> str:
+    """Process multiple files with progress tracking"""
+    for i, file in enumerate(files):
+        ctx.info(f"Processing {file}")
+        await ctx.report_progress(i, len(files))
+        data, mime_type = await ctx.read_resource(f"file://{file}")
+    return "Processing complete"
+Authentication
+Authentication can be used by servers that want to expose tools accessing protected resources.
+
+mcp.server.auth implements an OAuth 2.0 server interface, which servers can use by providing an implementation of the OAuthServerProvider protocol.
+
+mcp = FastMCP("My App",
+        auth_provider=MyOAuthServerProvider(),
+        auth=AuthSettings(
+            issuer_url="https://myapp.com",
+            revocation_options=RevocationOptions(
+                enabled=True,
+            ),
+            client_registration_options=ClientRegistrationOptions(
+                enabled=True,
+                valid_scopes=["myscope", "myotherscope"],
+                default_scopes=["myscope"],
+            ),
+            required_scopes=["myscope"],
+        ),
+)
+See OAuthServerProvider for more details.
+
+Running Your Server
+
+
+Direct Execution
+For advanced scenarios like custom deployments:
+
+from mcp.server.fastmcp import FastMCP
+
+mcp = FastMCP("My App")
+
+if __name__ == "__main__":
+    mcp.run()
+Load test servers
