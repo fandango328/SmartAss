@@ -31,7 +31,7 @@ response_handler = ResponseHandler(tts_handler=tts_handler)
 orchestrator = InputOrchestrator(main_loop_handler=process_input)
 
 # Create the MCP server
-mcp = FastMCP("SmartAss MCP Server")
+mcp = FastMCP("LAURA MCP Server")
 
 def generate_session_id(device_id: str) -> str:
     """Generate a unique session ID using device ID and timestamp"""
@@ -90,9 +90,8 @@ async def register_device(
         "capabilities": capabilities,
     }
 
-@mcp.tool()
-@mcp.tool()
-async def process_input(
+@mcp.tool("run_LAURA")
+async def run_LAURA(
     session_id: str,
     input_type: str,
     payload: Dict[str, Any],
@@ -102,8 +101,8 @@ async def process_input(
     ctx: Context = None
 ) -> Dict[str, Any]:
     """
-    Process input from a client device.
-    
+    Engage the agent with an input event.
+
     Args:
         session_id: Active session ID from register_device
         input_type: Type of input ("text", "audio", "image", "document")
@@ -112,7 +111,7 @@ async def process_input(
         broadcast: Whether to broadcast to multiple sessions
         timestamp: Client-side timestamp (optional)
         ctx: MCP context object
-        
+
     Returns:
         Response with requested output formats
     """
@@ -130,27 +129,27 @@ async def process_input(
     await log_event(session_id, "input", event_data)
 
     try:
-        # Add input to orchestrator queue
+        # Add input to orchestrator queue if appropriate (optional)
         await orchestrator.add_input(event_data)
-        
+
         # Create an input event for processing
         input_event = {
             "session_id": session_id,
             "type": input_type,
             "payload": payload,
         }
-        
-        # Process the input using the main loop handler directly for immediate response
+
+        # Delegate to the main loop handler (from main_loop)
         processed_result = await orchestrator.main_loop_handler(input_event)
-        
+
         if "error" in processed_result:
             await log_event(session_id, "error", {"error": processed_result["error"]})
             raise ValueError(processed_result["error"])
-            
+
         # Format response based on requested output modes
         response_payload = await response_handler.handle_response(
             assistant_content=processed_result.get("text", ""),
-            chat_log=None,  # Could enhance this to pass proper chat logs
+            chat_log=None,  # Enhance to pass chat logs if available
             session_capabilities={"output": output_mode},
             session_id=session_id
         )
@@ -159,7 +158,6 @@ async def process_input(
 
         # Handle broadcast if needed
         if broadcast and ctx:
-            # Find other sessions and send notification via ctx.notify
             for other_id in SESSION_REGISTRY:
                 if other_id != session_id:
                     await ctx.notify("broadcast", {
@@ -169,7 +167,7 @@ async def process_input(
                     })
 
         return response_payload
-        
+
     except Exception as e:
         error_data = {"error": str(e), "input": event_data}
         await log_event(session_id, "error", error_data)
@@ -217,12 +215,9 @@ async def push_notification(
         "timestamp": datetime.utcnow().isoformat()
     }
 
-async def main():
-    print("[MCP] Starting SmartAss MCP Server.")
-    await mcp.start()  # Start the FastMCP server and keep it running
-
 if __name__ == "__main__":
     try:
-        asyncio.run(main())
+        print("[MCP] Starting LAURA MCP Server.")
+        mcp.run()  # Let FastMCP (and anyio) handle the event loop
     except KeyboardInterrupt:
         print("\n[MCP] Server stopped by user.")
