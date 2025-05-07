@@ -10,6 +10,337 @@ from typing import Optional, List, Dict, Union, Any
 import config
 from config import MOOD_MAPPINGS, ACTIVE_PERSONA
 
+async def capture_speech(is_follow_up=False):
+    """
+    Unified function to capture and transcribe speech, replacing both
+    handle_voice_query and conversation_mode.
+
+    Args:
+        is_follow_up (bool): Whether this is a follow-up question (affects timeout)
+
+    Returns:
+        str or None: Transcribed text if speech was detected, None otherwise
+    """
+    try:
+        # Determine appropriate timeouts based on context
+        if is_follow_up:
+            # For follow-up questions, check if we have specific config values
+            initial_timeout = VAD_SETTINGS.get("follow_up_timeout", 4.0)
+            max_recording_time = VAD_SETTINGS.get("follow_up_max_recording", 45.0)
+        else:
+            # For initial queries, use the primary configuration values
+            initial_timeout = VOICE_START_TIMEOUT
+            max_recording_time = VAD_SETTINGS["max_recording_time"]
+
+        waiting_message = f"\n{Fore.MAGENTA}Waiting for response...{Fore.WHITE}" if is_follow_up else f"{Fore.BLUE}Listening...{Fore.WHITE}"
+        print(waiting_message)
+
+        # Ensure audio playback is complete before starting listening (for follow-ups)
+        if is_follow_up:
+            await audio_manager.wait_for_audio_completion()
+            await asyncio.sleep(0.5)  # Small buffer delay
+
+        # Start listening
+        if TRANSCRIPTION_MODE == "local":
+            # Reset the transcriber state
+            transcriber.reset()
+
+            audio_stream, _ = await audio_manager.start_listening()
+            voice_detected = False
+
+            # Keep processing audio frames until we detect end of speech
+            print(f"{Fore.MAGENTA}Waiting for voice...{Fore.WHITE}")
+            start_time = time.time()
+
+            # For Vosk, we need a different approach
+            if TRANSCRIPTION_ENGINE == "vosk":
+                # Get VAD settings
+                energy_threshold = VAD_SETTINGS["energy_threshold"]
+                continued_ratio = VAD_SETTINGS["continued_threshold_ratio"]
+                silence_duration = VAD_SETTINGS["silence_duration"]
+                min_speech_duration = VAD_SETTINGS["min_speech_duration"]
+                speech_buffer_time = VAD_SETTINGS["speech_buffer_time"]
+
+                # Manual stop tracking
+                manual_stop = False
+
+                # Calculate frames needed for silence duration
+                max_silence_frames = int(silence_duration * 16000 / audio_manager.frame_length)
+
+                # State tracking
+                silence_frames = 0
+                last_partial_time = time.time()
+                frame_history = []
+                is_speaking = False
+                speech_start_time = None
+
+                while True:
+                    # Check for initial timeout
+                    if not voice_detected and (time.time() - start_time) > initial_timeout:
+                        if not is_follow_up:  # More verbose for initial queries
+                            print(f"DEBUG: Voice not detected - energy threshold: {energy_threshold:.6f}")
+                        print(f"{Fore.YELLOW}{'No response detected' if is_follow_up else 'Voice start timeout'}{Fore.WHITE}")
+                        break
+
+                    # Read audio frame
+                    pcm_bytes = audio_manager.read_audio_frame()
+                    if not pcm_bytes:
+                        await asyncio.sleep(0.01)
+                        continue
+
+                    # Check for manual stop if voice was detected
+                    if voice_detected:
+                        manual_stop = await check_manual_stop()
+                        if manual_stop:
+                            speech_duration = time.time() - speech_start_time
+                            if speech_duration > min_speech_duration:
+                                print(f"{Fore.MAGENTA}Manual stop triggered after {speech_duration:.1f}s{Fore.WHITE}")
+                                await asyncio.sleep(speech_buffer_time)
+                                break
+                            else:
+                                print(f"{Fore.YELLOW}Recording too short for manual stop ({speech_duration:.1f}s < {min_speech_duration}s){Fore.WHITE}")
+                                manual_stop = False
+
+                    # Process with Vosk
+                    is_end, is_speech, partial_text = transcriber.process_frame(pcm_bytes)
+
+                    # Calculate energy level (RMS)
+                    float_data = np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+                    energy = np.sqrt(np.mean(float_data**2)) if len(float_data) > 0 else 0
+
+                    # Add to frame history for smoother energy detection
+                    frame_history.append(energy)
+                    if len(frame_history) > 10:
+                        frame_history.pop(0)
+
+                    # Calculate average energy
+                    avg_energy = sum(frame_history) / len(frame_history) if frame_history else 0
+
+                    # Display partial results (less frequently for follow-ups)
+                    current_time = time.time()
+                    partial_display_interval = 5 if is_follow_up else 2
+                    if partial_text and (current_time - last_partial_time) > partial_display_interval:
+                        last_partial_time = current_time
+                        print(f"Partial: {partial_text}")
+
+                    # VAD STATE MACHINE
+                    if avg_energy > energy_threshold and not is_speaking:
+                        # Speech just started
+                        voice_color = Fore.GREEN if is_follow_up else Fore.BLUE
+                        print(f"{voice_color}Voice detected{' (energy: ' + str(avg_energy)[:6] + ')' if not is_follow_up else ''}{Fore.WHITE}")
+                        voice_detected = True
+                        is_speaking = True
+                        speech_start_time = time.time()
+                        silence_frames = 0
+
+                    elif is_speaking:
+                        speech_duration = time.time() - speech_start_time
+
+                        # Check if energy is above the continued threshold
+                        if avg_energy > (energy_threshold * continued_ratio):
+                            silence_frames = 0
+                        else:
+                            silence_frames += 1
+
+                        # Check for end conditions
+                        if (silence_frames >= max_silence_frames and
+                            speech_duration > min_speech_duration):
+                            print(f"{Fore.MAGENTA}End of {'response' if is_follow_up else 'speech'} detected{Fore.WHITE}")
+                            await asyncio.sleep(speech_buffer_time)
+                            break
+
+                        # Check for maximum duration
+                        if speech_duration > max_recording_time:
+                            print(f"{Fore.RED}Maximum recording time reached{Fore.WHITE}")
+                            break
+
+                    # Reduced CPU usage
+                    await asyncio.sleep(0.01)
+
+                # Update display state based on context
+                if not voice_detected:
+                    if is_follow_up:
+                        await display_manager.update_display('idle')
+                    else:
+                        await display_manager.update_display('sleep')
+                    return None
+
+                # Get final transcription
+                transcript = transcriber.get_final_text()
+                print(f"Raw transcript: '{transcript}'")
+
+                # Apply cleanup for common Vosk errors
+                if transcript:
+                    # Fix "that were" at beginning which is a common Vosk error
+                    transcript = re.sub(r'^that were\s+', '', transcript)
+                    transcript = re.sub(r'^that was\s+', '', transcript)
+
+                    # Reject single-word responses as likely noise
+                    min_word_length = 1 if is_follow_up else 4
+                    if len(transcript.split()) <= 1 and len(transcript) < min_word_length:
+                        print(f"Discarding too-short transcript: '{transcript}'")
+                        return None
+
+            else:
+                # Handle Whisper transcription
+                recording_complete = False
+                is_speech = False
+
+                while not recording_complete:
+                    if not voice_detected and (time.time() - start_time > initial_timeout):
+                        print(f"{Fore.YELLOW}{'No response detected' if is_follow_up else 'Voice start timeout'}{Fore.WHITE}")
+                        break
+
+                    pcm = audio_manager.read_audio_frame()
+                    if not pcm:
+                        await asyncio.sleep(0.01)
+                        continue
+
+                    recording_complete, is_speech = transcriber.process_frame(pcm)
+
+                    if is_speech and not voice_detected:
+                        voice_color = Fore.GREEN if is_follow_up else Fore.BLUE
+                        print(f"{voice_color}Voice detected{Fore.WHITE}")
+                        voice_detected = True
+                        start_time = time.time()  # Reset timeout
+
+                if not voice_detected:
+                    print("No voice detected")
+                    return None
+
+                print(f"{Fore.MAGENTA}Transcribing {'conversation' if is_follow_up else ''}...{Fore.WHITE}")
+                # Get final transcription
+                transcript = transcriber.transcribe()
+                print(f"Raw transcript: '{transcript}'")
+
+            if not transcript:
+                print("No transcript returned")
+                return None
+
+            print(f"Transcription: {transcript}")
+            return transcript
+
+        else:  # Remote transcription
+            audio_stream, _ = await audio_manager.start_listening()
+
+            recording = []
+            start_time = time.time()
+            voice_detected = False
+
+            # Get VAD settings
+            energy_threshold = VAD_SETTINGS["energy_threshold"]
+            continued_ratio = VAD_SETTINGS["continued_threshold_ratio"]
+            silence_duration = VAD_SETTINGS["silence_duration"]
+
+            # Initial detection phase - different timeouts based on context
+            print(f"{Fore.MAGENTA}Waiting for voice...{Fore.WHITE}")
+            while (time.time() - start_time) < initial_timeout:
+                pcm_bytes = audio_manager.read_audio_frame()
+                if not pcm_bytes:
+                    await asyncio.sleep(0.01)
+                    continue
+
+                # Convert bytes to int16 values
+                pcm = np.frombuffer(pcm_bytes, dtype=np.int16)
+
+                # Calculate energy (RMS)
+                float_data = pcm.astype(np.float32) / 32768.0
+                energy = np.sqrt(np.mean(float_data**2)) if len(float_data) > 0 else 0
+
+                # Check if this is speech
+                if energy > energy_threshold:
+                    color = Fore.GREEN if is_follow_up else Fore.BLUE
+                    print(f"{color}Voice detected{Fore.WHITE}")
+                    voice_detected = True
+                    recording.extend(pcm)
+                    break
+
+            # If no voice detected in initial phase, return
+            if not voice_detected:
+                print(f"No voice detected in {'' if is_follow_up else 'initial '}phase")
+                return None
+
+            # Continuous recording phase
+            print(f"{Fore.MAGENTA}Recording...{Fore.WHITE}")
+            silence_frames = 0
+            silence_frame_threshold = int(silence_duration * audio_manager.sample_rate / audio_manager.frame_length)
+
+            while True:
+                pcm_bytes = audio_manager.read_audio_frame()
+                if not pcm_bytes:
+                    await asyncio.sleep(0.01)
+                    continue
+
+                # Convert bytes to int16 values
+                pcm = np.frombuffer(pcm_bytes, dtype=np.int16)
+                recording.extend(pcm)
+
+                # Calculate energy
+                float_data = pcm.astype(np.float32) / 32768.0
+                energy = np.sqrt(np.mean(float_data**2)) if len(float_data) > 0 else 0
+
+                # Check if this frame has voice
+                if energy > (energy_threshold * continued_ratio):
+                    silence_frames = 0
+                else:
+                    silence_frames += 1
+
+                # End recording conditions
+                current_length = len(recording) / audio_manager.sample_rate
+
+                if silence_frames >= silence_frame_threshold:
+                    print(f"{Fore.MAGENTA}{'End of response' if is_follow_up else 'Silence'} detected, ending recording (duration: {current_length:.2f}s){Fore.WHITE}")
+                    break
+                elif current_length >= max_recording_time:
+                    print(f"{Fore.MAGENTA}Maximum recording time reached{Fore.WHITE}")
+                    break
+
+            if recording:
+                audio_array = np.array(recording, dtype=np.float32) / 32768.0
+                transcript = await remote_transcriber.transcribe(audio_array)
+
+        # Common post-processing for both transcription methods
+        end_phrases = [
+            "thank you for watching",
+            "thanks for watching",
+            "thank you for watching!",
+            "thanks for watching!",
+            "thanks you for watching",
+            "thanks you for watching!"
+        ]
+
+        # Handle case where transcript might be a dictionary
+        if isinstance(transcript, dict) and 'text' in transcript:
+            transcript = transcript['text']
+
+        if not transcript:
+            print("No transcript returned from transcriber")
+            return None
+
+        if not isinstance(transcript, str):
+            print(f"Invalid transcript type: {type(transcript)}")
+            return None
+
+        if transcript.lower().strip() in end_phrases:
+            print("End phrase detected, ignoring...")
+            return None
+
+        # Output recognized speech
+        if is_follow_up:
+            print(f"\n{Style.BRIGHT}You said:{Style.NORMAL} {transcript}\n")
+
+        # Prevent rejection of valid short phrases
+        if len(transcript.strip()) > 0:
+            print(f"Final transcript: '{transcript}'")
+            return transcript.strip()
+        else:
+            print("Empty transcript after processing")
+            return None
+
+    finally:
+        await audio_manager.stop_listening()
+
+
 async def run_vad_calibration(system_manager, display_manager):
     """Run VAD calibration process with proper manager coordination"""
     try:
