@@ -164,39 +164,6 @@ class PiMCPClient:
     def listen_wakeword(self) -> Optional[str]:
         return self.wakeword.detect()
 
-    async def record_and_transcribe(self) -> Optional[str]:
-        self.stt.reset()
-        stream, _ = await self.audio_manager.start_listening()
-        voice_detected = False
-        start_time = time.time()
-        max_length = 15
-        silence_frames = 0
-        min_voice_time = 1.5
-        energies = []
-        while time.time() - start_time < max_length:
-            frame = self.audio_manager.read_audio_frame()
-            if not frame:
-                await asyncio.sleep(0.01)
-                continue
-            float_data = np.frombuffer(frame, dtype=np.int16).astype(np.float32) / 32768.0
-            energy = np.sqrt(np.mean(float_data ** 2)) if len(float_data) else 0
-            energies.append(energy)
-            if len(energies) > 10:
-                energies = energies[-10:]
-            is_end, is_speech, partial = self.stt.process_frame(frame)
-            if energy > config.VAD_SETTINGS["energy_threshold"]:
-                voice_detected = True
-                silence_frames = 0
-            elif voice_detected:
-                silence_frames += 1
-            if silence_frames > int(0.7 * AUDIO_SAMPLE_RATE / self.audio_manager.frame_length):
-                break
-            await asyncio.sleep(0.01)
-        await self.audio_manager.stop_listening()
-        if not voice_detected:
-            return None
-        return self.stt.get_final_text().strip()
-
     async def play_audio(self, audio_bytes):
         fname = "assistant_response.mp3"
         with open(fname, "wb") as f:
