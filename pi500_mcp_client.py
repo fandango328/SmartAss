@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 from piper import PiperVoice
-
+from elevenlabs.client import ElevenLabs
 
 
 # ========== SMARTASS IMPORTS ==========
@@ -44,11 +44,11 @@ VOICE = config.VOICE
 TTS_ENGINE = config.TTS_ENGINE
 
 DEVICE_ID = getattr(config, "DEVICE_ID", "pi500-client")
-ADD
-# Add to the config section
 TTS_LOCATION = getattr(config, "TTS_LOCATION", "server")  # "client" or "server"
 PIPER_MODEL = getattr(config, "PIPER_MODEL", "")  # Path to your Piper model
 PIPER_VOICE = getattr(config, "PIPER_VOICE", "")  # Optional path to voice directory
+ELEVENLABS_KEY = getattr(secret, "ELEVENLABS_KEY", "")  # Get ElevenLabs key
+CLIENT_TTS_ENGINE = getattr(config, "CLIENT_TTS_ENGINE", "piper")  # "piper" or "elevenlabs"
 
 # Update the DEVICE_CAPABILITIES
 DEVICE_CAPABILITIES = {
@@ -124,7 +124,12 @@ class PiMCPClient:
         self.persona = PERSONA
         self.voice = VOICE
         self.session_id = None
+        self.init_piper()
+        self.eleven = None
+        if TTS_LOCATION == "client" and CLIENT_TTS_ENGINE == "elevenlabs" and ELEVENLABS_KEY:
+            self.eleven = ElevenLabs(api_key=ELEVENLABS_KEY)
 
+        
     async def save_log(self, role, content):
         today = datetime.now().strftime("%Y-%m-%d")
         log_file = os.path.join(self.chat_log_dir, f"chat_log_{today}.json")
@@ -297,59 +302,47 @@ class PiMCPClient:
                 await self.display_manager.update_display("idle")
                 await self.save_log("assistant", response.get("text", ""))
 
-    def cleanup(self):
-        self.wakeword.cleanup()
-        self.audio_manager.cleanup()
-        self.display_manager.cleanup()
-        print("Cleaned up.")
+    def init_piper(self):
+        """Initialize Piper TTS if needed"""
+        if TTS_LOCATION == "client" and TTS_ENGINE == "piper":
+            try:
+                subprocess.run(["piper", "--help"], capture_output=True, check=False)
+                print("Piper TTS initialized for client-side speech generation")
+                return True
+            except FileNotFoundError:
+                print("Warning: Piper not found but client-side TTS requested.")
+                return False
+        return False
+
+    async def generate_piper_speech(self, text):
+        """Generate speech using Piper locally"""
+        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_wav:
+            temp_filename = temp_wav.name
         
-
-	def init_piper(self):
-		"""Initialize Piper TTS if needed"""
-		if TTS_LOCATION == "client" and TTS_ENGINE == "piper":
-			try:
-				import subprocess
-				subprocess.run(["piper", "--help"], capture_output=True, check=False)
-				print("Piper TTS initialized for client-side speech generation")
-				return True
-			except FileNotFoundError:
-				print("Warning: Piper not found but client-side TTS requested.")
-				return False
-		return False
-
-	async def generate_piper_speech(self, text):
-		"""Generate speech using Piper locally"""
-		import subprocess
-		import tempfile
-		import os
-		
-		with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_wav:
-			temp_filename = temp_wav.name
-		
-		try:
-			# Build the Piper command
-			cmd = ["piper"]
-			if PIPER_MODEL:
-				cmd.extend(["--model", PIPER_MODEL])
-			if PIPER_VOICE:
-				cmd.extend(["--voice", PIPER_VOICE])
-			cmd.extend(["--output_file", temp_filename])
-			
-			# Run Piper with text as input
-			process = subprocess.run(
-				cmd,
-				input=text.encode(),
-				capture_output=True,
-				check=True
-			)
-			
-			# Play the generated audio
-			await self.audio_manager.queue_audio(audio_file=temp_filename)
-			await self.audio_manager.wait_for_audio_completion()
-		finally:
-			# Clean up temporary file
-			if os.path.exists(temp_filename):
-				os.unlink(temp_filename)        
+        try:
+            # Build the Piper command
+            cmd = ["piper"]
+            if PIPER_MODEL:
+                cmd.extend(["--model", PIPER_MODEL])
+            if PIPER_VOICE:
+                cmd.extend(["--voice", PIPER_VOICE])
+            cmd.extend(["--output_file", temp_filename])
+            
+            # Run Piper with text as input
+            process = subprocess.run(
+                cmd,
+                input=text.encode(),
+                capture_output=True,
+                check=True
+            )
+            
+            # Play the generated audio
+            await self.audio_manager.queue_audio(audio_file=temp_filename)
+            await self.audio_manager.wait_for_audio_completion()
+        finally:
+            # Clean up temporary file
+            if os.path.exists(temp_filename):
+                os.unlink(temp_filename)        
 
 async def main():
     client = PiMCPClient()
