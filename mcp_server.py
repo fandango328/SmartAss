@@ -217,7 +217,7 @@ async def push_notification(
 
 if __name__ == "__main__":
     try:
-        print("[MCP] Starting LAURA MCP Server.")
-        mcp.run()  # Let FastMCP (and anyio) handle the event loop
+        print("[MCP] Starting LAURA MCP Server on ws://localhost:8765")
+        mcp.run(host="0.0.0.0", port=8765)  # Add mode="websocket" if required by FastMCP
     except KeyboardInterrupt:
         print("\n[MCP] Server stopped by user.")
