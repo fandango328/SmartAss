@@ -11,7 +11,7 @@ from llm_integrations.openai_adapter import OpenAILLMAdapter
 # Initialize the appropriate LLM adapter based on configuration
 if config.ACTIVE_PROVIDER == "anthropic":
     AdapterClass = AnthropicLLMAdapter
-    tool_definitions = tool_registry.get_available_tools()
+    tool_definitions = tool_registry.get_llm_tool_definitions()
 elif config.ACTIVE_PROVIDER == "openai":
     AdapterClass = OpenAILLMAdapter
     tool_definitions = tool_registry.get_llm_tool_definitions()
@@ -22,11 +22,9 @@ else:
 max_tokens = getattr(config, "MAX_TOKENS", 4096)
 temperature = getattr(config, "TEMPERATURE", 0.7)
 
-# Initialize the LLM adapter
 llm_adapter = AdapterClass(
-    api_key=config.MODELS_DATA[config.ACTIVE_PROVIDER + "_api_key"],
+    api_key=config.get_active_api_key(),
     model=config.ANTHROPIC_MODEL if config.ACTIVE_PROVIDER == "anthropic" else config.OPENAI_MODEL,
-    functions=tool_definitions,
     system_prompt=config.SYSTEM_PROMPT,
     max_tokens=max_tokens,
     temperature=temperature,
@@ -35,7 +33,7 @@ llm_adapter = AdapterClass(
 # Global conversation state (can be enhanced with session-specific conversations)
 conversations = {}
 
-def tool_handler(function_name, function_args, call_id):
+async def tool_handler(function_name, function_args, call_id):
     """Handler for tool/function calls from the LLM"""
     try:
         args = json.loads(function_args) if isinstance(function_args, str) else function_args
@@ -47,7 +45,12 @@ def tool_handler(function_name, function_args, call_id):
         return f"Unknown tool: {function_name}"
     
     try:
-        return handler(**args)
+        # Check if the handler is a coroutine function and await it if needed
+        import inspect
+        if inspect.iscoroutinefunction(handler):
+            return await handler(**args)
+        else:
+            return handler(**args)
     except Exception as e:
         return f"Tool {function_name} error: {e}"
 
