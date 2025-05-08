@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import requests
 import asyncio
 import os
 import sys
@@ -286,6 +287,7 @@ class PiMCPClient:
                         continue
                     except asyncio.QueueEmpty:
                         pass
+
                     wake_model = None
                     try:
                         if self.listen_keyboard():
@@ -299,9 +301,11 @@ class PiMCPClient:
                     except Exception as e:
                         print(f"[ERROR] Wakeword/keyboard detection failed: {e}")
                         continue
+
                     if not wake_model:
                         await asyncio.sleep(0.05)
                         continue
+
                     await self.display_manager.update_display("listening")
                     try:
                         transcript = await capture_speech(self.audio_manager, self.display_manager)
@@ -310,6 +314,7 @@ class PiMCPClient:
                         traceback.print_exc()
                         await self.display_manager.update_display("idle")
                         continue
+
                     if not transcript:
                         await self.display_manager.update_display("idle")
                         continue
@@ -334,6 +339,7 @@ class PiMCPClient:
                     except Exception as e:
                         print(f"[ERROR] Failed to send input: {e}")
                         continue
+
                     await self.display_manager.update_display("thinking")
                     try:
                         response_raw = await ws.recv()
@@ -341,16 +347,19 @@ class PiMCPClient:
                         print(f"[ERROR] Failed to receive server response: {e}")
                         await self.display_manager.update_display("idle")
                         continue
+
                     try:
                         response = json.loads(response_raw)
                     except Exception as e:
                         print(f"[ERROR] Invalid server response: {e}")
                         print(f"Raw response: {response_raw}")
                         continue
+
                     if response.get("persona"):
                         self.persona = response["persona"]
                     if response.get("voice"):
                         self.voice = response["voice"]
+
                     mood = response.get("mood", "casual")
                     await self.display_manager.update_display("speaking", mood=mood)
                     try:
@@ -369,6 +378,7 @@ class PiMCPClient:
                             await self.audio_manager.wait_for_audio_completion()
                     except Exception as e:
                         print(f"[ERROR] Failed to play/generate assistant response: {e}")
+
                     await self.display_manager.update_display("idle")
                     # No chat log saving on client!
         except Exception as e:
