@@ -7,8 +7,6 @@ import json
 import time
 import select
 import traceback
-import subprocess
-import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -21,18 +19,12 @@ from audio_manager_vosk import AudioManager
 from vosk_transcriber import VoskTranscriber
 from display_manager import DisplayManager
 
-# Core/shared logic (make sure these exist in core_functions/system_manager)
+# Core/shared logic
 from core_functions import capture_speech  # robust, centralized speech capture
-try:
-    from core_functions import save_log  # If centralized, otherwise fallback to in-class
-except ImportError:
-    save_log = None
-
-# TTS
-from elevenlabs.client import ElevenLabs
 
 # Wake word detection
 import pyaudio
+sys.path.append('/home/user/LAURA/snowboy')  # Update this to where your snowboydetect.so lives
 import snowboydetect
 from evdev import InputDevice, list_devices, ecodes
 
@@ -41,6 +33,9 @@ import websockets
 
 # NEW: Import the client system manager
 from client_system_manager import ClientSystemManager
+
+# TTS Handler
+from client_tts_handler import TTSHandler
 
 # ========== CONFIGURATION ==========
 WAKEWORD_DIR = config.WAKEWORD_DIR
@@ -54,9 +49,6 @@ VOICE = config.VOICE
 TTS_ENGINE = config.TTS_ENGINE
 DEVICE_ID = config.DEVICE_ID
 TTS_LOCATION = config.TTS_LOCATION
-PIPER_MODEL = config.PIPER_MODEL
-PIPER_VOICE = config.PIPER_VOICE
-ELEVENLABS_KEY = getattr(secret, "ELEVENLABS_KEY", "")
 CLIENT_TTS_ENGINE = config.CLIENT_TTS_ENGINE
 MCP_SERVER_URI = config.MCP_SERVER_URI
 OUTPUT_MODE = config.OUTPUT_MODE
@@ -149,50 +141,12 @@ class PiMCPClient:
             raise
 
         self.keyboard = find_pi_keyboard()
-        self.chat_log_dir = CHAT_LOG_DIR
-        try:
-            os.makedirs(self.chat_log_dir, exist_ok=True)
-        except Exception as e:
-            print(f"[ERROR] Failed to create chat log dir: {e}")
         self.notification_queue = asyncio.Queue()
         self.persona = PERSONA
         self.voice = VOICE
         self.session_id = None
-        self.init_piper()
-        self.eleven = None
-        if TTS_LOCATION == "client" and CLIENT_TTS_ENGINE == "elevenlabs" and ELEVENLABS_KEY:
-            try:
-                self.eleven = ElevenLabs(api_key=ELEVENLABS_KEY)
-            except Exception as e:
-                print(f"[ERROR] ElevenLabs client failed to initialize: {e}")
-        # NEW: Initialize the client system manager
+        self.tts_handler = TTSHandler()  # <--- Unified TTS handler
         self.system_manager = ClientSystemManager()
-
-    # Use centralized save_log if available, else fallback
-    async def save_log(self, role, content):
-        if save_log:
-            await save_log({"role": role, "content": content})
-            return
-        today = datetime.now().strftime("%Y-%m-%d")
-        log_file = os.path.join(self.chat_log_dir, f"chat_log_{today}.json")
-        entry = {
-            "role": role,
-            "content": content,
-            "timestamp": datetime.now().isoformat()
-        }
-        logs = []
-        if os.path.exists(log_file):
-            try:
-                with open(log_file, "r") as f:
-                    logs = json.load(f)
-            except Exception as e:
-                print(f"[ERROR] Could not read existing chat log: {e}")
-        logs.append(entry)
-        try:
-            with open(log_file, "w") as f:
-                json.dump(logs, f, indent=2)
-        except Exception as e:
-            print(f"[ERROR] Could not write chat log: {e}")
 
     def listen_keyboard(self) -> bool:
         if not self.keyboard:
@@ -254,12 +208,12 @@ class PiMCPClient:
 
     async def send_process_input(self, ws, transcript):
         request = {
-            "tool": "process_input",
+            "tool": "run_LAURA",
             "args": {
                 "session_id": self.session_id,
                 "input_type": "text",
                 "payload": {"text": transcript},
-                "output_mode": OUTPUT_MODE,
+                "output_mode": [OUTPUT_MODE] if isinstance(OUTPUT_MODE, str) else OUTPUT_MODE,
                 "timestamp": datetime.utcnow().isoformat(),
             }
         }
@@ -327,7 +281,8 @@ class PiMCPClient:
                         await self.display_manager.update_display("idle")
                         continue
 
-                    await self.save_log("user", transcript)
+                    # No chat log saving on client! (see discussion)
+
                     try:
                         await self.send_process_input(ws, transcript)
                     except Exception as e:
@@ -354,8 +309,13 @@ class PiMCPClient:
                     await self.display_manager.update_display("speaking", mood=mood)
                     try:
                         # Handle audio response based on TTS location preference
-                        if TTS_LOCATION == "client" and TTS_ENGINE == "piper" and "text" in response:
-                            await self.generate_piper_speech(response["text"])
+                        if TTS_LOCATION == "client" and "text" in response and response["text"]:
+                            # Use the unified TTS handler!
+                            audio_bytes = await self.tts_handler.generate_audio(response["text"])
+                            if audio_bytes:
+                                await self.play_audio(audio_bytes)
+                            else:
+                                print("[ERROR] TTSHandler failed to generate audio.")
                         elif "audio" in response and response["audio"]:
                             await self.play_audio(bytes(response["audio"]))
                         elif "text" in response and response["text"]:
@@ -364,55 +324,10 @@ class PiMCPClient:
                     except Exception as e:
                         print(f"[ERROR] Failed to play/generate assistant response: {e}")
                     await self.display_manager.update_display("idle")
-                    try:
-                        await self.save_log("assistant", response.get("text", ""))
-                    except Exception as e:
-                        print(f"[ERROR] Failed to log assistant response: {e}")
+                    # No chat log saving on client!
         except Exception as e:
             print(f"[FATAL ERROR] Lost connection to MCP server or other failure: {e}")
             traceback.print_exc()
-
-    def init_piper(self):
-        """Initialize Piper TTS if needed"""
-        if TTS_LOCATION == "client" and TTS_ENGINE == "piper":
-            try:
-                subprocess.run(["piper", "--help"], capture_output=True, check=False)
-                print("Piper TTS initialized for client-side speech generation")
-                return True
-            except FileNotFoundError:
-                print("[ERROR] Piper not found but client-side TTS requested.")
-                return False
-        return False
-
-    async def generate_piper_speech(self, text):
-        """Generate speech using Piper locally"""
-        with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_wav:
-            temp_filename = temp_wav.name
-        try:
-            cmd = ["piper"]
-            if PIPER_MODEL:
-                cmd.extend(["--model", PIPER_MODEL])
-            if PIPER_VOICE:
-                cmd.extend(["--voice", PIPER_VOICE])
-            cmd.extend(["--output_file", temp_filename])
-            try:
-                subprocess.run(
-                    cmd,
-                    input=text.encode(),
-                    capture_output=True,
-                    check=True
-                )
-            except Exception as e:
-                print(f"[ERROR] Piper TTS failed: {e}")
-                return
-            await self.audio_manager.queue_audio(audio_file=temp_filename)
-            await self.audio_manager.wait_for_audio_completion()
-        finally:
-            if os.path.exists(temp_filename):
-                try:
-                    os.unlink(temp_filename)
-                except Exception as e:
-                    print(f"[ERROR] Failed to clean up temp Piper file: {e}")
 
     def cleanup(self):
         try:
