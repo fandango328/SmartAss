@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import requests
+import aiohttp
 import asyncio
 import os
 import sys
@@ -21,23 +22,14 @@ import secret  # All keys: ELEVENLABS_KEY, ANTHROPIC_API_KEY, etc.
 from audio_manager_vosk import AudioManager
 from vosk_transcriber import VoskTranscriber
 from display_manager import DisplayManager
-
-# Core/shared logic
 from core_functions import capture_speech  # robust, centralized speech capture
 
-# Wake word detection
 import pyaudio
-sys.path.append('/home/user/LAURA/snowboy')  # Update this to where your snowboydetect.so lives
+sys.path.append('/home/user/LAURA/snowboy')
 import snowboydetect
 from evdev import InputDevice, list_devices, ecodes
 
-# MCP protocol client
-import websockets
-
-# NEW: Import the client system manager
 from client_system_manager import ClientSystemManager
-
-# TTS Handler
 from client_tts_handler import TTSHandler
 
 # ========== CONFIGURATION ==========
@@ -55,6 +47,16 @@ TTS_LOCATION = config.TTS_LOCATION
 CLIENT_TTS_ENGINE = config.CLIENT_TTS_ENGINE
 MCP_SERVER_URI = config.MCP_SERVER_URI
 OUTPUT_MODE = config.OUTPUT_MODE
+
+AUTH_URL = "http://192.168.0.50:5000/oauth/token"
+def get_access_token():
+    resp = requests.post(
+        AUTH_URL,
+        data={"grant_type": "client_credentials", "scope": "mcp_api"},
+        auth=("test-client", "secret")
+    )
+    resp.raise_for_status()
+    return resp.json()["access_token"]
 
 DEVICE_CAPABILITIES = {
     "input": ["text", "audio"],
@@ -148,8 +150,10 @@ class PiMCPClient:
         self.persona = PERSONA
         self.voice = VOICE
         self.session_id = None
-        self.tts_handler = TTSHandler()  # <--- Unified TTS handler
+        self.tts_handler = TTSHandler()
         self.system_manager = ClientSystemManager()
+        self.access_token = get_access_token()
+        self.server_url = "http://192.168.0.50:8765/messages/"
 
     def listen_keyboard(self) -> bool:
         if not self.keyboard:
@@ -185,36 +189,44 @@ class PiMCPClient:
         except Exception as e:
             print(f"[ERROR] Failed to handle notification: {e}")
 
-    async def register_device(self, ws):
+    async def register_device(self):
         register_msg = {
-            "tool": "register_device",
-            "args": {
+            "name": "register_device",
+            "argumentss": {
                 "device_id": DEVICE_ID,
                 "capabilities": DEVICE_CAPABILITIES
             }
         }
-        try:
-            await ws.send(json.dumps(register_msg))
-            resp_raw = await ws.recv()
-        except Exception as e:
-            print(f"[ERROR] Failed to send/receive registration: {e}")
-            return False
-        try:
-            resp = json.loads(resp_raw)
-            self.session_id = resp["session_id"]
-            print(f"Registered, session_id: {self.session_id}")
-            return True
-        except Exception as e:
-            print(f"[ERROR] Device registration failed: {e}")
-            print(f"Server response: {resp_raw}")
-            return False
+        headers = {
+            "Authorization": f"Bearer {self.access_token}",
+            "Content-Type": "application/json"
+        }
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.post(self.server_url, headers=headers, json=register_msg) as resp:
+                    resp_raw = await resp.text()
+                    if resp.status != 200:
+                        print(f"[ERROR] Registration failed: {resp.status} {resp_raw}")
+                        return False
+                    resp_json = json.loads(resp_raw)
+                    self.session_id = resp_json.get("session_id", None)
+                    if self.session_id:
+                        print(f"Registered, session_id: {self.session_id}")
+                        return True
+                    else:
+                        print(f"[ERROR] Device registration failed: {resp_json}")
+                        return False
+            except Exception as e:
+                print(f"[ERROR] Registration exception: {e}")
+                return False
 
-
-
-    async def send_process_input(self, ws, transcript):
+    async def send_process_input(self, transcript):
+        if not self.session_id:
+            print("[ERROR] No session_id, not sending input.")
+            return
         request = {
-            "tool": "run_LAURA",
-            "args": {
+            "name": "run_LAURA",  # CHANGED: use "name" instead of "tool"
+            "arguments": {        # CHANGED: use "arguments" instead of "args"
                 "session_id": self.session_id,
                 "input_type": "text",
                 "payload": {"text": transcript},
@@ -222,139 +234,99 @@ class PiMCPClient:
                 "timestamp": datetime.utcnow().isoformat(),
             }
         }
-        try:
-            await ws.send(json.dumps(request))
-        except Exception as e:
-            print(f"[ERROR] Failed to send user input to server: {e}")
-
-    @asynccontextmanager
-    async def connect_with_retry(self, max_retries=5, retry_delay=3):
-        """Connect to the MCP server with retry logic"""
-        retries = 0
-        last_error = None
-        
-        while retries < max_retries:
+        headers = {
+            "Authorization": f"Bearer {self.access_token}",
+            "Content-Type": "application/json"
+        }
+        async with aiohttp.ClientSession() as session:
             try:
-                print(f"Connecting to MCP server at {MCP_SERVER_URI} (attempt {retries+1}/{max_retries})...")
-                
-                # First check if the host is reachable at all
-                host = MCP_SERVER_URI.split("://")[1].split(":")[0]
-                port = int(MCP_SERVER_URI.split("://")[1].split(":")[1].split("/")[0])
-                
-                if host in ('localhost', '127.0.0.1', '::1'):
+                async with session.post(self.server_url, headers=headers, json=request) as resp:
+                    resp_raw = await resp.text()
+                    if resp.status != 200:
+                        print(f"[ERROR] Input POST failed: {resp.status} {resp_raw}")
+                        return None
                     try:
-                        # Check if anything is listening on this port
-                        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                            s.settimeout(2)
-                            result = s.connect_ex(('127.0.0.1', port))
-                            if result != 0:
-                                print(f"[WARNING] Nothing appears to be listening on port {port}. Is the MCP server running?")
-                    except Exception as e:
-                        print(f"[WARNING] Port check failed: {e}")
-                
-                connection = await websockets.connect(MCP_SERVER_URI)
-                yield connection
-                return
-            except (websockets.exceptions.WebSocketException, OSError) as e:
-                last_error = e
-                retries += 1
-                if retries < max_retries:
-                    print(f"[ERROR] Connection failed: {e}")
-                    print(f"Retrying in {retry_delay} seconds...")
-                    await asyncio.sleep(retry_delay)
-                else:
-                    print(f"[FATAL ERROR] Failed to connect after {max_retries} attempts")
-                    raise
-
-        raise last_error
+                        return json.loads(resp_raw)
+                    except Exception as parse_err:
+                        print(f"[ERROR] Failed to parse server response: {parse_err}\nRaw: {resp_raw}")
+                        return None
+            except Exception as e:
+                print(f"[ERROR] Failed to send user input to server: {e}")
+                return None
 
     async def run(self):
         try:
-            # Replace the existing websockets.connect with our retry wrapper
-            async with self.connect_with_retry() as ws:
-                print("Connected.")
-                reg_ok = await self.register_device(ws)
-                if not reg_ok:
-                    print("[FATAL ERROR] Could not register device. Exiting.")
-                    return
+            reg_ok = await self.register_device()
+            if not reg_ok:
+                print("[FATAL ERROR] Could not register device. Exiting.")
+                return
 
+            await self.display_manager.update_display("idle")
+            while True:
                 await self.display_manager.update_display("idle")
-                while True:
+                try:
+                    notif = self.notification_queue.get_nowait()
+                    await self.handle_notification(notif)
+                    continue
+                except asyncio.QueueEmpty:
+                    pass
+
+                wake_model = None
+                try:
+                    if self.listen_keyboard():
+                        print("Keyboard wake")
+                        wake_model = "keyboard"
+                    else:
+                        wm = self.listen_wakeword()
+                        if wm:
+                            print(f"Wakeword detected: {wm}")
+                            wake_model = wm
+                except Exception as e:
+                    print(f"[ERROR] Wakeword/keyboard detection failed: {e}")
+                    continue
+
+                if not wake_model:
+                    await asyncio.sleep(0.05)
+                    continue
+
+                await self.display_manager.update_display("listening")
+                try:
+                    transcript = await capture_speech(self.audio_manager, self.display_manager)
+                except Exception as e:
+                    print(f"[ERROR] Audio capture failed: {e}")
+                    traceback.print_exc()
                     await self.display_manager.update_display("idle")
-                    try:
-                        notif = self.notification_queue.get_nowait()
-                        await self.handle_notification(notif)
-                        continue
-                    except asyncio.QueueEmpty:
-                        pass
+                    continue
 
-                    wake_model = None
-                    try:
-                        if self.listen_keyboard():
-                            print("Keyboard wake")
-                            wake_model = "keyboard"
-                        else:
-                            wm = self.listen_wakeword()
-                            if wm:
-                                print(f"Wakeword detected: {wm}")
-                                wake_model = wm
-                    except Exception as e:
-                        print(f"[ERROR] Wakeword/keyboard detection failed: {e}")
-                        continue
+                if not transcript:
+                    await self.display_manager.update_display("idle")
+                    continue
 
-                    if not wake_model:
-                        await asyncio.sleep(0.05)
-                        continue
-
-                    await self.display_manager.update_display("listening")
-                    try:
-                        transcript = await capture_speech(self.audio_manager, self.display_manager)
-                    except Exception as e:
-                        print(f"[ERROR] Audio capture failed: {e}")
-                        traceback.print_exc()
+                # NEW: Check for and handle local commands
+                try:
+                    is_cmd, cmd_type, arg = self.system_manager.detect_command(transcript)
+                    if is_cmd:
+                        await self.system_manager.handle_command(cmd_type, arg)
                         await self.display_manager.update_display("idle")
-                        continue
+                        continue  # Skip sending to server
+                except Exception as e:
+                    print(f"[ERROR] Local command detection/handling failed: {e}")
+                    traceback.print_exc()
+                    await self.display_manager.update_display("idle")
+                    continue
 
-                    if not transcript:
-                        await self.display_manager.update_display("idle")
-                        continue
+                try:
+                    response = await self.send_process_input(transcript)
+                except Exception as e:
+                    print(f"[ERROR] Failed to send input: {e}")
+                    response = None
 
-                    # NEW: Check for and handle local commands
-                    try:
-                        is_cmd, cmd_type, arg = self.system_manager.detect_command(transcript)
-                        if is_cmd:
-                            await self.system_manager.handle_command(cmd_type, arg)
-                            await self.display_manager.update_display("idle")
-                            continue  # Skip sending to server
-                    except Exception as e:
-                        print(f"[ERROR] Local command detection/handling failed: {e}")
-                        traceback.print_exc()
-                        await self.display_manager.update_display("idle")
-                        continue
+                await self.display_manager.update_display("thinking")
+                if not response:
+                    await self.display_manager.update_display("idle")
+                    continue
 
-                    # No chat log saving on client! (see discussion)
-
-                    try:
-                        await self.send_process_input(ws, transcript)
-                    except Exception as e:
-                        print(f"[ERROR] Failed to send input: {e}")
-                        continue
-
-                    await self.display_manager.update_display("thinking")
-                    try:
-                        response_raw = await ws.recv()
-                    except Exception as e:
-                        print(f"[ERROR] Failed to receive server response: {e}")
-                        await self.display_manager.update_display("idle")
-                        continue
-
-                    try:
-                        response = json.loads(response_raw)
-                    except Exception as e:
-                        print(f"[ERROR] Invalid server response: {e}")
-                        print(f"Raw response: {response_raw}")
-                        continue
-
+                try:
                     if response.get("persona"):
                         self.persona = response["persona"]
                     if response.get("voice"):
@@ -362,25 +334,22 @@ class PiMCPClient:
 
                     mood = response.get("mood", "casual")
                     await self.display_manager.update_display("speaking", mood=mood)
-                    try:
-                        # Handle audio response based on TTS location preference
-                        if TTS_LOCATION == "client" and "text" in response and response["text"]:
-                            # Use the unified TTS handler!
-                            audio_bytes = await self.tts_handler.generate_audio(response["text"])
-                            if audio_bytes:
-                                await self.play_audio(audio_bytes)
-                            else:
-                                print("[ERROR] TTSHandler failed to generate audio.")
-                        elif "audio" in response and response["audio"]:
-                            await self.play_audio(bytes(response["audio"]))
-                        elif "text" in response and response["text"]:
-                            await self.audio_manager.queue_audio(audio_file=None, generated_text=response["text"])
-                            await self.audio_manager.wait_for_audio_completion()
-                    except Exception as e:
-                        print(f"[ERROR] Failed to play/generate assistant response: {e}")
+                    # Handle audio response based on TTS location preference
+                    if TTS_LOCATION == "client" and "text" in response and response["text"]:
+                        audio_bytes = await self.tts_handler.generate_audio(response["text"])
+                        if audio_bytes:
+                            await self.play_audio(audio_bytes)
+                        else:
+                            print("[ERROR] TTSHandler failed to generate audio.")
+                    elif "audio" in response and response["audio"]:
+                        await self.play_audio(bytes(response["audio"]))
+                    elif "text" in response and response["text"]:
+                        await self.audio_manager.queue_audio(audio_file=None, generated_text=response["text"])
+                        await self.audio_manager.wait_for_audio_completion()
+                except Exception as e:
+                    print(f"[ERROR] Failed to play/generate assistant response: {e}")
 
-                    await self.display_manager.update_display("idle")
-                    # No chat log saving on client!
+                await self.display_manager.update_display("idle")
         except Exception as e:
             print(f"[FATAL ERROR] Lost connection to MCP server or other failure: {e}")
             traceback.print_exc()
