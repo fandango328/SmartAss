@@ -11,6 +11,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 import numpy as np
+import socket
+from contextlib import asynccontextmanager
 
 # ========== SMARTASS IMPORTS ==========
 import client_config as config
@@ -206,6 +208,8 @@ class PiMCPClient:
             print(f"Server response: {resp_raw}")
             return False
 
+
+
     async def send_process_input(self, ws, transcript):
         request = {
             "tool": "run_LAURA",
@@ -222,15 +226,57 @@ class PiMCPClient:
         except Exception as e:
             print(f"[ERROR] Failed to send user input to server: {e}")
 
+    @asynccontextmanager
+    async def connect_with_retry(self, max_retries=5, retry_delay=3):
+        """Connect to the MCP server with retry logic"""
+        retries = 0
+        last_error = None
+        
+        while retries < max_retries:
+            try:
+                print(f"Connecting to MCP server at {MCP_SERVER_URI} (attempt {retries+1}/{max_retries})...")
+                
+                # First check if the host is reachable at all
+                host = MCP_SERVER_URI.split("://")[1].split(":")[0]
+                port = int(MCP_SERVER_URI.split("://")[1].split(":")[1].split("/")[0])
+                
+                if host in ('localhost', '127.0.0.1', '::1'):
+                    try:
+                        # Check if anything is listening on this port
+                        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                            s.settimeout(2)
+                            result = s.connect_ex(('127.0.0.1', port))
+                            if result != 0:
+                                print(f"[WARNING] Nothing appears to be listening on port {port}. Is the MCP server running?")
+                    except Exception as e:
+                        print(f"[WARNING] Port check failed: {e}")
+                
+                connection = await websockets.connect(MCP_SERVER_URI)
+                yield connection
+                return
+            except (websockets.exceptions.WebSocketException, OSError) as e:
+                last_error = e
+                retries += 1
+                if retries < max_retries:
+                    print(f"[ERROR] Connection failed: {e}")
+                    print(f"Retrying in {retry_delay} seconds...")
+                    await asyncio.sleep(retry_delay)
+                else:
+                    print(f"[FATAL ERROR] Failed to connect after {max_retries} attempts")
+                    raise
+
+        raise last_error
+
     async def run(self):
-        print(f"Connecting to MCP server at {MCP_SERVER_URI}...")
         try:
-            async with websockets.connect(MCP_SERVER_URI) as ws:
+            # Replace the existing websockets.connect with our retry wrapper
+            async with self.connect_with_retry() as ws:
                 print("Connected.")
                 reg_ok = await self.register_device(ws)
                 if not reg_ok:
                     print("[FATAL ERROR] Could not register device. Exiting.")
                     return
+
                 await self.display_manager.update_display("idle")
                 while True:
                     await self.display_manager.update_display("idle")
