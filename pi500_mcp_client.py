@@ -12,6 +12,7 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
 import numpy as np
 import socket
 from contextlib import asynccontextmanager
@@ -22,7 +23,7 @@ import secret  # All keys: ELEVENLABS_KEY, ANTHROPIC_API_KEY, etc.
 from audio_manager_vosk import AudioManager
 from vosk_transcriber import VoskTranscriber
 from display_manager import DisplayManager
-from core_functions import capture_speech  # robust, centralized speech capture
+from core_functions import capture_speech
 
 import pyaudio
 sys.path.append('/home/user/LAURA/snowboy')
@@ -50,13 +51,20 @@ OUTPUT_MODE = config.OUTPUT_MODE
 
 AUTH_URL = "http://192.168.0.50:5000/oauth/token"
 def get_access_token():
-    resp = requests.post(
-        AUTH_URL,
-        data={"grant_type": "client_credentials", "scope": "mcp_api"},
-        auth=("test-client", "secret")
-    )
-    resp.raise_for_status()
-    return resp.json()["access_token"]
+    print("[DEBUG] Requesting access token...")
+    try:
+        resp = requests.post(
+            AUTH_URL,
+            data={"grant_type": "client_credentials", "scope": "mcp_api"},
+            auth=("test-client", "secret")
+        )
+        resp.raise_for_status()
+        token = resp.json()["access_token"]
+        print("[DEBUG] Received access token.")
+        return token
+    except Exception as e:
+        print(f"[FATAL] Could not get access token: {e}")
+        sys.exit(1)
 
 DEVICE_CAPABILITIES = {
     "input": ["text", "audio"],
@@ -76,6 +84,7 @@ def find_pi_keyboard():
 
 class WakeWordDetector:
     def __init__(self):
+        print("[DEBUG] Initializing WakeWordDetector...")
         self.model_paths = [str(WAKEWORD_DIR / name) for name in WAKE_WORDS]
         self.sensitivities = ",".join(str(WAKE_WORDS[name]) for name in WAKE_WORDS)
         self.model_names = list(WAKE_WORDS.keys())
@@ -99,16 +108,20 @@ class WakeWordDetector:
             input=True,
             frames_per_buffer=AUDIO_CHUNK
         )
+        print("[DEBUG] WakeWordDetector initialized.")
+
     def detect(self):
         try:
             data = self.stream.read(AUDIO_CHUNK, exception_on_overflow=False)
             result = self.detector.RunDetection(data)
             if result > 0:
+                print(f"[DEBUG] Wakeword detected: {self.model_names[result-1]}")
                 return self.model_names[result - 1]
             return None
         except Exception as e:
             print(f"[ERROR] Wakeword detection failure: {e}")
             return None
+
     def cleanup(self):
         if self.stream:
             self.stream.stop_stream()
@@ -117,6 +130,7 @@ class WakeWordDetector:
 
 class PiMCPClient:
     def __init__(self):
+        print("[DEBUG] Initializing PiMCPClient...")
         try:
             self.audio_manager = AudioManager()
         except Exception as e:
@@ -146,6 +160,11 @@ class PiMCPClient:
             raise
 
         self.keyboard = find_pi_keyboard()
+        if self.keyboard:
+            print(f"[DEBUG] Found Pi Keyboard: {self.keyboard}")
+        else:
+            print("[DEBUG] Pi Keyboard NOT found.")
+
         self.notification_queue = asyncio.Queue()
         self.persona = PERSONA
         self.voice = VOICE
@@ -153,7 +172,8 @@ class PiMCPClient:
         self.tts_handler = TTSHandler()
         self.system_manager = ClientSystemManager()
         self.access_token = get_access_token()
-        self.server_url = "http://192.168.0.50:8765/messages/"
+        self.server_url = "http://192.168.0.50:8765/"
+        print("[DEBUG] PiMCPClient initialized.")
 
     def listen_keyboard(self) -> bool:
         if not self.keyboard:
@@ -164,6 +184,7 @@ class PiMCPClient:
         for _ in range(5):
             event = self.keyboard.read_one()
             if event and event.type == ecodes.EV_KEY and event.code == 125 and event.value == 1:
+                print("[DEBUG] Keyboard wake detected.")
                 return True
         return False
 
@@ -192,7 +213,7 @@ class PiMCPClient:
     async def register_device(self):
         register_msg = {
             "name": "register_device",
-            "argumentss": {
+            "arguments": {
                 "device_id": DEVICE_ID,
                 "capabilities": DEVICE_CAPABILITIES
             }
@@ -201,23 +222,33 @@ class PiMCPClient:
             "Authorization": f"Bearer {self.access_token}",
             "Content-Type": "application/json"
         }
+        print("[DEBUG] Register device payload:")
+        print(json.dumps(register_msg, indent=2))
+        print(f"[DEBUG] Register device POST to {self.server_url}")
         async with aiohttp.ClientSession() as session:
             try:
                 async with session.post(self.server_url, headers=headers, json=register_msg) as resp:
                     resp_raw = await resp.text()
+                    print(f"[DEBUG] Server response status: {resp.status}")
+                    print(f"[DEBUG] Server response body: {resp_raw}")
                     if resp.status != 200:
                         print(f"[ERROR] Registration failed: {resp.status} {resp_raw}")
                         return False
-                    resp_json = json.loads(resp_raw)
+                    try:
+                        resp_json = json.loads(resp_raw)
+                    except Exception as e:
+                        print(f"[ERROR] Could not parse registration response: {e}")
+                        return False
                     self.session_id = resp_json.get("session_id", None)
                     if self.session_id:
-                        print(f"Registered, session_id: {self.session_id}")
+                        print(f"[INFO] Registered, session_id: {self.session_id}")
                         return True
                     else:
                         print(f"[ERROR] Device registration failed: {resp_json}")
                         return False
             except Exception as e:
                 print(f"[ERROR] Registration exception: {e}")
+                traceback.print_exc()
                 return False
 
     async def send_process_input(self, transcript):
@@ -225,8 +256,8 @@ class PiMCPClient:
             print("[ERROR] No session_id, not sending input.")
             return
         request = {
-            "name": "run_LAURA",  # CHANGED: use "name" instead of "tool"
-            "arguments": {        # CHANGED: use "arguments" instead of "args"
+            "name": "run_LAURA",
+            "arguments": {
                 "session_id": self.session_id,
                 "input_type": "text",
                 "payload": {"text": transcript},
@@ -238,10 +269,14 @@ class PiMCPClient:
             "Authorization": f"Bearer {self.access_token}",
             "Content-Type": "application/json"
         }
+        print("[DEBUG] Sending process input payload:")
+        print(json.dumps(request, indent=2))
         async with aiohttp.ClientSession() as session:
             try:
                 async with session.post(self.server_url, headers=headers, json=request) as resp:
                     resp_raw = await resp.text()
+                    print(f"[DEBUG] Process input response status: {resp.status}")
+                    print(f"[DEBUG] Process input response body: {resp_raw}")
                     if resp.status != 200:
                         print(f"[ERROR] Input POST failed: {resp.status} {resp_raw}")
                         return None
@@ -252,6 +287,7 @@ class PiMCPClient:
                         return None
             except Exception as e:
                 print(f"[ERROR] Failed to send user input to server: {e}")
+                traceback.print_exc()
                 return None
 
     async def run(self):
@@ -274,12 +310,12 @@ class PiMCPClient:
                 wake_model = None
                 try:
                     if self.listen_keyboard():
-                        print("Keyboard wake")
+                        print("[INFO] Keyboard wake")
                         wake_model = "keyboard"
                     else:
                         wm = self.listen_wakeword()
                         if wm:
-                            print(f"Wakeword detected: {wm}")
+                            print(f"[INFO] Wakeword detected: {wm}")
                             wake_model = wm
                 except Exception as e:
                     print(f"[ERROR] Wakeword/keyboard detection failed: {e}")
@@ -319,6 +355,7 @@ class PiMCPClient:
                     response = await self.send_process_input(transcript)
                 except Exception as e:
                     print(f"[ERROR] Failed to send input: {e}")
+                    traceback.print_exc()
                     response = None
 
                 await self.display_manager.update_display("thinking")
@@ -348,6 +385,7 @@ class PiMCPClient:
                         await self.audio_manager.wait_for_audio_completion()
                 except Exception as e:
                     print(f"[ERROR] Failed to play/generate assistant response: {e}")
+                    traceback.print_exc()
 
                 await self.display_manager.update_display("idle")
         except Exception as e:
