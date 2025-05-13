@@ -2,7 +2,6 @@
 
 import asyncio
 import os
-import sys
 import json
 import time
 import select
@@ -11,69 +10,25 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-import numpy as np
-import socket
-from contextlib import asynccontextmanager
-
-# ========== SMARTASS IMPORTS ==========
+# Import the config module with runtime TTS provider/voice handling
 import client_config as config
-import secret  # All keys: ELEVENLABS_KEY, ANTHROPIC_API_KEY, etc.
+from client_config import (
+    get_active_tts_provider, set_active_tts_provider, get_voice_for_persona,
+    load_client_config, save_client_config,
+)
 from audio_manager_vosk import AudioManager
 from vosk_transcriber import VoskTranscriber
 from display_manager import DisplayManager
-from core_functions import capture_speech
-
-import pyaudio
-sys.path.append('/home/user/LAURA/snowboy')
-import snowboydetect
-from evdev import InputDevice, list_devices, ecodes
-
 from client_system_manager import ClientSystemManager
 from client_tts_handler import TTSHandler
 
-# ========== CONFIGURATION ==========
-WAKEWORD_DIR = config.WAKEWORD_DIR
-WAKEWORD_RESOURCE = config.WAKEWORD_RESOURCE
-WAKE_WORDS = config.WAKE_WORDS
-AUDIO_SAMPLE_RATE = config.AUDIO_SAMPLE_RATE
-AUDIO_CHUNK = config.AUDIO_CHUNK
-CHAT_LOG_DIR = config.CHAT_LOG_DIR
-PERSONA = config.ACTIVE_PERSONA
-VOICE = config.VOICE
-TTS_ENGINE = "elevenlabs"  # ADD: change to elevenlabs as requested
-TTS_LOCATION = config.TTS_LOCATION
-CLIENT_TTS_ENGINE = config.CLIENT_TTS_ENGINE
-MCP_SERVER_URI = config.MCP_SERVER_URI
-OUTPUT_MODE = config.OUTPUT_MODE
-DEVICE_ID = config.DEVICE_ID
+import pyaudio
+from evdev import InputDevice, list_devices, ecodes
 
-AUTH_URL = "http://192.168.0.50:5000/oauth/token"
-def get_access_token():
-    print("[DEBUG] Requesting access token...")
-    import requests
-    try:
-        resp = requests.post(
-            AUTH_URL,
-            data={"grant_type": "client_credentials", "scope": "mcp_api"},
-            auth=("test-client", "secret")
-        )
-        resp.raise_for_status()
-        token = resp.json()["access_token"]
-        print("[DEBUG] Received access token.")
-        return token
-    except Exception as e:
-        print(f"[FATAL] Could not get access token: {e}")
-        sys.exit(1)
+from mcp import ClientSession
+from mcp.client.sse import sse_client
 
-DEVICE_CAPABILITIES = {
-    "input": ["text", "audio"],
-    "output": ["text", "audio"],
-    "persona": PERSONA,
-    "voice": VOICE,
-    "tts_engine": TTS_ENGINE,      # ADD: use elevenlabs
-    "tts_location": TTS_LOCATION,
-}
-
+# Utility: Find the Pi 500 keyboard
 def find_pi_keyboard():
     for path in list_devices():
         dev = InputDevice(path)
@@ -81,24 +36,14 @@ def find_pi_keyboard():
             return dev
     return None
 
+# Wakeword detector class (same as before)
 class WakeWordDetector:
     def __init__(self):
-        print("[DEBUG] Initializing WakeWordDetector...")
+        from client_config import WAKEWORD_DIR, WAKEWORD_RESOURCE, WAKE_WORDS, AUDIO_SAMPLE_RATE, AUDIO_CHUNK
         self.model_paths = [str(WAKEWORD_DIR / name) for name in WAKE_WORDS]
         self.sensitivities = ",".join(str(WAKE_WORDS[name]) for name in WAKE_WORDS)
         self.model_names = list(WAKE_WORDS.keys())
-        if not Path(WAKEWORD_RESOURCE).exists():
-            print(f"[ERROR] Snowboy resource file missing: {WAKEWORD_RESOURCE}")
-            raise FileNotFoundError(f"Snowboy resource file missing: {WAKEWORD_RESOURCE}")
-        for path in self.model_paths:
-            if not Path(path).exists():
-                print(f"[ERROR] Wakeword model file missing: {path}")
-                raise FileNotFoundError(f"Wakeword model file missing: {path}")
-        self.detector = snowboydetect.SnowboyDetect(
-            resource_filename=str(WAKEWORD_RESOURCE).encode(),
-            model_str=",".join(self.model_paths).encode()
-        )
-        self.detector.SetSensitivity(self.sensitivities.encode())
+        import snowboydetect
         self.pa = pyaudio.PyAudio()
         self.stream = self.pa.open(
             rate=AUDIO_SAMPLE_RATE,
@@ -107,18 +52,21 @@ class WakeWordDetector:
             input=True,
             frames_per_buffer=AUDIO_CHUNK
         )
-        print("[DEBUG] WakeWordDetector initialized.")
+        self.detector = snowboydetect.SnowboyDetect(
+            resource_filename=str(WAKEWORD_RESOURCE).encode(),
+            model_str=",".join(self.model_paths).encode()
+        )
+        self.detector.SetSensitivity(self.sensitivities.encode())
 
     def detect(self):
+        from client_config import AUDIO_CHUNK
         try:
             data = self.stream.read(AUDIO_CHUNK, exception_on_overflow=False)
             result = self.detector.RunDetection(data)
             if result > 0:
-                print(f"[DEBUG] Wakeword detected: {self.model_names[result-1]}")
                 return self.model_names[result - 1]
             return None
-        except Exception as e:
-            print(f"[ERROR] Wakeword detection failure: {e}")
+        except Exception:
             return None
 
     def cleanup(self):
@@ -127,56 +75,44 @@ class WakeWordDetector:
             self.stream.close()
         self.pa.terminate()
 
-# ==== MCP SSE CLIENT IMPORTS ====
-from mcp import ClientSession
-from mcp.client.sse import sse_client
+# System command detection
+def detect_system_command(transcript):
+    t = transcript.lower()
+    if "enable remote tts" in t or "api tts" in t:
+        return True, "switch_tts_mode", "api"
+    elif "enable local tts" in t or "local tts" in t:
+        return True, "switch_tts_mode", "local"
+    elif "text only mode" in t or "text only" in t:
+        return True, "switch_tts_mode", "text"
+    elif "switch tts provider to cartesia" in t:
+        return True, "switch_api_tts_provider", "cartesia"
+    elif "switch tts provider to elevenlabs" in t:
+        return True, "switch_api_tts_provider", "elevenlabs"
+    elif "enable remote transcription" in t or "remote transcription" in t:
+        return True, "switch_stt_mode", "remote"
+    elif "enable local transcription" in t or "local transcription" in t:
+        return True, "switch_stt_mode", "local"
+    return False, None, None
 
 class PiMCPClient:
     def __init__(self):
-        print("[DEBUG] Initializing PiMCPClient...")
-        try:
-            self.audio_manager = AudioManager()
-        except Exception as e:
-            print(f"[ERROR] AudioManager failed to initialize: {e}")
-            raise
-
-        try:
-            self.display_manager = DisplayManager(
-                svg_path=config.SVG_PATH,
-                boot_img_path=config.BOOT_IMG_PATH,
-                window_size=config.WINDOW_SIZE
-            )
-        except Exception as e:
-            print(f"[ERROR] DisplayManager failed to initialize: {e}")
-            raise
-
-        try:
-            self.stt = VoskTranscriber(config.VOSK_MODEL_PATH)
-        except Exception as e:
-            print(f"[ERROR] VoskTranscriber failed to initialize: {e}")
-            raise
-
-        try:
-            self.wakeword = WakeWordDetector()
-        except Exception as e:
-            print(f"[ERROR] WakeWordDetector failed to initialize: {e}")
-            raise
-
+        from client_config import (
+            SVG_PATH, BOOT_IMG_PATH, WINDOW_SIZE, VOSK_MODEL_PATH, DEVICE_ID, MCP_SERVER_URI
+        )
+        self.audio_manager = AudioManager()
+        self.display_manager = DisplayManager(
+            svg_path=SVG_PATH,
+            boot_img_path=BOOT_IMG_PATH,
+            window_size=WINDOW_SIZE
+        )
+        self.stt = VoskTranscriber(VOSK_MODEL_PATH)
+        self.wakeword = WakeWordDetector()
         self.keyboard = find_pi_keyboard()
-        if self.keyboard:
-            print(f"[DEBUG] Found Pi Keyboard: {self.keyboard}")
-        else:
-            print("[DEBUG] Pi Keyboard NOT found.")
-
-        self.notification_queue = asyncio.Queue()
-        self.persona = PERSONA
-        self.voice = VOICE
-        self.session_id = None
         self.tts_handler = TTSHandler()
         self.system_manager = ClientSystemManager()
-        self.access_token = get_access_token()
-        self.server_url = "http://192.168.0.50:8765/events/sse"  # SSE endpoint base (no trailing slash)
-        print("[DEBUG] PiMCPClient initialized.")
+        self.server_url = MCP_SERVER_URI
+        self.session_id = None
+        self.stt_mode = config._client_config.get("stt_mode", "local")
 
     def listen_keyboard(self) -> bool:
         if not self.keyboard:
@@ -187,7 +123,6 @@ class PiMCPClient:
         for _ in range(5):
             event = self.keyboard.read_one()
             if event and event.type == ecodes.EV_KEY and event.code == 125 and event.value == 1:
-                print("[DEBUG] Keyboard wake detected.")
                 return True
         return False
 
@@ -204,53 +139,38 @@ class PiMCPClient:
         except Exception as e:
             print(f"[ERROR] Failed to play audio: {e}")
 
-    async def handle_notification(self, msg):
+    async def capture_speech(self):
         try:
-            await self.display_manager.update_display("speaking", mood="cheerful")
-            await self.audio_manager.queue_audio(audio_file=None, generated_text=msg)
-            await self.audio_manager.wait_for_audio_completion()
-            await self.display_manager.update_display("idle")
+            await self.display_manager.update_display("listening")
+            transcript = await self.audio_manager.capture_speech_vosk(self.stt)
+            return transcript
         except Exception as e:
-            print(f"[ERROR] Failed to handle notification: {e}")
-
-    # REMOVE: Old HTTP POST registration
-    # async def register_device(self): ...
-
-    # REMOVE: Old HTTP POST send_process_input
-    # async def send_process_input(self, transcript): ...
+            print(f"[ERROR] Speech capture failed: {e}")
+            return None
 
     async def run(self):
+        from client_config import DEVICE_ID
         try:
-            # === NEW: Use MCP SSE Client ===
-            # The 'Authorization' header is handled via extra_headers
             async with sse_client(
                 self.server_url,
-                headers={"Authorization": f"Bearer {self.access_token}"}
+                headers={}
             ) as (read, write):
                 async with ClientSession(read, write) as session:
                     await session.initialize()
-
-                    # Register device using call_tool
-                    print("[DEBUG] Registering device via SSE...")
                     register_result = await session.call_tool(
                         "register_device",
                         arguments={
                             "device_id": DEVICE_ID,
-                            "capabilities": DEVICE_CAPABILITIES
+                            "capabilities": {
+                                "input": ["text", "audio"],
+                                "output": ["text", "audio"],
+                                "tts_mode": config._client_config.get("tts_mode", "api"),
+                                "api_tts_provider": get_active_tts_provider(),
+                            }
                         }
                     )
-                    print("[DEBUG] Register result:", register_result)
-                    print("register_result dict:", register_result.model_dump())
-                    if getattr(register_result, "isError", False):
-                        # Pydantic V2: use model_dump() if you want dict, or access directly
-                        error_text = None
-                        if register_result.content and len(register_result.content) > 0:
-                            error_text = getattr(register_result.content[0], "text", None)
-                        print(f"[FATAL ERROR] Registration failed: {error_text or 'Unknown error'}")
-                        return
-                    # If not error, extract session_id as before (adjust path if needed)
                     session_info = None
-                    if register_result.content and len(register_result.content) > 0:
+                    if getattr(register_result, "content", None) and len(register_result.content) > 0:
                         first_content = register_result.content[0]
                         if hasattr(first_content, "text"):
                             try:
@@ -262,27 +182,18 @@ class PiMCPClient:
                         print("[FATAL ERROR] Registration failed (no session_id in server response).")
                         return
                     self.session_id = session_info["session_id"]
-                    print(f"[INFO] Registered, session_id: {self.session_id}")
 
                     await self.display_manager.update_display("idle")
                     while True:
                         await self.display_manager.update_display("idle")
-                        try:
-                            notif = self.notification_queue.get_nowait()
-                            await self.handle_notification(notif)
-                            continue
-                        except asyncio.QueueEmpty:
-                            pass
 
                         wake_model = None
                         try:
                             if self.listen_keyboard():
-                                print("[INFO] Keyboard wake")
                                 wake_model = "keyboard"
                             else:
                                 wm = self.listen_wakeword()
                                 if wm:
-                                    print(f"[INFO] Wakeword detected: {wm}")
                                     wake_model = wm
                         except Exception as e:
                             print(f"[ERROR] Wakeword/keyboard detection failed: {e}")
@@ -294,10 +205,9 @@ class PiMCPClient:
 
                         await self.display_manager.update_display("listening")
                         try:
-                            transcript = await capture_speech()
+                            transcript = await self.capture_speech()
                         except Exception as e:
                             print(f"[ERROR] Audio capture failed: {e}")
-                            traceback.print_exc()
                             await self.display_manager.update_display("idle")
                             continue
 
@@ -305,33 +215,37 @@ class PiMCPClient:
                             await self.display_manager.update_display("idle")
                             continue
 
-                        # NEW: Check for and handle local commands
-                        try:
-                            is_cmd, cmd_type, arg = self.system_manager.detect_command(transcript)
-                            if is_cmd:
+                        # System command detection and runtime switching
+                        is_cmd, cmd_type, arg = detect_system_command(transcript)
+                        if is_cmd:
+                            if cmd_type == "switch_tts_mode":
+                                config._client_config["tts_mode"] = arg
+                                save_client_config(config._client_config)
+                                print(f"[INFO] TTS mode switched to: {arg}")
+                            elif cmd_type == "switch_api_tts_provider":
+                                set_active_tts_provider(arg)
+                                print(f"[INFO] API TTS provider switched to: {arg}")
+                            elif cmd_type == "switch_stt_mode":
+                                self.stt_mode = arg
+                                config._client_config["stt_mode"] = arg
+                                save_client_config(config._client_config)
+                                print(f"[INFO] STT mode switched to: {arg}")
+                            else:
                                 await self.system_manager.handle_command(cmd_type, arg)
-                                await self.display_manager.update_display("idle")
-                                continue  # Skip sending to server
-                        except Exception as e:
-                            print(f"[ERROR] Local command detection/handling failed: {e}")
-                            traceback.print_exc()
                             await self.display_manager.update_display("idle")
                             continue
 
                         try:
                             await self.display_manager.update_display("thinking")
-                            # === SEND TO MCP SERVER OVER SSE ===
                             response = await session.call_tool(
                                 "run_LAURA",
                                 arguments={
                                     "session_id": self.session_id,
                                     "input_type": "text",
                                     "payload": {"text": transcript},
-                                    "output_mode": [OUTPUT_MODE] if isinstance(OUTPUT_MODE, str) else OUTPUT_MODE,
                                     "timestamp": datetime.utcnow().isoformat(),
                                 }
                             )
-                            print("[DEBUG] Assistant response:", response)
                         except Exception as e:
                             print(f"[ERROR] Failed to send input: {e}")
                             traceback.print_exc()
@@ -341,26 +255,38 @@ class PiMCPClient:
                             await self.display_manager.update_display("idle")
                             continue
 
-                        try:
-                            if response.get("persona"):
-                                self.persona = response["persona"]
-                            if response.get("voice"):
-                                self.voice = response["voice"]
+                        # Get active persona from the server response
+                        active_persona = response.get("active_persona", "laura")
+                        provider = get_active_tts_provider()
+                        voice = get_voice_for_persona(provider, active_persona)
 
+                        # TTS/Output
+                        try:
                             mood = response.get("mood", "casual")
                             await self.display_manager.update_display("speaking", mood=mood)
-                            # Handle audio response based on TTS location preference
-                            if TTS_LOCATION == "client" and "text" in response and response["text"]:
-                                audio_bytes = await self.tts_handler.generate_audio(response["text"])
+                            tts_mode = config._client_config.get("tts_mode", "api")
+                            if tts_mode == "local" and "text" in response and response["text"]:
+                                audio_bytes = await self.tts_handler.generate_audio_local(response["text"])
                                 if audio_bytes:
                                     await self.play_audio(audio_bytes)
                                 else:
-                                    print("[ERROR] TTSHandler failed to generate audio.")
-                            elif "audio" in response and response["audio"]:
-                                await self.play_audio(bytes(response["audio"]))
-                            elif "text" in response and response["text"]:
-                                await self.audio_manager.queue_audio(audio_file=None, generated_text=response["text"])
-                                await self.audio_manager.wait_for_audio_completion()
+                                    print("[ERROR] Local TTS failed to generate audio.")
+                            elif tts_mode == "api" and "text" in response and response["text"]:
+                                if provider == "elevenlabs":
+                                    audio_bytes = await self.tts_handler.generate_audio_elevenlabs(response["text"], voice)
+                                elif provider == "cartesia":
+                                    audio_bytes = await self.tts_handler.generate_audio_cartesia(response["text"], voice)
+                                else:
+                                    print(f"[ERROR] Unknown API TTS provider: {provider}")
+                                    audio_bytes = None
+                                if audio_bytes:
+                                    await self.play_audio(audio_bytes)
+                                else:
+                                    print("[ERROR] API TTS failed to generate audio.")
+                            elif tts_mode == "text" and "text" in response and response["text"]:
+                                print("Assistant:", response["text"])
+                            else:
+                                print("[WARN] No valid response to play or display.")
                         except Exception as e:
                             print(f"[ERROR] Failed to play/generate assistant response: {e}")
                             traceback.print_exc()
@@ -375,14 +301,6 @@ class PiMCPClient:
             self.wakeword.cleanup()
         except Exception as e:
             print(f"[ERROR] Wakeword cleanup failed: {e}")
-        # Add any other cleanup as necessary
-
-def cleanup(self):
-    try:
-        self.wakeword.cleanup()
-    except Exception as e:
-        print(f"[ERROR] Wakeword cleanup failed: {e}")
-    # Add any other cleanup as necessary
 
 async def main():
     client = PiMCPClient()
