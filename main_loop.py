@@ -1,5 +1,5 @@
 import asyncio
-import config # For SYSTEM_PROMPT, ANTHROPIC_MODEL, MAX_TOKENS, TEMPERATURE, CHAT_LOG_MAX_TOKENS, CHAT_LOG_RECOVERY_TOKENS
+import config # For SYSTEM_PROMPT, ANTHROPIC_MODEL, MAX_TOKENS, TEMPERATURE, CHAT_LOG_MAX_TOKENS
 import json
 import traceback
 from typing import Dict, Any, List
@@ -11,13 +11,17 @@ from function_definitions import sanitize_messages_for_api, trim_chat_log # For 
 from llm_integrations.anthropic_adapter import AnthropicLLMAdapter
 # from llm_integrations.openai_adapter import OpenAILLMAdapter # If you use OpenAI
 
-# Assuming TokenManager and DocumentManager are classes you can import
-# from token_manager import TokenManager # Placeholder, ensure correct import path
+# --- Step 1: Ensure TokenManager is correctly imported ---
+# If token_manager.py is in the same directory as main_loop.py:
+from token_manager import TokenManager
+# If it's in a subdirectory, e.g., 'managers', use:
+# from managers.token_manager import TokenManager
+
 # from document_manager import DocumentManager # Placeholder, ensure correct import path
 
 
 class MainLoop:
-    def __init__(self, token_manager_instance: Any, document_manager_instance: Any):
+    def __init__(self, token_manager_instance: TokenManager, document_manager_instance: Any): # Type hint for TokenManager
         print("[DEBUG MainLoop __init__] Initializing MainLoop...")
         self.token_manager = token_manager_instance
         self.document_manager = document_manager_instance
@@ -39,8 +43,6 @@ class MainLoop:
             system_prompt=config.SYSTEM_PROMPT, # Default system prompt
             max_tokens=config.MAX_TOKENS,       # Default max tokens for a response
             temperature=config.TEMPERATURE,     # Default temperature
-            # The adapter can be initialized with all tools,
-            # but specific calls will use dynamically selected relevant_tools
             tools=tool_registry.get_llm_tool_definitions()
         )
         print(f"[DEBUG MainLoop __init__] LLM Adapter initialized for {config.ACTIVE_PROVIDER} with model {model_name}")
@@ -54,7 +56,6 @@ class MainLoop:
             return {"error": f"Unknown tool: {function_name}"}
 
         try:
-            # Args from Anthropic are usually already a dict
             if not isinstance(function_args, dict):
                 print(f"[WARN MainLoop _tool_handler] function_args not a dict, attempting to use as is or parse if string: {type(function_args)}")
                 if isinstance(function_args, str):
@@ -93,10 +94,8 @@ class MainLoop:
 
             if not user_message_content:
                 print("[WARN MainLoop process_input] User message content is empty.")
-                # Optionally return a specific message or error
                 return {"text": "I didn't catch that. Could you please repeat?", "error": "Empty user message"}
 
-            # Get or initialize conversation history for this session
             if session_id not in self.conversations:
                 print(f"[DEBUG MainLoop process_input] New session, initializing conversation for: {session_id}")
                 self.conversations[session_id] = []
@@ -104,27 +103,22 @@ class MainLoop:
             current_conversation = self.conversations[session_id]
             print(f"[DEBUG MainLoop process_input] Conversation history for {session_id} (before adding new user message): {len(current_conversation)} messages")
 
-            # Add user message to conversation history
             new_user_message = {"role": "user", "content": user_message_content}
             current_conversation.append(new_user_message)
             print(f"[DEBUG MainLoop process_input] Added user message to conversation: {str(new_user_message)[:200]}")
 
-            # Trim conversation history using token-based trimmer
-            # Assuming trim_chat_log modifies current_conversation in place or returns the trimmed version
+            # --- Step 2: Update calls to trim_chat_log ---
+            # The trim_chat_log function will be modified to accept token_manager_instance and max_tokens_limit.
             current_conversation = trim_chat_log(
-                current_conversation,
-                config.CHAT_LOG_MAX_TOKENS,
-                config.CHAT_LOG_RECOVERY_TOKENS,
-                self.token_manager # Assuming token_manager might be needed for token counting by trim_chat_log
+                log=current_conversation,
+                token_manager_instance=self.token_manager,
+                max_tokens_limit=config.CHAT_LOG_MAX_TOKENS
             )
-            self.conversations[session_id] = current_conversation # Update if trim_chat_log returns a new list
+            self.conversations[session_id] = current_conversation 
             print(f"[DEBUG MainLoop process_input] Conversation history length after user message and trim: {len(current_conversation)}")
 
+            messages_for_api = sanitize_messages_for_api(list(current_conversation)) 
 
-            # Prepare messages for API (sanitization + document context)
-            messages_for_api = sanitize_messages_for_api(list(current_conversation)) # Send a copy
-
-            # Inject document context if available (mimicking LAURA_gradio.py logic)
             if self.document_manager and getattr(self.document_manager, "files_loaded", False):
                 if hasattr(self.document_manager, "get_claude_message_blocks"):
                     document_blocks = self.document_manager.get_claude_message_blocks()
@@ -133,28 +127,23 @@ class MainLoop:
                         if messages_for_api and messages_for_api[-1]["role"] == "user":
                             user_content = messages_for_api[-1].get("content", "")
                             user_content_blocks = []
-                            if isinstance(user_content, list): # Already blocks
+                            if isinstance(user_content, list): 
                                 user_content_blocks.extend([item for item in user_content if isinstance(item, dict)])
-                            elif isinstance(user_content, str): # Convert string to text block
+                            elif isinstance(user_content, str): 
                                 user_content_blocks.append({"type": "text", "text": user_content})
                             
                             messages_for_api[-1]["content"] = user_content_blocks + document_blocks
-                        else: # No prior user message or not a user message, append new one
+                        else: 
                             messages_for_api.append({"role": "user", "content": document_blocks})
                         print(f"[DEBUG MainLoop process_input] Messages for API after document injection (last message content type): {type(messages_for_api[-1]['content'] if messages_for_api else None)}")
-
 
             if not messages_for_api:
                 print("[ERROR MainLoop process_input] No valid messages to send to LLM API after sanitization/doc injection.")
                 return {"text": None, "error": "No valid messages for LLM"}
 
-            # Dynamic tool selection
             relevant_tools_for_call = []
             tool_choice_for_call = None
-            if self.token_manager.tools_are_active(): # Assuming tools_are_active is a method
-                # Assuming get_tools_for_query returns just the list of tool definitions
-                # LAURA_gradio.py had: tools_needed, relevant_tools = token_manager.get_tools_for_query(query)
-                # We'll assume get_tools_for_query now just returns the relevant tool JSONs
+            if self.token_manager.tools_are_active(): 
                 relevant_tools_for_call = self.token_manager.get_tools_for_query(user_message_content)
                 if relevant_tools_for_call:
                     tool_choice_for_call = {"type": "auto"}
@@ -166,17 +155,16 @@ class MainLoop:
 
             print(f"[DEBUG MainLoop process_input] Calling llm_adapter.generate_response with:")
             print(f"  messages (count): {len(messages_for_api)}")
-            # print(f"  messages (content sample): {json.dumps(messages_for_api[-2:], indent=2, default=str)}") # Log last few
             print(f"  system_prompt: {str(config.SYSTEM_PROMPT)[:100]}...")
             print(f"  tools (count): {len(relevant_tools_for_call)}")
             print(f"  tool_choice: {tool_choice_for_call}")
 
             llm_api_result = await self.llm_adapter.generate_response(
                 messages=messages_for_api,
-                tool_handler=self._tool_handler, # Pass the bound method
-                system_prompt=config.SYSTEM_PROMPT, # Can be overridden if needed
+                tool_handler=self._tool_handler, 
+                system_prompt=config.SYSTEM_PROMPT, 
                 tools=relevant_tools_for_call,
-                tool_choice=tool_choice_for_call, # Pass tool_choice if tools are present
+                tool_choice=tool_choice_for_call, 
                 max_tokens=config.MAX_TOKENS,
                 temperature=config.TEMPERATURE
             )
@@ -185,24 +173,20 @@ class MainLoop:
             assistant_response_text = llm_api_result.get("text")
             if llm_api_result.get("error"):
                 print(f"[WARN MainLoop process_input] LLM adapter returned an error: {llm_api_result.get('error')}")
-            elif assistant_response_text is not None: # Even empty string is a valid response
-                # The adapter's response "text" should be the final human-readable message
+            elif assistant_response_text is not None: 
                 current_conversation.append({"role": "assistant", "content": assistant_response_text})
                 print(f"[DEBUG MainLoop process_input] Added assistant response to conversation: {str(assistant_response_text)[:200]}")
                 
-                # Trim conversation history again after assistant's response
+                # --- Step 2 (repeated): Update calls to trim_chat_log ---
                 current_conversation = trim_chat_log(
-                    current_conversation,
-                    config.CHAT_LOG_MAX_TOKENS,
-                    config.CHAT_LOG_RECOVERY_TOKENS,
-                    self.token_manager
+                    log=current_conversation,
+                    token_manager_instance=self.token_manager,
+                    max_tokens_limit=config.CHAT_LOG_MAX_TOKENS
                 )
                 self.conversations[session_id] = current_conversation
                 print(f"[DEBUG MainLoop process_input] Conversation history length after assistant response and trim: {len(current_conversation)}")
             else:
                 print("[WARN MainLoop process_input] LLM adapter returned no 'text' and no 'error'. This might be unusual.")
-                # If stop_reason was tool_use but no text, adapter should have handled loop or returned error.
-                # If stop_reason was end_turn but no text, that's an empty response from LLM.
 
             print(f"[DEBUG MainLoop process_input] Final result being returned to orchestrator: {str(llm_api_result)[:500]}")
             return llm_api_result
