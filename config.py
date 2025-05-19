@@ -44,6 +44,26 @@ except Exception as e:
     MAX_TOKENS = 4096
     TEMPERATURE = 0.7
 
+# --- API KEYS (from secret.py, not from models.json!) ---
+try:
+    import secret
+    OPENAI_API_KEY = getattr(secret, "OPENAI_API_KEY", None)
+    ANTHROPIC_API_KEY = getattr(secret, "ANTHROPIC_API_KEY", None)
+except ImportError:
+    print("Warning: Could not import secret.py, API keys not loaded.")
+    OPENAI_API_KEY = None
+    ANTHROPIC_API_KEY = None
+
+# --- Dynamic API key selection for provider ---
+def get_active_api_key():
+    if ACTIVE_PROVIDER == "openai":
+        return OPENAI_API_KEY
+    elif ACTIVE_PROVIDER == "anthropic":
+        return ANTHROPIC_API_KEY
+    else:
+        return None
+
+
 # =======================
 # STT (Speech-To-Text)
 # =======================
