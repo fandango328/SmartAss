@@ -1,8 +1,12 @@
 import asyncio
 from typing import Dict, Any
 
-from core_functions import process_response_content, save_to_log_file
-
+from core_functions import process_response_content
+from function_definitions import save_to_log_file 
+import system_manager
+import display_manager
+import audio_manager
+import notification_manager
 class ResponseHandler:
     """
     Handles formatting and packaging of assistant responses for remote clients.
@@ -19,7 +23,11 @@ class ResponseHandler:
         chat_log: Any,
         session_capabilities: Dict[str, Any],
         session_id: str,
-        active_persona: str
+        active_persona: str,
+        system_manager: Any,    
+        display_manager: Any,
+        audio_manager: Any,
+        notification_manager: Any
     ) -> Dict[str, Any]:
         """
         Processes assistant content and returns a response payload for the client.
