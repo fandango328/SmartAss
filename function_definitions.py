@@ -921,48 +921,80 @@ def estimate_tokens(message):
         print(f"Warning: Error in token estimation: {e}")
         return 0  # Safe fallback
 
-def trim_chat_log(log, max_tokens=None):
-    if not max_tokens:
-        max_tokens = CHAT_LOG_MAX_TOKENS
+# In function_definitions.py
+# Make sure 'List' and 'Dict' are imported from 'typing' at the top of the file
+# from typing import List, Dict, Any (if not already present)
+# You might also need: from config import CHAT_LOG_MAX_TOKENS (if used as a default in the new function)
 
-    if len(log) < 2:  # Need at least one pair
-        return []
+def trim_chat_log(log: List[Dict[str, Any]], 
+                  token_manager_instance: Any,  # <-- Takes TokenManager now
+                  max_tokens_limit: int) -> List[Dict[str, Any]]: # <-- Takes max tokens limit
+    """
+    Trims the chat log to be under a specified token limit using the provided token_manager.
+    Prioritizes keeping the most recent user/assistant pairs.
+    """
+    
+    working_log = list(log) # Work on a copy to avoid modifying the original list directly
 
-    # Verify we start and end with complete pairs
-    if len(log) % 2 != 0:
-        print("WARNING: Odd number of messages in chat_log, trimming unpaired message")
-        log = log[:-1] if log[-1]["role"] == "user" else log[1:]
+    if len(working_log) < 2:
+        return working_log # Return original if too short to trim meaningfully
 
-    # Verify first and last messages are correct roles
-    if log[0]["role"] != "user" or log[-1]["role"] != "assistant":
-        print("WARNING: Chat log does not have correct role sequence")
-        # Find first user->assistant pair
-        for i in range(len(log)-1):
-            if log[i]["role"] == "user" and log[i+1]["role"] == "assistant":
-                log = log[i:]
-                break
+    # Attempt to ensure the log ends with an assistant message if pairing is critical
+    # and that it has an even number of entries for pairing.
+    # This simplified version focuses on the token counting part with pairs.
+    # More complex role validation can be added if strict pairing is essential.
 
-    # Now process complete pairs from newest to oldest
-    result = []
-    current_size = 0
+    # Ensure we are starting with a user message if possible, for pairing logic.
+    # This logic is simplified; for robust pairing, ensure log structure.
+    # For example, if the first message isn't 'user', or if log length is odd after initial checks.
 
-    # Work backwards in pairs
-    for i in range(len(log)-2, -1, -2):
-        assistant_msg = log[i+1]
-        user_msg = log[i]
+    # Iteratively build the result from the end, ensuring it's within token limits
+    trimmed_log_reversed = []
+    current_tokens = 0
+    
+    # Iterate backwards through the log by pairs (assistant, then user)
+    i = len(working_log) - 1
+    while i > 0: # Need at least two messages to form a pair (i and i-1)
+        assistant_msg = working_log[i]
+        user_msg = working_log[i-1]
 
-        # Calculate tokens for this pair
-        pair_tokens = token_manager.count_message_tokens([user_msg, assistant_msg])
-
-        if current_size + pair_tokens <= max_tokens:
-            # Insert pair at start (maintaining order)
-            result.insert(0, assistant_msg)
-            result.insert(0, user_msg)
-            current_size += pair_tokens
+        # Basic check for a user-assistant pair structure
+        if assistant_msg.get("role") == "assistant" and user_msg.get("role") == "user":
+            # Use the passed token_manager_instance
+            try:
+                pair_tokens = token_manager_instance.count_message_tokens([user_msg, assistant_msg])
+            except Exception as e:
+                print(f"Error counting tokens for a pair in trim_chat_log: {e}")
+                # Skip this pair or handle error appropriately
+                i -= 2 # Move to the next potential pair
+                continue
+            
+            if current_tokens + pair_tokens <= max_tokens_limit:
+                trimmed_log_reversed.append(assistant_msg)
+                trimmed_log_reversed.append(user_msg)
+                current_tokens += pair_tokens
+            else:
+                # This pair would exceed the limit, so stop
+                break 
         else:
-            break
+            # Not a valid pair sequence from the end, might indicate an issue
+            # or the end of well-formed pairs. For simplicity, we stop or skip.
+            # A more robust version might try to find the last valid pair.
+            print(f"WARN: Encountered non user/assistant pair at end of log during trim: {user_msg.get('role')}, {assistant_msg.get('role')}")
+            # Option: break, or i -= 1 to see if removing one message helps form a pair next.
+            # For this version, we'll just move past this unexpected structure.
+            pass # Implicitly, the non-pair messages are dropped from the trimmed end.
 
-    return result
+        i -= 2 # Move to the next potential pair
+
+    final_trimmed_log = list(reversed(trimmed_log_reversed))
+    
+    if not final_trimmed_log and log: # If trimming made it empty but original wasn't
+         print(f"WARN: trim_chat_log resulted in an empty list. Original length: {len(log)}. Max tokens: {max_tokens_limit}")
+         # Decide: return original if it's small enough, or truly empty.
+         # For now, if it's empty after trying to trim, it means even the last pair was too big or no valid pairs found.
+    
+    return final_trimmed_log
 
 def save_to_log_file(message: Dict[str, Any]) -> None:
     """
