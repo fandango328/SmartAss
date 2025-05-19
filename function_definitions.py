@@ -12,6 +12,8 @@ import subprocess
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional
+from google_creds import creds
+from googleapiclient.discovery import build
 
 # Third-Party Imports
 import requests
@@ -968,11 +970,20 @@ def save_to_log_file(message: Dict[str, Any]) -> None:
 
     This function takes a message dictionary with 'role' and 'content',
     adds a timestamp, and appends it to the daily chat log JSON file.
+    Skips protocol-only messages (tool_use/tool_result blocks).
 
     Args:
         message (dict): The message to save, containing 'role' and 'content' keys
     """
-    print(f"\n**** SAVE_TO_LOG_FILE CALLED: {message['role']} - '{message['content'][:30]}...' ****\n")
+    # Protocol discipline: skip tool_use/tool_result blocks
+    content = message.get("content")
+    if isinstance(content, list) and content:
+        first = content[0]
+        if isinstance(first, dict) and first.get("type") in ["tool_use", "tool_result"]:
+            print("DEBUG: Skipping save_to_log_file for protocol artifact (tool_use/tool_result)")
+            return
+
+    print(f"\n**** SAVE_TO_LOG_FILE CALLED: {message['role']} - '{str(message['content'])[:30]}...' ****\n")
 
     # Create the filename based on today's date (YYYY-MM-DD format)
     today = datetime.now().strftime("%Y-%m-%d")
@@ -1193,56 +1204,54 @@ def sanitize_messages_for_api(chat_log):
     """
     Sanitize chat log messages for API consumption.
     Ensures messages have required fields and proper structure.
-    Handles both text messages and tool interaction messages.
-    
+    Filters out historical tool_use/tool_result blocks—only allows them if present as the latest message (i.e., mid tool-use cycle).
+
     Args:
         chat_log: List of conversation messages
-        
+
     Returns:
         list: Sanitized messages ready for API consumption
     """
     if not chat_log:
         return []
 
-    # Copy all messages with valid structure
     sanitized = []
-    for msg in chat_log:
+    for idx, msg in enumerate(chat_log):
         if "role" not in msg or "content" not in msg:
             continue
-            
-        # Handle tool interaction messages (list type content)
-        if isinstance(msg["content"], list):
-            valid_blocks = []
-            for block in msg["content"]:
-                if not isinstance(block, dict):
+
+        # Skip historical tool_use/tool_result blocks
+        # Only allow tool_use/tool_result lists if it's the very last message (for in-progress tool-use cycle)
+        is_last = idx == len(chat_log) - 1
+        if isinstance(msg["content"], list) and msg["content"]:
+            first = msg["content"][0]
+            if isinstance(first, dict) and first.get("type") in ["tool_use", "tool_result"]:
+                if not is_last:
                     continue
-                    
-                # Validate tool use blocks
-                if block.get("type") == "tool_use":
-                    if all(k in block for k in ["id", "name", "input"]):
-                        valid_blocks.append(block)
-                # Validate tool result blocks        
-                elif block.get("type") == "tool_result":
-                    if all(k in block for k in ["tool_use_id", "content"]):
-                        valid_blocks.append(block)
-                        
-            if valid_blocks:
+                # If last, include as-is for API
                 sanitized.append({
                     "role": msg["role"],
-                    "content": valid_blocks
+                    "content": msg["content"]
                 })
-                
-        # Handle regular text messages
-        elif isinstance(msg["content"], str):
+                continue
+
+        # Otherwise, include regular assistant/user messages
+        if isinstance(msg["content"], str):
+            sanitized.append({
+                "role": msg["role"],
+                "content": msg["content"]
+            })
+        elif isinstance(msg["content"], list):
+            # Only non-protocol lists (should be rare, but handle gracefully)
             sanitized.append({
                 "role": msg["role"],
                 "content": msg["content"]
             })
 
-    # Check if last message is from user
+    # Check if last message is from user (Anthropic expects last message to be user for new input)
     if sanitized and sanitized[-1]["role"] != "user":
-        return sanitized[:-1]  # Remove last non-user message
-        
+        return sanitized[:-1]
+
     return sanitized
 
 def find_calendar_event(description, time_range_days=7):
@@ -1364,12 +1373,13 @@ def optimize_memory():
     
 def load_recent_context(token_manager=None, token_limit=None):
     """
-    Load recent conversation context from log files, filtering out system commands.
-    
+    Load recent conversation context from log files, filtering out system commands
+    and skipping protocol-only tool_use/tool_result messages.
+
     Args:
         token_manager: TokenManager instance for counting tokens
         token_limit: Optional override for token limit (default: from config)
-        
+
     Returns:
         list: Filtered chat messages
     """
@@ -1395,7 +1405,7 @@ def load_recent_context(token_manager=None, token_limit=None):
         try:
             if not os.path.exists(file):
                 continue
-                
+
             with open(file, "r") as f:
                 logs = json.load(f)
 
@@ -1412,23 +1422,33 @@ def load_recent_context(token_manager=None, token_limit=None):
                 else:
                     continue
 
-                # Ensure message has required fields and non-empty content
-                content = message.get("content", "").strip()
+                content = message.get("content", "")
                 role = message.get("role")
 
-                if not content or not role:
+                # Protocol discipline: skip tool_use/tool_result blocks
+                if isinstance(content, list) and content:
+                    first = content[0]
+                    if isinstance(first, dict) and first.get("type") in ["tool_use", "tool_result"]:
+                        continue
+
+                # Ensure message has required fields and non-empty content
+                if isinstance(content, str):
+                    content_value = content.strip()
+                else:
+                    content_value = content
+
+                if not content_value or not role:
                     continue
 
                 formatted_message = {
                     "role": role,
-                    "content": content
+                    "content": content_value
                 }
 
                 # Skip system commands
-                content_lower = content.lower()
+                content_lower = content_value.lower() if isinstance(content_value, str) else ""
                 is_system_command = False
 
-                # Check all system command types
                 for command_type, actions in SYSTEM_STATE_COMMANDS.items():
                     for action, commands in actions.items():
                         if any(cmd.lower() in content_lower for cmd in commands):
@@ -1437,13 +1457,11 @@ def load_recent_context(token_manager=None, token_limit=None):
                     if is_system_command:
                         break
 
-                # Additional check for calibration commands
-                if (("voice" in content_lower or "boys" in content_lower) and 
+                if (("voice" in content_lower or "boys" in content_lower) and
                     any(word in content_lower for word in ["calibrat", "detect"])):
                     is_system_command = True
 
                 if not is_system_command:
-                    # Only count tokens if we have a token manager
                     if token_manager:
                         try:
                             msg_tokens = token_manager.count_message_tokens([formatted_message])
@@ -1453,7 +1471,7 @@ def load_recent_context(token_manager=None, token_limit=None):
                         except Exception as e:
                             print(f"Error counting tokens: {e}")
                             continue
-                    
+
                     filtered_messages.insert(0, formatted_message)
 
         except Exception as e:
@@ -1561,15 +1579,26 @@ def get_audio_path(category, context=None, persona=None):
     return primary_path
 
 def get_calendar_service():
-    """Helper function to build and return calendar service"""
+    """Helper function to build and return calendar service for Google Calendar API."""
     try:
+        global creds  # Ensures we refer to the creds object in the main script if imported
+        if creds is None:
+            print("ERROR: No credentials available for Google Calendar API.")
+            return None
+        if not hasattr(creds, "valid") or not creds.valid:
+            print("ERROR: Credentials are invalid or expired for Google Calendar API.")
+            return None
         if DEBUG_CALENDAR:
             print("DEBUG: Attempting to build calendar service")
         service = build("calendar", "v3", credentials=creds)
         if DEBUG_CALENDAR:
             print("DEBUG: Calendar service built successfully")
         return service
+    except NameError as ne:
+        print("ERROR: 'creds' is not defined in get_calendar_service(). Make sure it is imported or defined globally.")
+        traceback.print_exc()
+        return None
     except Exception as e:
-        if DEBUG_CALENDAR:
-            print(f"DEBUG: Error building calendar service: {e}")
+        print(f"ERROR: Exception occurred while building Google Calendar service: {e}")
+        traceback.print_exc()
         return None
