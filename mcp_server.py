@@ -6,7 +6,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List
 import functools
-from starlette.applications import Starlette
 from mcp.server.fastmcp.server import FastMCP, Context
 
 # ==== Server Setup ====
@@ -95,7 +94,6 @@ async def run_LAURA(
         raise ValueError("Invalid session_id. Please register your device first.")
 
     # Here, insert your actual input processing logic!
-    # For now, we'll just echo back the input for testing.
     result_text = f"You said: {payload.get('text', '')}"
 
     response_payload = {
@@ -103,7 +101,7 @@ async def run_LAURA(
         "voice": "default",
         "mood": "casual",
         "text": result_text,
-        "audio": None,  # You can generate audio bytes here if needed
+        "audio": None,
     }
     await log_event(session_id, "response", response_payload)
     print(f"[DEBUG] run_LAURA response: {response_payload}")
@@ -136,18 +134,10 @@ async def push_notification(
         "timestamp": datetime.utcnow().isoformat()
     }
 
-# ==== ASGI APP for BOTH HTTP and SSE ====
-# HTTP API: /api
-# SSE (notifications/streaming): /events
-
+# ==== SSE APP ONLY ====
 app = mcp.sse_app()
 
-print("SSE App:", app)
-print("SSE App routes:", getattr(app, 'routes', None))
-print("ROUTES:", [route.path for route in app.routes])
-
-# ==== MAIN for direct execution ====
 if __name__ == "__main__":
     import uvicorn
-    print("Starting MCP server with HTTP API on /api and SSE on /events ...")
+    print("Starting MCP server with SSE only ...")
     uvicorn.run(app, host="0.0.0.0", port=8765)
