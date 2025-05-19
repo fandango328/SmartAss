@@ -392,6 +392,13 @@ async def handle_calendar_query(calendar_manager, query_type, **kwargs):
         traceback.print_exc()
         return f"Error processing calendar query: {str(e)}"
 
+import re # Make sure re is imported
+import traceback # Make sure traceback is imported
+from datetime import datetime # Make sure datetime is imported
+
+# Assume MOOD_MAPPINGS might be defined globally in the same file or imported.
+# Example: MOOD_MAPPINGS = {"happy": "cheerful", "sad": "somber"}
+
 async def process_response_content(content, chat_log, system_manager, display_manager, audio_manager, notification_manager):
     """
     Process API response content for voice generation and chat log storage.
@@ -407,109 +414,122 @@ async def process_response_content(content, chat_log, system_manager, display_ma
         notification_manager: Notification manager for queue checks
         
     Returns:
-        str: Formatted message ready for voice generation
+        Tuple[str, str, str]: A tuple containing:
+            - original_message (str): The original, unprocessed text content.
+            - formatted_message_for_tts (str): Text formatted for TTS.
+            - mood_to_return (str): The detected or default mood string.
     """
     print(f"\n[{datetime.now().strftime('%H:%M:%S.%f')}] === Response Processing Debug ===")
     print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Incoming content type: {type(content)}")
     print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Incoming content raw: {repr(content)}")
     print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Audio state - Speaking: {getattr(audio_manager, 'is_speaking', None)}, Playing: {getattr(audio_manager, 'is_playing', None)}")
-    print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Notification queue size: {getattr(notification_manager.notification_queue, 'qsize', lambda: 'N/A')()}")
+    # Ensure notification_manager and its queue exist before trying to get qsize
+    if hasattr(notification_manager, 'notification_queue') and notification_manager.notification_queue is not None:
+        print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Notification queue size: {getattr(notification_manager.notification_queue, 'qsize', lambda: 'N/A')()}")
+    else:
+        print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Notification queue not available on notification_manager.")
 
-    def extract_text_from_content(content, depth=0):
+
+    mood_to_return = "neutral"  # Default mood
+
+    def extract_text_from_content(content_to_extract, depth=0): # Renamed arg to avoid conflict
         indent = "  " * depth
-        print(f"{indent}Extracting text from: {type(content)}: {repr(content)[:80]}")
+        print(f"{indent}Extracting text from: {type(content_to_extract)}: {repr(content_to_extract)[:80]}")
 
-        # Anthropic block objects (e.g., TextBlock), prefer .text field
-        if hasattr(content, "text") and isinstance(getattr(content, "text", None), str):
-            print(f"{indent}Block object with .text: {content.text[:80]}")
-            return content.text
-        if hasattr(content, "content"):
-            print(f"{indent}Block object with .content, recursing...")
-            return extract_text_from_content(content.content, depth+1)
-        if isinstance(content, str):
+        if hasattr(content_to_extract, "text") and isinstance(getattr(content_to_extract, "text", None), str):
+            print(f"{indent}Block object with .text: {content_to_extract.text[:80]}")
+            return content_to_extract.text
+        if hasattr(content_to_extract, "content"): # Check type of .content
+            print(f"{indent}Object with .content, recursing...")
+            return extract_text_from_content(content_to_extract.content, depth + 1)
+        if isinstance(content_to_extract, str):
             print(f"{indent}Returning string directly.")
-            return content
-        elif isinstance(content, dict):
-            if "type" in content:
-                print(f"{indent}Block type: {content.get('type')}")
-            # Prefer 'text', then 'content'
-            if 'text' in content and isinstance(content['text'], str):
+            return content_to_extract
+        elif isinstance(content_to_extract, dict):
+            if "type" in content_to_extract:
+                print(f"{indent}Block type: {content_to_extract.get('type')}")
+            if 'text' in content_to_extract and isinstance(content_to_extract['text'], str):
                 print(f"{indent}Found 'text' field.")
-                return content['text']
-            elif 'content' in content and isinstance(content['content'], str):
-                print(f"{indent}Found 'content' field (str).")
-                return content['content']
-            elif 'content' in content and isinstance(content['content'], list):
-                print(f"{indent}Found 'content' field (list), recursing...")
-                return extract_text_from_content(content['content'], depth+1)
+                return content_to_extract['text']
+            elif 'content' in content_to_extract: # Recurse if 'content' is present
+                print(f"{indent}Found 'content' field, recursing...")
+                return extract_text_from_content(content_to_extract['content'], depth + 1)
             else:
-                # Fallback: join all string values in dict
-                join_strs = [str(v) for v in content.values() if isinstance(v, str)]
+                join_strs = [str(v) for v in content_to_extract.values() if isinstance(v, str)]
                 print(f"{indent}Fallback join of string values in dict: {join_strs}")
                 return " ".join(join_strs)
-        elif isinstance(content, list):
-            print(f"{indent}Content is a list of length {len(content)}")
+        elif isinstance(content_to_extract, list):
+            print(f"{indent}Content is a list of length {len(content_to_extract)}")
             result = []
-            for idx, block in enumerate(content):
+            for idx, block in enumerate(content_to_extract):
                 print(f"{indent}Processing list item {idx}: {type(block)}")
-                result.append(extract_text_from_content(block, depth+1))
+                result.append(extract_text_from_content(block, depth + 1))
             joined = " ".join([x for x in result if x])
             print(f"{indent}Joined list result: {repr(joined)[:80]}")
             return joined
         else:
             print(f"{indent}Unknown content type, using str().")
-            return str(content)
+            return str(content_to_extract)
 
     try:
         # Step 1: Parse content into usable text
         text = extract_text_from_content(content)
         print(f"\nDEBUG - Full response text after extraction:\n{text}\n")
         
-        # Step 2: Parse mood and preserve complete message
         original_message = text  # Store original message before any processing
+        
+        # Step 2: Parse mood
         mood_match = re.match(r'^\[(.*?)\]([\s\S]*)', text, re.IGNORECASE)
         if mood_match:
-            raw_mood = mood_match.group(1)         # Extract mood from [mood]
-            clean_message = mood_match.group(2)     # Get complete message content
-            mapped_mood = None
-            if 'MOOD_MAPPINGS' in globals():
-                mapped_mood = MOOD_MAPPINGS.get(raw_mood.lower(), None)
+            raw_mood = mood_match.group(1).strip()
+            clean_message = mood_match.group(2).strip() # Message with mood tag removed
+            
+            # Determine mood_to_return
+            # Ensure MOOD_MAPPINGS is accessible, e.g., defined globally or passed in
+            if 'MOOD_MAPPINGS' in globals() and isinstance(globals().get('MOOD_MAPPINGS'), dict):
+                mood_to_return = MOOD_MAPPINGS.get(raw_mood.lower(), raw_mood.lower())
             else:
-                mapped_mood = raw_mood.lower()
-            if mapped_mood and display_manager:
-                print(f"DEBUG - Mood detected and updating display: {mapped_mood}")
-                await display_manager.update_display('speaking', mood=mapped_mood)
+                mood_to_return = raw_mood.lower()
+            
+            if display_manager and hasattr(display_manager, 'update_display'):
+                print(f"DEBUG - Mood detected: '{raw_mood}'. Mapped mood: '{mood_to_return}'. Updating display.")
+                await display_manager.update_display('speaking', mood=mood_to_return)
+            else:
+                print(f"DEBUG - Mood detected: '{raw_mood}'. Mapped mood: '{mood_to_return}'. Display manager not available or no update_display method.")
         else:
-            clean_message = text
-            print("DEBUG - No mood detected in message")
+            clean_message = text # No mood tag, so clean_message is the same as original_message
+            mood_to_return = "neutral" # Explicitly set default
+            print(f"DEBUG - No mood detected in message. Defaulting to mood: '{mood_to_return}'")
 
-        # Step 3: Format message for voice generation
-        formatted_message = clean_message
+        # Step 3: Format message for voice generation (TTS)
+        # Use clean_message (which has the mood tag stripped) for TTS formatting
+        formatted_message_for_tts = clean_message
 
-        # Deep debug before formatting
-        print(f"DEBUG - Pre-format message for voice: {repr(formatted_message)}")
+        print(f"DEBUG - Pre-format message for voice (from clean_message): {repr(formatted_message_for_tts)}")
         
-        # Convert all newlines to spaces for continuous speech
-        formatted_message = formatted_message.replace('\n', ' ')
-        # Convert list markers to natural speech transitions
-        formatted_message = re.sub(r'(\d+)\.\s*', r'Number \1: ', formatted_message)
-        formatted_message = re.sub(r'^\s*-\s*', 'Also, ', formatted_message)
-        # Clean up any multiple spaces from formatting
-        formatted_message = re.sub(r'\s+', ' ', formatted_message)
-        # Add natural pauses after sentences
-        formatted_message = re.sub(r'(?<=[.!?])\s+(?=[A-Z])', '. ', formatted_message)
-        # Remove any trailing/leading whitespace
-        formatted_message = formatted_message.strip()
+        formatted_message_for_tts = formatted_message_for_tts.replace('\n', ' ')
+        formatted_message_for_tts = re.sub(r'(\d+)\.\s*', r'Number \1: ', formatted_message_for_tts)
+        # Corrected regex for list markers:
+        formatted_message_for_tts = re.sub(r'^\s*-\s+', 'Also, ', formatted_message_for_tts, flags=re.MULTILINE) # For '-' at start of lines
+        formatted_message_for_tts = re.sub(r'\s*-\s+', '. Also, ', formatted_message_for_tts) # For '-' elsewhere, treat as sentence break
         
-        print(f"DEBUG - Formatted message for voice (full):\n{formatted_message}\n")
+        formatted_message_for_tts = re.sub(r'\s+', ' ', formatted_message_for_tts)
+        formatted_message_for_tts = re.sub(r'(?<=[.!?])\s+(?=[A-Z])', '. ', formatted_message_for_tts) # Ensure space after punctuation
+        formatted_message_for_tts = formatted_message_for_tts.strip()
         
-        # Step 4: Return formatted message for voice generation
-        return original_message, formatted_message
+        print(f"DEBUG - Original message (for log/client text field): {repr(original_message)}")
+        print(f"DEBUG - Formatted message (for TTS, assigned to _ in handler): {repr(formatted_message_for_tts)}")
+        print(f"DEBUG - Mood to return: {repr(mood_to_return)}")
+        
+        # Step 4: Return three values
+        return original_message, formatted_message_for_tts, mood_to_return
 
     except Exception as e:
         print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] Content processing error: {e}")
         traceback.print_exc()
-        return "I apologize, but I encountered an error processing the response."
+        # Ensure three values are returned even in case of error
+        error_message = "I apologize, but I encountered an error processing the response."
+        return error_message, error_message, "error" # Return error message for both text fields, and "error" mood
         
 async def execute_calendar_query(tool_call: dict, calendar_service, notification_manager) -> str:
     """
