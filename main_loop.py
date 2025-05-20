@@ -1,23 +1,16 @@
 import asyncio
-import config # For SYSTEM_PROMPT, ANTHROPIC_MODEL, MAX_TOKENS, TEMPERATURE, CHAT_LOG_MAX_TOKENS
+import config 
 import json
 import traceback
 from typing import Dict, Any, List
 
-# Assuming these are correctly importable from your project structure
-from secret import ANTHROPIC_API_KEY # For Anthropic API Key
-from laura_tools import tool_registry # For tool definitions and handlers
-from function_definitions import sanitize_messages_for_api, trim_chat_log # For message prep and history trimming
+# Single import from function_definitions with all three functions
+from function_definitions import sanitize_messages_for_api, trim_chat_log, save_to_log_file
+
+from secret import ANTHROPIC_API_KEY 
+from laura_tools import tool_registry 
 from llm_integrations.anthropic_adapter import AnthropicLLMAdapter
-# from llm_integrations.openai_adapter import OpenAILLMAdapter # If you use OpenAI
-
-# --- Step 1: Ensure TokenManager is correctly imported ---
-# If token_manager.py is in the same directory as main_loop.py:
 from token_manager import TokenManager
-# If it's in a subdirectory, e.g., 'managers', use:
-# from managers.token_manager import TokenManager
-
-# from document_manager import DocumentManager # Placeholder, ensure correct import path
 
 
 class MainLoop:
@@ -107,13 +100,12 @@ class MainLoop:
             current_conversation.append(new_user_message)
             print(f"[DEBUG MainLoop process_input] Added user message to conversation: {str(new_user_message)[:200]}")
 
+            # Save the user message to log file
+            save_to_log_file(new_user_message)
+
             # --- Step 2: Update calls to trim_chat_log ---
             # The trim_chat_log function will be modified to accept token_manager_instance and max_tokens_limit.
-            current_conversation = trim_chat_log(
-                log=current_conversation,
-                token_manager_instance=self.token_manager,
-                max_tokens_limit=config.CHAT_LOG_MAX_TOKENS
-            )
+            current_conversation = trim_chat_log(current_conversation, self.token_manager, config.CHAT_LOG_MAX_TOKENS)
             self.conversations[session_id] = current_conversation 
             print(f"[DEBUG MainLoop process_input] Conversation history length after user message and trim: {len(current_conversation)}")
 
@@ -179,10 +171,10 @@ class MainLoop:
                 
                 # --- Step 2 (repeated): Update calls to trim_chat_log ---
                 current_conversation = trim_chat_log(
-                    log=current_conversation,
-                    token_manager_instance=self.token_manager,
-                    max_tokens_limit=config.CHAT_LOG_MAX_TOKENS
-                )
+                current_conversation,
+                self.token_manager,
+                config.CHAT_LOG_MAX_TOKENS
+            )
                 self.conversations[session_id] = current_conversation
                 print(f"[DEBUG MainLoop process_input] Conversation history length after assistant response and trim: {len(current_conversation)}")
             else:
