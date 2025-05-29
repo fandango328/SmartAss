@@ -155,7 +155,6 @@ class PiMCPClient:
             window_size=WINDOW_SIZE
         )
 
-
         vosk_model_p = client_settings.get("vosk_model_path")
         # VoskTranscriber no longer takes audio_manager in __init__
         self.stt = VoskTranscriber(model_path=vosk_model_p, sample_rate=client_settings.get("audio_sample_rate", 16000))
@@ -176,6 +175,16 @@ class PiMCPClient:
         for key, default_val in _fallback_vad.items():
             self.vad_params.setdefault(key, default_val)
         print(f"[PiMCPClient DEBUG] Effective VAD params: {self.vad_params}")
+
+        # Define conversation hook phrases
+        self.continuation_phrases = [
+            ".", # Ensures most complete sentences from assistant trigger re-engagement
+            "let me know", "tell me more", "what else", "anything else",
+            "can i help you with anything else", "do you need more information",
+            "share your thoughts", "i'm listening", "go ahead",
+            "feel free to elaborate", "i'd like to hear more", "please continue",
+            "what do you think", "how does that sound"
+        ]
 
     async def upload_document(self, file_path: str, session):  # Add session parameter
         """Upload a document to the server via MCP"""
@@ -217,6 +226,32 @@ class PiMCPClient:
             pass # No events available
         except Exception as e:
             print(f"[CAPTURE SPEECH] Keyboard check error: {e}")
+        return False
+
+    def has_conversation_hook(self, response_text: str) -> bool:
+        """
+        Detects if the assistant's response suggests the conversation should continue.
+        """
+        if not response_text or not isinstance(response_text, str):
+            print("[DEBUG] No response text or invalid type for hook check.")
+            return False
+
+        normalized_response = response_text.lower().strip()
+
+        if "[continue]" in normalized_response: # Explicit server directive
+            print("[DEBUG] Hook detected: [continue] tag")
+            return True
+        
+        if "?" in normalized_response:
+            print("[DEBUG] Hook detected: Question mark")
+            return True
+        
+        for phrase in self.continuation_phrases:
+            if phrase in normalized_response:
+                print(f"[DEBUG] Hook detected: Phrase '{phrase}'")
+                return True
+            
+        print("[DEBUG] No conversation hook detected in response.")
         return False
 
     async def capture_speech_with_vad(self):
@@ -356,6 +391,8 @@ class PiMCPClient:
                 print(f"[CAPTURE SPEECH] Final processed transcript: '{transcript}'")
                 return transcript.strip()
             else:
+                # This was missing, if transcript becomes None after checks, ensure display is updated.
+                print("[CAPTURE SPEECH] Transcript became None after processing.")
                 await self.display_manager.update_display('idle' if self.is_follow_up_interaction else 'sleep')
                 return None
 
@@ -396,15 +433,18 @@ class PiMCPClient:
         temp_dir = Path(tempfile.gettempdir())
         fname_base = "assistant_response_temp"
         
-        if source_engine == "piper":
-            fname = temp_dir / (fname_base + ".wav")
-        elif source_engine == "elevenlabs":
-            fname = temp_dir / (fname_base + ".mp3")
-        elif source_engine == "cartesia": # Now outputs WAV
-            fname = temp_dir / (fname_base + ".wav")
+        # Determine file extension based on source engine
+        if source_engine.lower() == "piper":
+            ext = ".wav"
+        elif source_engine.lower() == "elevenlabs":
+            ext = ".mp3"
+        elif source_engine.lower() == "cartesia": # Assuming Cartesia outputs WAV
+            ext = ".wav"
         else:
             print(f"[PLAY AUDIO WARN] Unknown source engine '{source_engine}', defaulting to .mp3 for saving.")
-            fname = temp_dir / (fname_base + ".mp3") # Fallback
+            ext = ".mp3" # Fallback
+
+        fname = temp_dir / (fname_base + ext)
 
         try:
             with open(fname, "wb") as f:
@@ -447,19 +487,25 @@ class PiMCPClient:
                     )
                     
                     session_info = None
+                    # Robust parsing of registration result
                     if hasattr(register_result, "content") and \
                        isinstance(register_result.content, list) and \
                        len(register_result.content) > 0 and \
                        hasattr(register_result.content[0], "text") and \
                        isinstance(register_result.content[0].text, str):
                         try:
-                            session_info = json.loads(register_result.content[0].text)
-                            print(f"[INFO] Device registration successful. Session Info: {session_info}")
+                            session_info_text = register_result.content[0].text.strip()
+                            if session_info_text: # Ensure not empty string
+                                session_info = json.loads(session_info_text)
+                                print(f"[INFO] Device registration successful. Session Info: {session_info}")
+                            else:
+                                print("[FATAL ERROR] Registration response text is empty.")
+                                return
                         except json.JSONDecodeError as e:
                             print(f"[FATAL ERROR] Could not parse session info JSON: '{register_result.content[0].text}'. Error: {e}")
                             return
                     else:
-                        print(f"[FATAL ERROR] Registration failed or invalid response: {register_result}")
+                        print(f"[FATAL ERROR] Registration failed or invalid response structure: {register_result}")
                         return
 
                     if not isinstance(session_info, dict) or "session_id" not in session_info:
@@ -470,9 +516,12 @@ class PiMCPClient:
 
                     await self.display_manager.update_display("idle")
                     
+                    # --- Outer Main Interaction Loop (handles new wake events) ---
                     while True:
                         wake_model = None
+                        self.is_follow_up_interaction = False # Reset for a new wake-initiated cycle
                         
+                        # Listen for wake event (keyboard or wakeword)
                         try:
                             if self.listen_keyboard():
                                 wake_model = "keyboard"
@@ -485,212 +534,228 @@ class PiMCPClient:
                         except Exception as e:
                             print(f"[ERROR] Wakeword/keyboard detection failed: {e}")
                             traceback.print_exc()
-                            await asyncio.sleep(0.1)
-                            continue
+                            await asyncio.sleep(0.1) # Brief pause before retrying
+                            continue # Retry wake detection
 
                         if not wake_model:
-                            await asyncio.sleep(0.05)
+                            await asyncio.sleep(0.05) # Polling interval for wake detection
                             continue
                         
-                        self.is_follow_up_interaction = False
-                        print(f"[INFO] Wake event processed. is_follow_up_interaction: {self.is_follow_up_interaction}")
-
-                        transcript = await self.capture_speech_with_vad()
-
-                        if not transcript:
-                            print("[INFO] No transcript captured.")
-                            await self.display_manager.update_display("idle")
-                            self.is_follow_up_interaction = False 
-                            continue
+                        # A wake event has occurred, start processing
+                        print(f"[INFO] Wake event '{wake_model}' processed. is_follow_up_interaction set to: {self.is_follow_up_interaction}")
                         
-                        print(f"[INFO] Captured transcript: '{transcript}'")
+                        # Initial speech capture after wake event
+                        current_processing_transcript = await self.capture_speech_with_vad()
 
-                        # Check for new files to upload - THIS IS WHERE IT BELONGS
-                        query_files_dir = Path("/home/user/LAURA/query_files")
-                        if query_files_dir.exists():
-                            for file_path in query_files_dir.iterdir():
-                                if file_path.is_file():
-                                    await self.upload_document(str(file_path), session)
-                                    # Move to offload
-                                    offload_dir = Path("/home/user/LAURA/query_offload")
-                                    offload_dir.mkdir(exist_ok=True)
-                                    file_path.rename(offload_dir / file_path.name)
+                        # --- Inner Conversational Loop (handles back-and-forth after initial wake) ---
+                        while current_processing_transcript:
+                            print(f"[INFO] Processing transcript: '{current_processing_transcript}' (Follow-up status: {self.is_follow_up_interaction})")
 
-                        is_cmd, cmd_type, arg = detect_system_command(transcript)
-                        if is_cmd:
-                            print(f"[INFO] Detected system command: {cmd_type} with arg: {arg}")
-                            if cmd_type == "switch_tts_mode":
-                                client_settings["tts_mode"] = arg
-                                save_client_config(client_settings)
-                                print(f"[INFO] TTS mode switched to: {arg}")
-                            elif cmd_type == "switch_api_tts_provider":
-                                set_active_tts_provider(arg)
-                                print(f"[INFO] API TTS provider switched to: {arg}")
-                            elif cmd_type == "switch_stt_mode":
-                                client_settings["stt_mode"] = arg
-                                save_client_config(client_settings)
-                                print(f"[INFO] STT mode switched to: {arg}")
+                            # Check for new files to upload before sending to LAURA
+                            query_files_dir = Path("/home/user/LAURA/query_files")
+                            if query_files_dir.exists():
+                                for file_path in query_files_dir.iterdir():
+                                    if file_path.is_file():
+                                        print(f"[INFO] Found document to upload: {file_path.name}")
+                                        await self.upload_document(str(file_path), session)
+                                        offload_dir = Path("/home/user/LAURA/query_offload")
+                                        offload_dir.mkdir(exist_ok=True)
+                                        file_path.rename(offload_dir / file_path.name)
+                                        print(f"[INFO] Document {file_path.name} moved to offload.")
                             
-                            await self.display_manager.update_display("idle")
-                            self.is_follow_up_interaction = False
-                            continue
+                            # Check for system command
+                            is_cmd, cmd_type, arg = detect_system_command(current_processing_transcript)
+                            if is_cmd:
+                                print(f"[INFO] Detected system command: {cmd_type} with arg: {arg}")
+                                if cmd_type == "switch_tts_mode":
+                                    client_settings["tts_mode"] = arg
+                                elif cmd_type == "switch_api_tts_provider":
+                                    set_active_tts_provider(arg) # Uses the helper
+                                elif cmd_type == "switch_stt_mode":
+                                    client_settings["stt_mode"] = arg
+                                save_client_config(client_settings) # Save any changes
+                                print(f"[INFO] System setting {cmd_type} updated to {arg}.")
+                                
+                                await self.display_manager.update_display("idle")
+                                current_processing_transcript = None # End inner conversation loop
+                                self.is_follow_up_interaction = False # Ensure reset
+                                continue # Break from inner loop, go to outer (wait for new wake)
 
-                        response_from_laura_tool = None 
-                        try:
-                            await self.display_manager.update_display("thinking")
-                            print(f"[INFO] Sending to LAURA tool: '{transcript}'")
-                            
-                            response_from_laura_tool = await session.call_tool(
-                                "run_LAURA",
-                                arguments={
-                                    "session_id": self.session_id,
-                                    "input_type": "text", 
-                                    "payload": {"text": transcript},
-                                    "timestamp": datetime.utcnow().isoformat() + "Z",
-                                    "output_mode": ["text"]
-                                }
-                            )
-                        except Exception as e:
-                            print(f"[ERROR] Failed to send input to LAURA tool: {e}")
-                            traceback.print_exc()
-                            await self.display_manager.update_display("idle")
-                            self.is_follow_up_interaction = False 
-                            continue 
-                        
-                        laura_response_data = None
-                        if hasattr(response_from_laura_tool, "content") and \
-                           response_from_laura_tool.content and \
-                           hasattr(response_from_laura_tool.content[0], "text"):
+                            # Send transcript to LAURA tool on the server
+                            response_from_laura_tool = None 
                             try:
-                                laura_response_data = json.loads(response_from_laura_tool.content[0].text)
-                                print(f"[INFO] LAURA response data (parsed JSON): {laura_response_data}")
-                            except json.JSONDecodeError as e:
-                                print(f"[ERROR] Could not parse LAURA response JSON: '{response_from_laura_tool.content[0].text}'. Error: {e}")
+                                await self.display_manager.update_display("thinking")
+                                print(f"[INFO] Sending to LAURA tool: '{current_processing_transcript}'")
+                                
+                                response_from_laura_tool = await session.call_tool(
+                                    "run_LAURA",
+                                    arguments={
+                                        "session_id": self.session_id,
+                                        "input_type": "text", 
+                                        "payload": {"text": current_processing_transcript},
+                                        "timestamp": datetime.utcnow().isoformat() + "Z",
+                                        "output_mode": ["text"] # Expecting text output for hooks
+                                    }
+                                )
                             except Exception as e:
-                                print(f"[ERROR] Unexpected error parsing LAURA response JSON: {e}")
+                                print(f"[ERROR] Failed to send input to LAURA tool: {e}")
                                 traceback.print_exc()
-                        else:
-                            print("[ERROR] LAURA response content item has no 'text' field or is not a string.")
-                        
-                        if not isinstance(laura_response_data, dict):
-                            print(f"[ERROR] Parsed LAURA response is not a dictionary. Type: {type(laura_response_data)}, Value: {laura_response_data}")
-                            await self.display_manager.update_display("idle")
-                            self.is_follow_up_interaction = False
-                            continue
+                                await self.display_manager.update_display("idle")
+                                current_processing_transcript = None # End inner conversation loop
+                                self.is_follow_up_interaction = False 
+                                continue # Break from inner loop
 
-                        active_persona = laura_response_data.get("active_persona", client_settings.get("device_id", "laura"))
-                        
-                        try:
-                            # Mood for display is taken from the structured 'mood' field in the response
-                            mood_for_display = laura_response_data.get("mood", "casual")
+                            # Process the response from LAURA
+                            laura_response_data = None
+                            # Robust parsing
+                            if hasattr(response_from_laura_tool, "content") and \
+                               isinstance(response_from_laura_tool.content, list) and \
+                               len(response_from_laura_tool.content) > 0 and \
+                               hasattr(response_from_laura_tool.content[0], "text") and \
+                               isinstance(response_from_laura_tool.content[0].text, str):
+                                try:
+                                    laura_response_text_from_tool = response_from_laura_tool.content[0].text.strip()
+                                    if laura_response_text_from_tool:
+                                        laura_response_data = json.loads(laura_response_text_from_tool)
+                                        print(f"[INFO] LAURA response data (parsed JSON): {laura_response_data}")
+                                    else:
+                                        print("[ERROR] LAURA response text from tool is empty.")
+                                except json.JSONDecodeError as e:
+                                    print(f"[ERROR] Could not parse LAURA response JSON: '{response_from_laura_tool.content[0].text}'. Error: {e}")
+                                except Exception as e: # Catch any other parsing error
+                                    print(f"[ERROR] Unexpected error parsing LAURA response JSON: {e}, Text: '{response_from_laura_tool.content[0].text}'")
+                                    traceback.print_exc()
+                            else:
+                                print("[ERROR] LAURA response content item has no 'text' field, is not a string, or content list is empty.")
+                            
+                            if not isinstance(laura_response_data, dict):
+                                print(f"[ERROR] Parsed LAURA response is not a valid dictionary. Ending conversation. Value: {laura_response_data}")
+                                await self.display_manager.update_display("idle")
+                                current_processing_transcript = None # End inner conversation loop
+                                self.is_follow_up_interaction = False
+                                continue
+
+                            active_persona = laura_response_data.get("active_persona", client_settings.get("device_id", "laura"))
+                            response_text_from_server = laura_response_data.get("text") # This is the text for TTS and hook check
+                            mood_for_display = laura_response_data.get("mood", "casual") # Mood from structured data
+
+                            if not response_text_from_server:
+                                print("[WARN] LAURA response dict has no 'text' field. Ending conversation.")
+                                current_processing_transcript = None # End inner conversation loop
+                                self.is_follow_up_interaction = False
+                                continue
+                            
+                            # Update display and prepare for TTS
                             await self.display_manager.update_display("speaking", mood=mood_for_display)
                             
+                            # Clean message for TTS (mood tag stripping, newlines)
+                            message_for_tts = response_text_from_server
+                            mood_match = re.match(r'^\[(.*?)\](.*)', message_for_tts, re.IGNORECASE | re.DOTALL) # DOTALL for multiline mood tags
+                            if mood_match:
+                                # Extracted mood from text could be used or compared with structured mood
+                                message_for_tts = mood_match.group(2).strip()
+                                print(f"[DEBUG] Stripped mood from text. Message for TTS now: '{message_for_tts[:100]}...'")
+                            
+                            message_for_tts = message_for_tts.replace('\n\n', '. ') # Consolidate paragraphs
+                            message_for_tts = message_for_tts.replace('\n', ' ')    # Single newlines to space
+                            message_for_tts = re.sub(r'\s+', ' ', message_for_tts)  # Multiple spaces to one
+                            message_for_tts = re.sub(r'\(\s*\)', '', message_for_tts) # Remove empty parentheses
+                            message_for_tts = message_for_tts.strip()
+                            
+                            print(f"[DEBUG] Final cleaned response text for TTS: '{message_for_tts[:100]}...'")
+
+                            # Perform TTS or print if text_only mode
                             current_tts_mode = client_settings.get("tts_mode", "api")
-                            response_text_to_speak = laura_response_data.get("text")
-
-                            if not response_text_to_speak:
-                                print("[WARN] LAURA response has no 'text' field for TTS/display.")
-                                self.is_follow_up_interaction = False
+                            if current_tts_mode == "text":
+                                print(f"Assistant ({active_persona}): {message_for_tts}")
                             else:
-                                print(f"[DEBUG] Original response text from LAURA: '{response_text_to_speak}'")
-                                message_for_tts = response_text_to_speak
-
-                                # Step 2: Parse mood from text and clean up message for TTS
-                                # This ensures if mood is embedded like [mood]text, it's stripped for TTS
-                                mood_match = re.match(r'^\[(.*?)\](.*)', message_for_tts, re.IGNORECASE)
-                                if mood_match:
-                                    # raw_mood_from_text = mood_match.group(1) # Mood already handled for display
-                                    message_for_tts = mood_match.group(2).strip()
-                                    print(f"[DEBUG] Stripped mood from text. Message for TTS now: '{message_for_tts}'")
-                                
-                                # Step 3: Clean up text formatting for voice generation
-                                message_for_tts = message_for_tts.replace('\n\n', '. ')
-                                message_for_tts = message_for_tts.replace('\n', ' ')
-                                message_for_tts = re.sub(r'\s+', ' ', message_for_tts)
-                                message_for_tts = re.sub(r'\(\s*\)', '', message_for_tts)
-                                message_for_tts = message_for_tts.strip()
-                                
-                                response_text_to_speak = message_for_tts # Use the fully cleaned message
-                                print(f"[DEBUG] Final cleaned response text for TTS/display: '{response_text_to_speak}'")
-
-                                if current_tts_mode == "text":
-                                    print(f"Assistant ({active_persona}): {response_text_to_speak}")
+                                print(f"[INFO] Requesting TTS. Mode: '{current_tts_mode}', Persona: '{active_persona}'")
+                                audio_bytes, successful_engine = await self.tts_handler.generate_audio(
+                                    text=message_for_tts, 
+                                    persona_name=active_persona 
+                                )
+                                if audio_bytes and successful_engine:
+                                    await self.play_audio(audio_bytes, successful_engine)
                                 else:
-                                    print(f"[INFO] Requesting TTS. Mode: '{current_tts_mode}', Persona: '{active_persona}'")
-                                    audio_bytes, successful_engine = await self.tts_handler.generate_audio(
-                                        text=response_text_to_speak, # Pass the cleaned text
-                                        persona_name=active_persona 
-                                    )
-                                    
-                                    if audio_bytes and successful_engine:
-                                        await self.play_audio(audio_bytes, successful_engine)
-                                    else:
-                                        print(f"[ERROR] TTS failed for mode '{current_tts_mode}' after trying available engines.")
+                                    print(f"[ERROR] TTS failed for mode '{current_tts_mode}' after trying available engines.")
+                            
+                            # IMPORTANT: Wait for audio to finish BEFORE checking hooks or listening again
+                            await self.audio_manager.wait_for_audio_completion()
+
+                            # Check for conversation hook to continue or end the inner loop
+                            if self.has_conversation_hook(response_text_from_server): # Use original server text for hook detection
+                                print("[INFO] Conversation hook detected. Listening for follow-up...")
+                                await self.display_manager.update_display("listening")
+                                self.is_follow_up_interaction = True # Set for the NEXT capture_speech_with_vad
                                 
-                                self.is_follow_up_interaction = True 
-                                print(f"[INFO] Interaction complete. is_follow_up_interaction: {self.is_follow_up_interaction}")
-
-                        except Exception as e:
-                            print(f"[ERROR] Failed to process or play assistant response: {e}")
-                            traceback.print_exc()
-                            self.is_follow_up_interaction = False
-
-                        await self.display_manager.update_display("idle")
+                                follow_up_transcript = await self.capture_speech_with_vad()
+                                
+                                if follow_up_transcript:
+                                    current_processing_transcript = follow_up_transcript # Continue inner loop with new transcript
+                                else:
+                                    print("[INFO] No follow-up speech captured. Ending conversation.")
+                                    await self.display_manager.update_display("idle")
+                                    current_processing_transcript = None # End inner loop
+                                    self.is_follow_up_interaction = False # Reset
+                            else:
+                                print("[INFO] No conversation hook detected. Ending conversation.")
+                                await self.display_manager.update_display("idle")
+                                current_processing_transcript = None # End inner loop
+                                self.is_follow_up_interaction = False # Reset
+                        # --- End of Inner Conversational Loop ---
+                        
+                        # After inner loop finishes (conversation ends), ensure display is idle and reset follow-up flag
+                        if not current_processing_transcript: # Double check if loop exited due to no transcript
+                             await self.display_manager.update_display("idle")
+                        self.is_follow_up_interaction = False 
+                        print("[INFO] Inner conversation loop ended. Returning to wait for new wake event.")
+                    # --- End of Outer Main Interaction Loop ---
         
         except ConnectionRefusedError:
             print(f"[FATAL ERROR] Connection refused to MCP server at {self.server_url}. Is it running?")
-        except (ConnectionError, Exception) as e:
-            print(f"[FATAL ERROR] Connection to MCP server closed or other critical error: {e}")
+        except (ConnectionError, Exception) as e: # Catch other connection errors or major issues
+            print(f"[FATAL ERROR] Main run loop encountered an unrecoverable error: {e}")
             traceback.print_exc()
         finally:
-            print("[INFO] Exiting run loop or run loop attempt.")
+            print("[INFO] Exiting run loop. Performing cleanup...")
             self.cleanup()
 
     def cleanup(self):
         print("[INFO] Starting PiMCPClient cleanup...")
         if self.wakeword:
             self.wakeword.cleanup()
-        if self.audio_manager: # Assuming audio_manager might have resources (like PyAudio instances for playback)
-            self.audio_manager.cleanup() # Add a cleanup method to AudioManager if needed
-        if self.stt: # VoskTranscriber might not need explicit cleanup unless it holds open files/streams not managed by PyAudio
-            pass # self.stt.cleanup() if it had one
-        if self.keyboard and hasattr(self.keyboard, 'close'): # evdev InputDevice has a close()
+        if self.audio_manager: 
+            self.audio_manager.cleanup() 
+        if self.stt: 
+            pass # VoskTranscriber might not have specific cleanup if PyAudio is handled by AudioManager
+        if self.keyboard and hasattr(self.keyboard, 'close'): 
             try:
                 self.keyboard.close()
                 print("[INFO] Pi 500 Keyboard device closed.")
             except Exception as e:
                 print(f"[ERROR] Error closing keyboard device: {e}")
-        # Add cleanup for display_manager if it uses Pygame and needs pygame.quit()
         if self.display_manager:
-            self.display_manager.cleanup() # Add a cleanup method to DisplayManager
-
+            self.display_manager.cleanup() 
         print("[INFO] PiMCPClient cleanup finished.")
 
 
 async def main():
-    # client_config.load_client_config() # Ensure config is loaded first if not already by module import
     client = PiMCPClient()
     try:
         await client.run()
     except KeyboardInterrupt:
-        print("Exiting due to KeyboardInterrupt...")
+        print("\nExiting due to KeyboardInterrupt...")
+        # Cleanup is now handled in client.run()'s finally block
     except Exception as e:
-        print(f"[FATAL ERROR] Unhandled exception in main: {e}")
+        print(f"[FATAL ERROR] Unhandled exception in main function: {e}")
         traceback.print_exc()
+        # Cleanup is now handled in client.run()'s finally block
     finally:
-        print("[INFO] Main function finally block reached. Cleaning up client...")
-        # Ensure client.cleanup() is called even if client.run() fails early in its try block
-        # If client object might not be fully initialized, check before calling cleanup.
-        if 'client' in locals() and hasattr(client, 'cleanup'):
-             client.cleanup() # This is now called within client.run()'s finally block too. Redundant?
-                              # Better to have it in run()'s finally to ensure it's tied to run's lifecycle.
-                              # Or ensure run() *always* calls it. Let's keep it in run()'s finally.
-        print("[INFO] Application shutdown complete.")
+        print("[INFO] Main function's execution finished.")
 
 
 if __name__ == "__main__":
-    # Ensure client_config is loaded before PiMCPClient is instantiated
     from client_config import load_client_config
-    load_client_config() # Explicitly load/reload if changes might occur before this script runs
+    load_client_config() 
     
     asyncio.run(main())
