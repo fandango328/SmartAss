@@ -139,6 +139,35 @@ async def push_notification(session_id: str, message: str, level: str = "info", 
         
     return {"status": status, "timestamp": datetime.utcnow().isoformat()}
 
+@require_bearer_token
+@mcp.tool()
+async def upload_document(session_id: str, filename: str, content: str, content_type: str = "application/octet-stream", ctx: Context = None) -> Dict[str, Any]:
+    print(f"[SERVER] upload_document called for session_id={session_id}, filename={filename}")
+    device_info = input_coordinator.get_device_info(session_id)
+    if not device_info:
+        raise ValueError("Invalid session_id for document upload")
+    
+    # Decode base64 content 
+    import base64
+    file_data = base64.b64decode(content)
+    
+    # Save file to query_files directory
+    from pathlib import Path
+    query_files_dir = Path("/home/user/LAURA/query_files")
+    query_files_dir.mkdir(exist_ok=True)
+    
+    file_path = query_files_dir / filename
+    with open(file_path, "wb") as f:
+        f.write(file_data)
+    
+    session = input_coordinator.device_sessions.get(session_id)
+    if session and input_coordinator.document_manager_for_main_loop:
+        # Trigger document manager to reload all files including the new one
+        await input_coordinator.document_manager_for_main_loop.load_all_files(clear_existing=False)
+
+    await log_event(session_id, "document_uploaded", {"filename": filename, "size": len(file_data)})
+    return {"status": "uploaded", "filename": filename, "timestamp": datetime.utcnow().isoformat()}
+
 # ==== SSE APP ONLY ====
 app = mcp.sse_app()
 
