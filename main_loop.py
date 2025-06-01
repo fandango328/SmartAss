@@ -14,28 +14,52 @@ from token_manager import TokenManager
 
 
 class MainLoop:
-    def __init__(self, token_manager_instance: TokenManager, document_manager_instance: Any): # Type hint for TokenManager
+    def __init__(self, token_manager_instance: TokenManager, document_manager_instance: Any):
         print("[DEBUG MainLoop __init__] Initializing MainLoop...")
         self.token_manager = token_manager_instance
         self.document_manager = document_manager_instance
+        
+        # Load chat history into runtime memory on startup
+        print("[DEBUG MainLoop __init__] Loading chat history into runtime memory...")
+        from function_definitions import load_recent_context, estimate_tokens
+        try:
+            self.runtime_chatlog = load_recent_context(self.token_manager, config.CHAT_LOG_RECOVERY_TOKENS)
+            
+            if self.runtime_chatlog:
+                total_estimated_tokens = sum(estimate_tokens(msg) for msg in self.runtime_chatlog)
+                print(f"[DEBUG MainLoop __init__] === STARTUP CONTEXT LOADING ===")
+                print(f"[DEBUG MainLoop __init__] Loaded {len(self.runtime_chatlog)} messages into runtime memory")
+                print(f"[DEBUG MainLoop __init__] Total estimated tokens: {total_estimated_tokens}")
+                
+                # Show conversation continuity info
+                first_msg = self.runtime_chatlog[0]
+                last_msg = self.runtime_chatlog[-1]
+                print(f"[DEBUG MainLoop __init__] Oldest message ({first_msg.get('role')}): '{str(first_msg.get('content', ''))[:30]}...'")
+                print(f"[DEBUG MainLoop __init__] Newest message ({last_msg.get('role')}): '{str(last_msg.get('content', ''))[:30]}...'")
+                print(f"[DEBUG MainLoop __init__] === RUNTIME CHATLOG READY ===")
+            else:
+                print("[DEBUG MainLoop __init__] No previous chat history found - starting fresh")
+                self.runtime_chatlog = []
+        except Exception as e:
+            print(f"[WARN MainLoop __init__] Failed to load startup context: {e}")
+            self.runtime_chatlog = []
+        
+        # Keep conversations dict for session tracking, but it will reference the shared runtime_chatlog
         self.conversations: Dict[str, List[Dict[str, Any]]] = {}
 
         if config.ACTIVE_PROVIDER == "anthropic":
             AdapterClass = AnthropicLLMAdapter
             model_name = config.ANTHROPIC_MODEL
-        # elif config.ACTIVE_PROVIDER == "openai":
-        #     AdapterClass = OpenAILLMAdapter
-        #     model_name = config.OPENAI_MODEL
         else:
             raise ValueError(f"Unsupported provider in MainLoop: {config.ACTIVE_PROVIDER}")
 
         # Initialize the adapter instance
         self.llm_adapter = AdapterClass(
-            api_key=ANTHROPIC_API_KEY, # Directly use imported key
+            api_key=ANTHROPIC_API_KEY,
             model=model_name,
-            system_prompt=config.SYSTEM_PROMPT, # Default system prompt
-            max_tokens=config.MAX_TOKENS,       # Default max tokens for a response
-            temperature=config.TEMPERATURE,     # Default temperature
+            system_prompt=config.SYSTEM_PROMPT,
+            max_tokens=config.MAX_TOKENS,
+            temperature=config.TEMPERATURE,
             tools=tool_registry.get_llm_tool_definitions()
         )
         print(f"[DEBUG MainLoop __init__] LLM Adapter initialized for {config.ACTIVE_PROVIDER} with model {model_name}")
@@ -63,7 +87,7 @@ class MainLoop:
                 result = await handler(**function_args)
             else:
                 result = handler(**function_args)
-            print(f"[DEBUG MainLoop _tool_handler] Result from {function_name}: {str(result)[:200]}") # Log snippet
+            print(f"[DEBUG MainLoop _tool_handler] Result from {function_name}: {str(result)[:200]}")
             return result
         except Exception as e:
             print(f"[ERROR MainLoop _tool_handler] Tool {function_name} execution error: {e}")
@@ -73,6 +97,7 @@ class MainLoop:
     async def process_input(self, input_event: Dict[str, Any]) -> Dict[str, Any]:
         """
         Process input through the LLM and return results.
+        FIXED: Proper chat log management with runtime and file sync.
         """
         print(f"\n[DEBUG MainLoop process_input] Received input_event: {input_event}")
         try:
@@ -89,28 +114,37 @@ class MainLoop:
                 print("[WARN MainLoop process_input] User message content is empty.")
                 return {"text": "I didn't catch that. Could you please repeat?", "error": "Empty user message"}
 
+            # Use shared runtime chatlog for all sessions
             if session_id not in self.conversations:
-                print(f"[DEBUG MainLoop process_input] New session, initializing conversation for: {session_id}")
-                self.conversations[session_id] = []
+                print(f"[DEBUG MainLoop process_input] New session {session_id}, using shared runtime chatlog")
+                # Point this session to the shared runtime chatlog
+                self.conversations[session_id] = self.runtime_chatlog
             
             current_conversation = self.conversations[session_id]
-            print(f"[DEBUG MainLoop process_input] Conversation history for {session_id} (before adding new user message): {len(current_conversation)} messages")
+            print(f"[DEBUG MainLoop process_input] Current conversation length: {len(current_conversation)} messages")
 
+            # === STEP 1: Add and save user message ===
             new_user_message = {"role": "user", "content": user_message_content}
             current_conversation.append(new_user_message)
             print(f"[DEBUG MainLoop process_input] Added user message to conversation: {str(new_user_message)[:200]}")
 
-            # Save the user message to log file
+            # CRITICAL: Save user message to log file immediately
             save_to_log_file(new_user_message)
+            print("[DEBUG MainLoop process_input] User message saved to log file")
 
-            # --- Step 2: Update calls to trim_chat_log ---
-            # The trim_chat_log function will be modified to accept token_manager_instance and max_tokens_limit.
+            # === STEP 2: Trim conversation with pair-preserving logic ===
             current_conversation = trim_chat_log(current_conversation, self.token_manager, config.CHAT_LOG_MAX_TOKENS)
-            self.conversations[session_id] = current_conversation 
+            
+            # Update both the runtime chatlog and session reference
+            self.runtime_chatlog = current_conversation
+            self.conversations[session_id] = self.runtime_chatlog
             print(f"[DEBUG MainLoop process_input] Conversation history length after user message and trim: {len(current_conversation)}")
 
-            messages_for_api = sanitize_messages_for_api(list(current_conversation)) 
+            # === STEP 3: Prepare messages for API (sanitize) ===
+            messages_for_api = sanitize_messages_for_api(list(current_conversation))
+            print(f"[DEBUG MainLoop process_input] Messages sanitized for API: {len(messages_for_api)} messages")
 
+            # === STEP 4: Handle document injection ===
             if self.document_manager and getattr(self.document_manager, "files_loaded", False):
                 if hasattr(self.document_manager, "get_claude_message_blocks"):
                     document_blocks = self.document_manager.get_claude_message_blocks()
@@ -133,6 +167,7 @@ class MainLoop:
                 print("[ERROR MainLoop process_input] No valid messages to send to LLM API after sanitization/doc injection.")
                 return {"text": None, "error": "No valid messages for LLM"}
 
+            # === STEP 5: Prepare tools ===
             relevant_tools_for_call = []
             tool_choice_for_call = None
             if self.token_manager.tools_are_active(): 
@@ -151,6 +186,7 @@ class MainLoop:
             print(f"  tools (count): {len(relevant_tools_for_call)}")
             print(f"  tool_choice: {tool_choice_for_call}")
 
+            # === STEP 6: Call LLM ===
             llm_api_result = await self.llm_adapter.generate_response(
                 messages=messages_for_api,
                 tool_handler=self._tool_handler, 
@@ -162,20 +198,30 @@ class MainLoop:
             )
             print(f"[DEBUG MainLoop process_input] Full result from llm_adapter.generate_response: {str(llm_api_result)[:500]}")
 
+            # === STEP 7: Handle assistant response ===
             assistant_response_text = llm_api_result.get("text")
             if llm_api_result.get("error"):
                 print(f"[WARN MainLoop process_input] LLM adapter returned an error: {llm_api_result.get('error')}")
             elif assistant_response_text is not None: 
-                current_conversation.append({"role": "assistant", "content": assistant_response_text})
+                # Add assistant response to runtime conversation
+                assistant_message = {"role": "assistant", "content": assistant_response_text}
+                current_conversation.append(assistant_message)
                 print(f"[DEBUG MainLoop process_input] Added assistant response to conversation: {str(assistant_response_text)[:200]}")
                 
-                # --- Step 2 (repeated): Update calls to trim_chat_log ---
+                # CRITICAL: Save assistant response to log file
+                save_to_log_file(assistant_message)
+                print("[DEBUG MainLoop process_input] Assistant response saved to log file")
+                
+                # Trim conversation again after adding assistant response
                 current_conversation = trim_chat_log(
-                current_conversation,
-                self.token_manager,
-                config.CHAT_LOG_MAX_TOKENS
-            )
-                self.conversations[session_id] = current_conversation
+                    current_conversation,
+                    self.token_manager,
+                    config.CHAT_LOG_MAX_TOKENS
+                )
+                
+                # Update both the runtime chatlog and session reference
+                self.runtime_chatlog = current_conversation
+                self.conversations[session_id] = self.runtime_chatlog
                 print(f"[DEBUG MainLoop process_input] Conversation history length after assistant response and trim: {len(current_conversation)}")
             else:
                 print("[WARN MainLoop process_input] LLM adapter returned no 'text' and no 'error'. This might be unusual.")
