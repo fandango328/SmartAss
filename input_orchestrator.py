@@ -15,8 +15,9 @@ from token_manager import TokenManager
 from document_manager import DocumentManager
 
 # ADDED: For Anthropic client
-import anthropic
+import anthropic #type: ignore
 from secret import ANTHROPIC_API_KEY # Ensure ANTHROPIC_API_KEY is in your secret.py
+from tool_registry import tool_registry
 
 
 class InputType(Enum):
@@ -97,15 +98,16 @@ class InputOrchestrator:
         print("[Orchestrator __init__] TokenManager and DocumentManager ready for MainLoop.")
 
         print("[Orchestrator __init__] Initializing MainLoop instance...")
-        # If MainLoop's AnthropicLLMAdapter also needs this specific client instance,
-        # MainLoop's __init__ would need to be adapted to accept it and pass it down.
-        # For now, MainLoop's adapter will create its own client or use API key directly.
         self.main_loop_processor = MainLoop(
             token_manager_instance=self.token_manager_for_main_loop,
             document_manager_instance=self.document_manager_for_main_loop
-            # anthropic_client=self.anthropic_client_instance # Pass if MainLoop is adapted
         )
         print("[Orchestrator __init__] MainLoop instance is ready.")
+        
+        # Initialize tool registry
+        print("[Orchestrator __init__] Initializing tool registry...")
+        tool_registry.initialize()
+        print("[Orchestrator __init__] Tool registry initialized.")
         # --- END OF INITIALIZATION ---
 
 
@@ -269,7 +271,7 @@ class InputOrchestrator:
                 "device_id": session.device_id,
                 "session_id": session_id,
                 "type": event_for_main_loop["type"],
-                "raw_text_length": len(raw_assistant_text),
+                "raw_text_length": len(raw_assistant_text or ""),
                 "llm_error": llm_response_dict.get("error"),
                 "timestamp": datetime.now().isoformat()
             })
