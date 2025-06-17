@@ -9,11 +9,11 @@ import asyncio
 import base64
 import io
 from pathlib import Path
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Any
 from datetime import datetime
 from PIL import Image
 from config import ANTHROPIC_MODEL
-from anthropic import Anthropic
+from anthropic import Anthropic #type: ignore
 from secret import ANTHROPIC_API_KEY
 
 class DocumentManager:
@@ -25,7 +25,7 @@ class DocumentManager:
         self.total_memory_limit = 100_000_000  # 100MB total
         
         # State tracking
-        self.loaded_files: Dict[str, str] = {}  # {filename: content}
+        self.loaded_files: Dict[str, Dict[str, Any]] = {}  # {filename: file_data_dict}
         self.current_memory_usage: int = 0
         self.files_loaded: bool = False
         
@@ -42,12 +42,12 @@ class DocumentManager:
             '.yml': 'application/x-yaml',
             
             # Image formats
-            '.png': 'image/jpeg',
+            '.png': 'image/png',
             '.jpg': 'image/jpeg',
             '.jpeg': 'image/jpeg',
             '.JPG': 'image/jpeg',  # iPhone uppercase variant
             '.JPEG': 'image/jpeg', # Other possible uppercase variants
-            '.PNG': 'image/jpeg',
+            '.PNG': 'image/png',
             '.gif': 'image/gif',
             '.bmp': 'image/bmp',
             '.webp': 'image/webp',
@@ -124,7 +124,7 @@ class DocumentManager:
             
             # Get all files in the directory first
             all_files = os.listdir(self.query_files_dir)
-            print(f"Found {len(all_files)} total files in directory")
+            print(f"[DocumentManager] Found {len(all_files)} total items in {self.query_files_dir}")
             
             files_processed = 0
             
@@ -143,175 +143,269 @@ class DocumentManager:
 
                     # Skip if extension not supported
                     if ext_lower not in self.supported_extensions:
+                        print(f"[DocumentManager] Skipping unsupported extension: {filename}")
                         continue
 
-                    # Get mime type FIRST before using it
+                    # Get mime type
                     mime_type = self.supported_extensions[ext_lower]
 
                     # Validate and check memory limits
                     if not self._validate_file(filepath):
-                        print(f"Skipping invalid file: {filepath}")
+                        print(f"[DocumentManager] Skipping invalid file: {filename}")
                         continue
 
                     file_size = os.path.getsize(filepath)
                     if not self._check_memory_limit(file_size):
-                        print(f"Warning: Loading {filepath} would exceed memory limit")
+                        print(f"[WARN DocumentManager] Not loading {filename}, would exceed memory limit.")
                         continue
 
                     await asyncio.sleep(0.01)  # Prevent blocking
 
-                    # Now we can safely use mime_type
-                    if mime_type.startswith('image/'):
-                        print(f"Processing image file: {filepath}")
-                        success = await self.process_image(filepath, filename)
-                        
-                        if success:
-                            self.loaded_files[filename] = success  # Store the processed image data
-                            self.current_memory_usage += file_size
-                            print(f"Successfully loaded image: {filename}")
-                            files_processed += 1
-                        else:
-                            print(f"Failed to process image: {filename}")
+                    # Read file as binary
+                    with open(filepath, 'rb') as f:
+                        binary_content = f.read()
                     
-                    elif mime_type.startswith('text/') or mime_type in ['application/json', 'application/x-yaml']:
-                        # Handle text-based files
-                        try:
-                            print(f"Processing text file: {filepath}")
-                            with open(filepath, 'r', encoding='utf-8') as f:
-                                content = f.read()
-                                print(f"Successfully read {len(content)} bytes from {filename}")
-                                
-                                # Store both text content and base64 for consistency
-                                b64_content = base64.b64encode(content.encode('utf-8')).decode('utf-8')
-                                self.loaded_files[filename] = {
-                                    'type': 'text',
-                                    'mime_type': mime_type,
-                                    'content': content,
-                                    'base64': b64_content,
-                                    'size': f"{file_size/1024:.1f}KB",
-                                    'description': f"[Text File: {filename}, Size: {file_size/1024:.1f}KB, Type: {mime_type}]"
-                                }
-                                self.current_memory_usage += file_size
-                                print(f"Successfully loaded text file: {filename}")
-                                files_processed += 1
-                        except UnicodeDecodeError:
-                            # If text decoding fails, fall through to binary handling
-                            print(f"Text decoding failed for {filename}, handling as binary")
-                            raise
-                            
-                    else:
-                        # Handle binary files (including PDFs and other non-text files)
-                        print(f"Processing binary file: {filepath}")
-                        with open(filepath, 'rb') as f:
-                            binary_content = f.read()
-                            b64_content = base64.b64encode(binary_content).decode('utf-8')
-                            self.loaded_files[filename] = {
+                    base64_content = base64.b64encode(binary_content).decode('utf-8')
+                    
+                    # Create base file entry
+                    file_entry = {
+                        'filename': filename,
+                        'mime_type': mime_type,
+                        'base64': base64_content,
+                        'size': file_size,
+                        'size_display': f"{file_size/1024:.1f}KB",
+                    }
+
+                    # Process based on file type
+                    if mime_type.startswith('image/'):
+                        print(f"[DocumentManager] Processing image file: {filename}")
+                        processed_image = await self.process_image(binary_data=binary_content, filename=filename)
+                        
+                        if processed_image:
+                            file_entry.update({
+                                'type': 'image',
+                                'base64': processed_image['base64'],
+                                'mime_type': 'image/jpeg',
+                                'dimensions': processed_image['dimensions'],
+                                'description': f"[Image File: {filename}, Dimensions: {processed_image['dimensions']}, Size: {file_entry['size_display']}]"
+                            })
+                        else:
+                            print(f"[DocumentManager] Failed to process image: {filename}, treating as binary")
+                            file_entry.update({
                                 'type': 'binary',
-                                'mime_type': mime_type,
-                                'base64': b64_content,
-                                'size': f"{file_size/1024:.1f}KB",
-                                'description': f"[Binary File: {filename}, Size: {file_size/1024:.1f}KB, Type: {mime_type}]"
-                            }
-                            self.current_memory_usage += file_size
-                            print(f"Successfully loaded binary file: {filename}")
-                            files_processed += 1
+                                'description': f"[Binary File: {filename}, Size: {file_entry['size_display']}, Type: {mime_type}]"
+                            })
+                            
+                    elif mime_type == 'application/pdf':
+                        print(f"[DocumentManager] Processing PDF file: {filename}")
+                        file_entry.update({
+                            'type': 'pdf',
+                            'description': f"[PDF File: {filename}, Size: {file_entry['size_display']}]"
+                        })
+                        
+                    elif mime_type.startswith('text/') or mime_type in ['application/json', 'application/x-yaml']:
+                        print(f"[DocumentManager] Processing text file: {filename}")
+                        try:
+                            # Try to decode as UTF-8 text
+                            content_text = binary_content.decode('utf-8')
+                            file_entry.update({
+                                'type': 'text',
+                                'content': content_text,
+                                'description': f"[Text File: {filename}, Size: {file_entry['size_display']}, Type: {mime_type}]"
+                            })
+                        except UnicodeDecodeError:
+                            print(f"[DocumentManager] Text decoding failed for {filename}, treating as binary")
+                            file_entry.update({
+                                'type': 'binary',
+                                'description': f"[Binary File: {filename}, Size: {file_entry['size_display']}, Type: {mime_type}]"
+                            })
+                    else:
+                        # Handle as generic binary file
+                        print(f"[DocumentManager] Processing binary file: {filename}")
+                        file_entry.update({
+                            'type': 'binary',
+                            'description': f"[Binary File: {filename}, Size: {file_entry['size_display']}, Type: {mime_type}]"
+                        })
+
+                    # Store the file entry
+                    self.loaded_files[filename] = file_entry
+                    self.current_memory_usage += file_size
+                    files_processed += 1
+                    print(f"[DocumentManager] Loaded {file_entry['type']} file: {filename}")
                     
                 except Exception as e:
-                    print(f"Error loading file {filename}: {e}")
+                    print(f"[ERROR DocumentManager] Error loading file {filename}: {e}")
                     import traceback
                     traceback.print_exc()
                     continue
             
             self.files_loaded = len(self.loaded_files) > 0
-            print(f"Files processed: {files_processed}, Files loaded: {len(self.loaded_files)}, Status: {self.files_loaded}")
+            print(f"[DocumentManager] Load all files complete. Total loaded: {len(self.loaded_files)}. Status: {self.files_loaded}")
             return self.files_loaded
             
         except Exception as e:
-            print(f"Error in load_all_files: {e}")
+            print(f"[ERROR DocumentManager] Error in load_all_files: {e}")
             import traceback
             traceback.print_exc()
             return False
 
-    def get_claude_message_blocks(self) -> list:
+    def get_document_content_for_claude(self, filename: str) -> Optional[List[Dict[str, Any]]]:
         """
-        Return loaded files in the format required for Anthropic Claude Vision API.
-        Each image is included as a separate message block with correct media_type and base64 data.
-        Each text file is included as a "type": "text" block.
+        Get properly formatted Anthropic content blocks for a specific document.
+        Returns blocks in the format expected by Anthropic's API.
         """
+        file_data = self.loaded_files.get(filename)
+        if not file_data:
+            return None
+
         blocks = []
-        for filename, file_data in self.loaded_files.items():
-            if file_data['type'] == 'image':
-                # Add a "text" announcement for image (optional, helps with context)
-                blocks.append({
-                    "type": "text",
-                    "text": f"Image: {filename}"
-                })
-                blocks.append({
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": file_data['mime_type'],
-                        "data": file_data['base64']
-                    }
-                })
-            elif file_data['type'] == 'text':
-                blocks.append({
-                    "type": "text",
-                    "text": f"File: {filename}\n{file_data['content']}"
-                })
-            elif file_data['type'] == 'binary':
-                blocks.append({
-                    "type": "text",
-                    "text": f"[Binary file {filename} of type {file_data['mime_type']}, size: {file_data['size']}]"
-                })
+        file_type = file_data['type']
+        base64_content = file_data['base64']
+        original_filename = file_data['filename']
+        mime_type = file_data['mime_type']
+
+        if file_type == 'image':
+            # Add text announcement for context
+            blocks.append({"type": "text", "text": f"Image content from file: {original_filename}"})
+            # Add properly formatted image block
+            blocks.append({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": mime_type,
+                    "data": base64_content
+                }
+            })
+            
+        elif file_type == 'pdf':
+            # Add text announcement for context
+            blocks.append({"type": "text", "text": f"PDF document content from file: {original_filename}"})
+            # Add properly formatted document block for PDF
+            blocks.append({
+                "type": "document",
+                "source": {
+                    "type": "base64",
+                    "media_type": "application/pdf",
+                    "name": original_filename,
+                    "data": base64_content
+                }
+            })
+            
+        elif file_type == 'text' and 'content' in file_data:
+            # Add text content directly
+            blocks.append({
+                "type": "text", 
+                "text": f"Text file content from '{original_filename}':\n\n{file_data['content']}"
+            })
+            
+        elif file_type == 'binary':
+            # Announce binary file presence
+            blocks.append({
+                "type": "text", 
+                "text": f"[A binary file named '{original_filename}' (type: {mime_type}) was provided but cannot be directly processed.]"
+            })
+            
+        else:
+            # Fallback for unknown types
+            blocks.append({
+                "type": "text", 
+                "text": f"[File: {original_filename} of unknown type '{file_type}']"
+            })
+
         return blocks
 
-    async def process_image(self, filepath, filename):
-        """Process image file and optimize for Claude Vision, keeping correct format and media_type."""
+    def get_all_loaded_document_blocks_for_claude(self) -> List[Dict[str, Any]]:
+        """
+        Get properly formatted Anthropic content blocks for ALL currently loaded documents.
+        Returns blocks in the format expected by Anthropic's API.
+        """
+        all_blocks = []
+        
+        if not self.files_loaded:
+            return []
+            
+        for filename in self.loaded_files.keys():
+            doc_blocks = self.get_document_content_for_claude(filename)
+            if doc_blocks:
+                all_blocks.extend(doc_blocks)
+                
+        return all_blocks
+
+    def get_claude_message_blocks(self) -> List[Dict[str, Any]]:
+        """
+        Legacy method for backward compatibility.
+        Returns the same format as get_all_loaded_document_blocks_for_claude.
+        """
+        return self.get_all_loaded_document_blocks_for_claude()
+
+    async def process_image(self, filepath=None, filename=None, binary_data=None):
+        """
+        Process image: always convert to JPEG, enforce dimension limits (min 200px, max 1568px on sides),
+        and output as base64 JPEG for Claude Vision compatibility.
+        Can accept either filepath or binary_data to avoid double file reads.
+        """
         try:
-            file_size = os.path.getsize(filepath)
-            ext = os.path.splitext(filepath)[1].lower()
-            mime_type = self.supported_extensions[ext]
+            if filepath and not binary_data:
+                file_size = os.path.getsize(filepath)
+                with open(filepath, 'rb') as f:
+                    binary_data = f.read()
+            elif binary_data:
+                file_size = len(binary_data)
+            else:
+                raise ValueError("Must provide either filepath or binary_data")
 
             def process_image_sync():
-                with Image.open(filepath) as img:
-                    # Convert to appropriate mode
-                    if img.mode in ('RGBA', 'LA') and mime_type == 'image/png':
-                        # Keep alpha for PNG
-                        pass
-                    elif img.mode in ('RGBA', 'LA'):
+                img_io = io.BytesIO(binary_data)
+                with Image.open(img_io) as img:
+                    # Always convert to RGB (JPEG does not support alpha)
+                    if img.mode != 'RGB':
                         img = img.convert('RGB')
-                    # Resize to Claude requirements (min 200px, max 1568px)
-                    img = self.optimize_image_dimensions(img)
                     width, height = img.size
-                    # Always use PNG if alpha, JPEG otherwise
-                    if img.mode in ('RGBA', 'LA') or ext == '.png':
-                        out_format = "PNG"
-                        out_mime = "image/png"
-                    else:
-                        out_format = "JPEG"
-                        out_mime = "image/jpeg"
+                    
+                    # Resize if outside allowed size range
+                    min_dim = min(width, height)
+                    max_dim = max(width, height)
+                    if max_dim > 1568:
+                        # Scale down
+                        scale = 1568.0 / max_dim
+                        new_width = int(width * scale)
+                        new_height = int(height * scale)
+                        img = img.resize((new_width, new_height), Image.LANCZOS)
+                    elif min_dim < 200:
+                        # Scale up
+                        scale = 200.0 / min_dim
+                        new_width = int(width * scale)
+                        new_height = int(height * scale)
+                        img = img.resize((new_width, new_height), Image.LANCZOS)
+                    # Else: already within limits, leave alone
+                    
+                    final_width, final_height = img.size
+                    
+                    # Save as JPEG
                     buffered = io.BytesIO()
-                    img.save(buffered, format=out_format, quality=85)
+                    img.save(buffered, format="JPEG", quality=85)
                     img_str = base64.b64encode(buffered.getvalue()).decode()
+                    
                     return {
                         'type': 'image',
-                        'mime_type': out_mime,
-                        'dimensions': f"{width}x{height}",
+                        'mime_type': 'image/jpeg',
+                        'dimensions': f"{final_width}x{final_height}",
                         'size': f"{file_size/1024:.1f}KB",
                         'base64': img_str,
-                        'description': f"[Image File: {filename}, Dimensions: {width}x{height}, Size: {file_size/1024:.1f}KB]"
+                        'description': f"[Image File: {filename}, Dimensions: {final_width}x{final_height}, Size: {file_size/1024:.1f}KB]"
                     }
+            
             loop = asyncio.get_event_loop()
             return await loop.run_in_executor(None, process_image_sync)
+            
         except Exception as img_err:
-            print(f"Error processing image {filepath}: {img_err}")
+            print(f"[ERROR DocumentManager] Error processing image {filename}: {img_err}")
             import traceback
             traceback.print_exc()
             return None
-
+    
     def get_loaded_content(self) -> dict:
-        """Get the content of all loaded files separated by type."""
+        """Get the content of all loaded files separated by type (legacy compatibility method)."""
         if not self.files_loaded:
             return {"system_content": "", "image_content": []}
                 
@@ -340,10 +434,10 @@ class DocumentManager:
                 text_context.append(f"\n### File: {filename} ###")
                 text_context.append(file_data['content'])
                 text_context.append("### End File ###\n")
-            elif file_data['type'] == 'binary':
-                # Add binary file info to system context
+            elif file_data['type'] in ['binary', 'pdf']:
+                # Add file info to system context
                 text_context.append(f"\n### File: {filename} ###")
-                text_context.append(f"[Binary File: {filename}, Size: {file_data['size']}, Type: {file_data['mime_type']}]")
+                text_context.append(file_data['description'])
                 text_context.append("### End File ###\n")
                     
         return {
@@ -365,12 +459,13 @@ class DocumentManager:
                 
             # Check file size
             if os.path.getsize(filepath) > self.max_file_size:
+                print(f"[DocumentManager] File {filepath} exceeds max size ({self.max_file_size} bytes)")
                 return False
                 
             return True
             
         except Exception as e:
-            print(f"Error validating file {filepath}: {e}")
+            print(f"[ERROR DocumentManager] Error validating file {filepath}: {e}")
             return False
 
     def _check_memory_limit(self, additional_size: int) -> bool:
@@ -383,5 +478,11 @@ class DocumentManager:
             "files_loaded": len(self.loaded_files),
             "memory_usage": self.current_memory_usage,
             "memory_limit": self.total_memory_limit,
-            "loaded_files": list(self.loaded_files.keys())
+            "memory_usage_mb": f"{self.current_memory_usage / 1024 / 1024:.1f}MB",
+            "memory_limit_mb": f"{self.total_memory_limit / 1024 / 1024:.1f}MB",
+            "loaded_files": list(self.loaded_files.keys()),
+            "files_by_type": {
+                file_type: [name for name, data in self.loaded_files.items() if data['type'] == file_type]
+                for file_type in set(data['type'] for data in self.loaded_files.values())
+            }
         }
