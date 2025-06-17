@@ -1,8 +1,9 @@
-import httpx
+import httpx # type: ignore
 import asyncio
 import logging
 import json # For pretty printing dicts
 import traceback # For detailed error logging
+from typing import List, Dict, Any, Optional, Callable
 
 class AnthropicLLMAdapter:
     BASE_URL = "https://api.anthropic.com/v1/messages"
@@ -21,13 +22,14 @@ class AnthropicLLMAdapter:
     async def generate_response(
         self,
         messages: List[Dict[str, Any]],
-        tool_handler: callable,
+        tool_handler: Optional[Callable] = None,  # <-- NOW OPTIONAL for caching calls
         system_prompt: Optional[str] = None,
         tools: Optional[List[Dict[str, Any]]] = None, # Tools for this specific call
         tool_choice: Optional[Dict[str, Any]] = None, # Tool choice for this specific call
         max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        custom_headers: Optional[Dict[str, str]] = None  # <-- NEW: For caching headers
     ):
         print(f"\n[DEBUG AnthropicAdapter generate_response] Called.")
         # print(f"  Initial messages (count: {len(messages)}):")
@@ -35,12 +37,17 @@ class AnthropicLLMAdapter:
         #     content_str = str(msg.get('content'))
         #     print(f"    {i}: role={msg.get('role')}, content='{content_str[:70]}{'...' if len(content_str) > 70 else ''}'")
 
-
-        headers = {
+        # Prepare headers with custom header support
+        request_specific_headers = {
             "x-api-key": self.api_key,
             "anthropic-version": self.API_VERSION,
             "content-type": "application/json"
         }
+        
+        # Merge custom headers (for caching)
+        if custom_headers:
+            request_specific_headers.update(custom_headers)
+            print(f"[DEBUG AnthropicAdapter] Using custom headers: {custom_headers}")
 
         current_system_prompt = system_prompt if system_prompt is not None else self.base_system_prompt
         # If 'tools' is explicitly passed as None for this call, it means no tools, even if base_tools exist.
@@ -88,7 +95,7 @@ class AnthropicLLMAdapter:
             async with httpx.AsyncClient(timeout=90) as client:
                 try:
                     # print(f"[DEBUG AnthropicAdapter generate_response] Attempting POST to {self.BASE_URL} (Loop {loop_count})")
-                    resp = await client.post(self.BASE_URL, headers=headers, json=api_payload)
+                    resp = await client.post(self.BASE_URL, headers=request_specific_headers, json=api_payload)
                     # print(f"[DEBUG AnthropicAdapter generate_response] Raw Anthropic Response Status (Loop {loop_count}): {resp.status_code}")
                     try:
                         response_json = resp.json()
@@ -123,13 +130,47 @@ class AnthropicLLMAdapter:
             # print(f"[DEBUG AnthropicAdapter generate_response] Usage: input={input_tokens}, output={output_tokens} (Loop {loop_count})")
             # print(f"[DEBUG AnthropicAdapter generate_response] Content blocks from response (Loop {loop_count}): {content_blocks}")
 
-            current_turn_text = " ".join(block.get("text", "") for block in content_blocks if block.get("type") == "text").strip()
+            # Extract text from content blocks and handle internal duplication
+            text_blocks = [block.get("text", "") for block in content_blocks if block.get("type") == "text"]
+            all_text_content = " ".join(text_blocks).strip()
+
+            # Handle internal duplication within the text (split by double newlines and dedupe)
+            if "\n\n" in all_text_content:
+                text_segments = [segment.strip() for segment in all_text_content.split("\n\n") if segment.strip()]
+                unique_segments = []
+                for segment in text_segments:
+                    if segment not in unique_segments:
+                        unique_segments.append(segment)
+                current_turn_text = "\n\n".join(unique_segments) if len(unique_segments) > 1 else unique_segments[0] if unique_segments else ""
+            else:
+                current_turn_text = all_text_content
             print(f"[DEBUG AnthropicAdapter generate_response] Extracted text from current turn: '{current_turn_text[:100]}...' (Loop {loop_count})")
 
             tool_use_blocks = [block for block in content_blocks if block.get("type") == "tool_use"]
             # print(f"[DEBUG AnthropicAdapter generate_response] Tool use blocks found: {len(tool_use_blocks)} (Loop {loop_count})")
 
-            if stop_reason == "tool_use" and tool_use_blocks:
+            # Special handling for caching requests
+            if custom_headers and "X-Anthropic-Cache-Control" in custom_headers:
+                print(f"[DEBUG AnthropicAdapter] This was a caching-related call. Stop reason: {stop_reason}.")
+                # For a successful caching call, we expect stop_reason "end_turn" and specific confirmation text
+                expected_cache_confirmation = "OK, Caching Complete."
+                if stop_reason == "end_turn" and expected_cache_confirmation in current_turn_text:
+                    print("[DEBUG AnthropicAdapter] Caching call confirmation matches expected response.")
+                else:
+                    print(f"[WARN AnthropicAdapter] Caching call response unexpected. Text: '{current_turn_text}', Stop: {stop_reason}")
+                
+                # Return the result even if unexpected - let caller handle validation
+                return {
+                    "text": current_turn_text,
+                    "tool_calls": [], # No tool calls expected in caching response
+                    "raw_response": response_json,
+                    "stop_reason": stop_reason,
+                    "tokens": {"input_tokens": input_tokens, "output_tokens": output_tokens},
+                    "error": None
+                }
+
+            # Handle tool use (only if tool_handler is available)
+            if stop_reason == "tool_use" and tool_use_blocks and tool_handler:
                 print(f"[DEBUG AnthropicAdapter generate_response] Handling tool_use. Number of tools to call: {len(tool_use_blocks)}")
                 # Append assistant's message (that includes tool_use blocks) to current_api_messages
                 # The 'content' for an assistant message leading to tool use is a list of blocks.
@@ -188,6 +229,18 @@ class AnthropicLLMAdapter:
                 current_api_messages.append({"role": "user", "content": tool_results_for_api})
                 # print(f"[DEBUG AnthropicAdapter generate_response] Appended user's tool_results turn to current_api_messages.")
                 continue # Next iteration of the while loop
+
+            # Handle tool_use without tool_handler (e.g., caching calls that shouldn't have tools)
+            elif stop_reason == "tool_use" and tool_use_blocks and not tool_handler:
+                print(f"[WARN AnthropicAdapter generate_response] LLM requested tool use but no tool_handler provided. Stopping.")
+                return {
+                    "text": current_turn_text,
+                    "tool_calls": tool_use_blocks,
+                    "raw_response": response_json,
+                    "stop_reason": stop_reason,
+                    "tokens": {"input_tokens": input_tokens, "output_tokens": output_tokens},
+                    "error": "tool_use_requested_but_no_handler"
+                }
 
             # Not "tool_use" or no tool_use_blocks, this is the final response from this sequence
             print(f"[DEBUG AnthropicAdapter generate_response] Exiting tool loop. Final stop_reason: {stop_reason}")
