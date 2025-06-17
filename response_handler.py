@@ -5,8 +5,7 @@ import traceback
 from typing import Dict, Any, Tuple, Optional
 
 import config # Assuming MOOD_MAPPINGS is in config.py
-# Ensure save_to_log_file is imported correctly from your functions script
-from function_definitions import save_to_log_file
+# REMOVED: from function_definitions import save_to_log_file  # Don't import this!
 
 class ResponseHandler:
     """
@@ -17,6 +16,7 @@ class ResponseHandler:
     - Text field in JSON response contains UNALTERED LLM output (including [mood] tags)
     - Mood field is populated by IDENTIFYING mood from text, not by modifying text
     - Client is responsible for any text processing/cleaning for TTS
+    - NO LOGGING - MainLoop handles all conversation logging
     """
 
     def __init__(self):
@@ -102,13 +102,8 @@ class ResponseHandler:
         # Process the raw content according to the immutable rule
         text_for_client_json, mood_for_client_json = await self._process_raw_content(llm_text_output_string)
 
-        # Log the UNALTERED text (which now includes the mood tag if LLM sent it)
-        message_to_log = {"role": "assistant", "content": text_for_client_json}
-        try:
-            save_to_log_file(message_to_log)
-            print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] ResponseHandler: Assistant message saved to log for {session_id}")
-        except Exception as e:
-            print(f"[ERROR] ResponseHandler failed to save assistant message to log for {session_id}: {e}")
+        # REMOVED: No logging here - MainLoop handles all conversation logging
+        print(f"[{datetime.now().strftime('%H:%M:%S.%f')}] ResponseHandler: Skipping log save (MainLoop handles logging)")
 
         # Prepare response payload for client
         response_payload_for_client = {
